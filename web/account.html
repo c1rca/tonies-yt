@@ -1,0 +1,275 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Tonies-YT Settings</title>
+    <style>
+      :root { color-scheme: dark; }
+      body { margin:0; font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial; background:#0b1220; color:#e9efff; }
+      .wrap { max-width:720px; margin:40px auto; padding:0 16px; }
+      .card { background:linear-gradient(180deg,#111b30 0%,#0f182b 100%); border:1px solid #263a5f; border-radius:14px; padding:16px; margin-bottom:12px; box-shadow: 0 6px 18px #00000022; }
+      h1 { margin:0 0 6px; font-size:22px; letter-spacing:.2px; }
+      h2 { margin:0; font-size:15px; color:#e6efff; }
+      .muted { color:#9eb1dc; font-size:14px; }
+      .desc { color:#98abd3; font-size:13px; margin-top:4px; }
+      .grid { display:grid; gap:10px; margin-top:14px; }
+      label { font-size:13px; color:#b8c8ea; }
+      input, select { width:100%; box-sizing:border-box; background:#0a1328; color:#e9efff; border:1px solid #385082; border-radius:10px; padding:9px 10px; }
+      .field-row { display:flex; gap:8px; align-items:center; }
+      .field-row input { flex:1; }
+      button { margin-top:12px; background:#3f75ff; color:white; border:0; border-radius:10px; padding:10px 12px; cursor:pointer; font-weight:600; }
+      button.secondary { background:#1f2f4d; border:1px solid #385082; }
+      button.ghosty { background:#16233c; border:1px solid #385082; color:#cfe0ff; padding:8px 10px; margin-top:0; font-weight:500; }
+      button:disabled { opacity:.65; cursor:not-allowed; }
+      .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+      .status { margin-top:10px; font-size:13px; color:#9eb1dc; min-height:18px; }
+      .ok { color:#bcf4e0; }
+      .err { color:#ffc9d6; }
+      .warn { color:#ffd79b; }
+      .hint { margin-top:6px; color:#8da3cf; font-size:12px; }
+      .chip { border:1px solid #2f456f; border-radius:999px; padding:4px 9px; font-size:12px; color:#c4d6ff; text-decoration:none; }
+      .kv { display:flex; justify-content:space-between; align-items:center; gap:12px; padding:8px 2px; border:0; border-bottom:1px solid #243552; background:transparent; border-radius:0; }
+      .kv:last-of-type { border-bottom:0; }
+      .kv .k { color:#a9bddf; font-size:13px; }
+      .kv .v { color:#f0f5ff; font-size:13px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; text-align:right; line-height:1.3; word-break:break-word; overflow-wrap:anywhere; }
+      .pill-ok { color:#9cefc5; border:1px solid #2f6b4a; background:#133524; border-radius:999px; padding:3px 9px; font-size:12px; }
+      .pill-warn { color:#ffd79b; border:1px solid #7b5a21; background:#34270f; border-radius:999px; padding:3px 9px; font-size:12px; }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="row" style="justify-content:space-between;margin-bottom:10px;">
+        <h1 style="margin:0;">Settings</h1>
+        <a href="/" class="chip">← Back</a>
+      </div>
+
+      <div class="card">
+        <h2>Search defaults</h2>
+        <div class="desc">Set how many YouTube results to show per search.</div>
+        <div class="grid">
+          <div>
+            <label>YouTube search results</label>
+            <select id="search-limit">
+              <option value="5">5</option>
+              <option value="10">10</option>
+              <option value="15">15</option>
+              <option value="20">20</option>
+            </select>
+          </div>
+        </div>
+        <button id="save-search">Save search settings</button>
+        <div id="status-search" class="status"></div>
+      </div>
+
+      <div class="card">
+        <h2>Tooling</h2>
+        <div class="desc">Runtime versions and updater controls.</div>
+        <div class="grid">
+          <div class="kv"><span class="k">yt-dlp installed</span><span id="ver-ytdlp" class="v">loading…</span></div>
+          <div class="kv"><span class="k">Deno runtime</span><span id="ver-deno" class="v">loading…</span></div>
+          <div class="row" id="ytdlp-update-row" style="display:none;justify-content:space-between;margin-top:2px;">
+            <span class="pill-warn">Update available</span>
+            <button id="update-ytdlp" class="secondary" style="margin-top:0;">Install latest yt-dlp</button>
+          </div>
+          <div class="row" id="ytdlp-current-row" style="display:none;justify-content:flex-start;margin-top:2px;">
+            <span class="pill-ok">yt-dlp is up to date</span>
+          </div>
+        </div>
+        <div id="status-ytdlp" class="status"></div>
+      </div>
+
+      <div class="card">
+        <h2>App password</h2>
+        <div class="desc">Change the password used to unlock this local app.</div>
+        <div class="grid">
+          <div>
+            <label>Current app password</label>
+            <div class="field-row">
+              <input id="current" type="password" autocomplete="current-password" />
+              <button class="ghosty" id="toggle-current" type="button">Show</button>
+            </div>
+          </div>
+          <div>
+            <label>New app password</label>
+            <div class="field-row">
+              <input id="next" type="password" autocomplete="new-password" />
+              <button class="ghosty" id="toggle-next" type="button">Show</button>
+            </div>
+          </div>
+          <div>
+            <label>Confirm new app password</label>
+            <div class="field-row">
+              <input id="next-confirm" type="password" autocomplete="new-password" />
+              <button class="ghosty" id="toggle-next-confirm" type="button">Show</button>
+            </div>
+
+          </div>
+        </div>
+        <button id="save">Update password</button>
+        <div id="status" class="status"></div>
+      </div>
+
+      <div class="card">
+        <h2>Tonies account</h2>
+        <div class="desc">Update stored credentials for my.tonies.com uploads.</div>
+        <div class="grid">
+          <div><label>App password</label><input id="cred-app-password" type="password" autocomplete="current-password" /></div>
+          <div><label>Tonies email</label><input id="tonies-email" type="email" autocomplete="username" placeholder="you@example.com" /></div>
+          <div><label>my.tonies.com password</label><input id="tonies-password" type="password" autocomplete="new-password" placeholder="••••••••" /></div>
+        </div>
+        <button id="save-tonies">Update Tonies credentials</button>
+        <div id="status-tonies" class="status"></div>
+      </div>
+    </div>
+    <script>
+      const SEARCH_LIMIT_KEY = 'tonies-auto.search-limit.v1';
+      const statusEl = document.getElementById('status');
+      const statusToniesEl = document.getElementById('status-tonies');
+      const statusSearchEl = document.getElementById('status-search');
+      const statusYtdlpEl = document.getElementById('status-ytdlp');
+      const saveSearchBtn = document.getElementById('save-search');
+      const saveAppBtn = document.getElementById('save');
+      const saveToniesBtn = document.getElementById('save-tonies');
+      let currentUsername = '';
+      let initialSearchLimit = '5';
+
+      function wirePasswordToggle(inputId, btnId) {
+        const inp = document.getElementById(inputId);
+        const btn = document.getElementById(btnId);
+        if (!inp || !btn) return;
+        btn.onclick = () => {
+          const show = inp.type === 'password';
+          inp.type = show ? 'text' : 'password';
+          btn.textContent = show ? 'Hide' : 'Show';
+        };
+      }
+
+      async function init(){
+        const r = await fetch('/api/setup/status');
+        const d = await r.json();
+        if (!d.configured) { window.location.href='/setup'; return; }
+        if (!d.unlocked) { window.location.href='/login'; return; }
+        if (d.username) currentUsername = String(d.username || '').trim();
+        if (d.tonies_email) {
+          document.getElementById('tonies-email').value = String(d.tonies_email || '').trim();
+        }
+        const installed = String(d?.versions?.yt_dlp || 'unknown');
+        const latest = String(d?.versions?.yt_dlp_latest || 'unknown');
+        document.getElementById('ver-ytdlp').textContent = installed;
+        document.getElementById('ver-deno').textContent = String(d?.versions?.deno || 'unknown').split('\n')[0];
+        const showUpdate = installed !== 'unknown' && latest !== 'unknown' && installed !== latest;
+        document.getElementById('ytdlp-update-row').style.display = showUpdate ? 'flex' : 'none';
+        document.getElementById('ytdlp-current-row').style.display = showUpdate ? 'none' : 'flex';
+
+        const raw = Number(localStorage.getItem(SEARCH_LIMIT_KEY));
+        const lim = [5,10,15,20].includes(raw) ? raw : 5;
+        initialSearchLimit = String(lim);
+        document.getElementById('search-limit').value = initialSearchLimit;
+
+
+        wirePasswordToggle('current', 'toggle-current');
+        wirePasswordToggle('next', 'toggle-next');
+        wirePasswordToggle('next-confirm', 'toggle-next-confirm');
+      }
+
+      document.getElementById('save-search').onclick = async () => {
+        const original = saveSearchBtn.textContent;
+        saveSearchBtn.disabled = true;
+        saveSearchBtn.textContent = 'Saving…';
+        const lim = Number(document.getElementById('search-limit').value || 5);
+        localStorage.setItem(SEARCH_LIMIT_KEY, [5,10,15,20].includes(lim) ? String(lim) : '5');
+        initialSearchLimit = String([5,10,15,20].includes(lim) ? lim : 5);
+        try {
+          await fetch('/api/search-cache/clear', { method: 'POST' });
+        } catch {}
+        statusSearchEl.className='status ok';
+        statusSearchEl.textContent='Search setting saved (cache cleared).';
+        setTimeout(() => { statusSearchEl.textContent=''; statusSearchEl.className='status'; }, 2600);
+        saveSearchBtn.textContent = 'Saved';
+        setTimeout(() => { saveSearchBtn.textContent = original; saveSearchBtn.disabled = false; }, 900);
+      };
+
+      document.getElementById('update-ytdlp').onclick = async () => {
+        const btn = document.getElementById('update-ytdlp');
+        const original = btn.textContent;
+        btn.disabled = true;
+        btn.textContent = 'Updating…';
+        statusYtdlpEl.className='status';
+        statusYtdlpEl.textContent='Updating yt-dlp…';
+        try {
+          const r = await fetch('/api/setup/update-yt-dlp', { method:'POST' });
+          const d = await r.json();
+          if (!d.ok) {
+            statusYtdlpEl.className='status err';
+            statusYtdlpEl.textContent = d.error || 'yt-dlp update failed';
+            return;
+          }
+          statusYtdlpEl.className='status ok';
+          statusYtdlpEl.textContent = `yt-dlp updated: ${d.before || '?'} → ${d.after || '?'}`;
+
+          const rs = await fetch('/api/setup/status');
+          const ds = await rs.json();
+          const installed = String(ds?.versions?.yt_dlp || d.after || 'unknown');
+          const latest = String(ds?.versions?.yt_dlp_latest || 'unknown');
+          document.getElementById('ver-ytdlp').textContent = installed;
+          const showUpdate = installed !== 'unknown' && latest !== 'unknown' && installed !== latest;
+          document.getElementById('ytdlp-update-row').style.display = showUpdate ? 'flex' : 'none';
+          document.getElementById('ytdlp-current-row').style.display = showUpdate ? 'none' : 'flex';
+        } catch (e) {
+          statusYtdlpEl.className='status err';
+          statusYtdlpEl.textContent = `yt-dlp update failed: ${e?.message || e}`;
+        } finally {
+          btn.disabled = false;
+          btn.textContent = original;
+        }
+      };
+
+      document.getElementById('save').onclick = async () => {
+        const username = (currentUsername || '').trim();
+        const current_password=(document.getElementById('current').value||'').trim();
+        const new_password=(document.getElementById('next').value||'').trim();
+        const new_confirm=(document.getElementById('next-confirm').value||'').trim();
+        if(!username||!current_password||!new_password||!new_confirm){ statusEl.className='status err'; statusEl.textContent='All password fields are required.'; return; }
+        if(new_password !== new_confirm){ statusEl.className='status err'; statusEl.textContent='New password and confirmation do not match.'; return; }
+
+        const original = saveAppBtn.textContent;
+        saveAppBtn.disabled = true;
+        saveAppBtn.textContent = 'Saving…';
+        statusEl.className='status'; statusEl.textContent='Updating…';
+        const r = await fetch('/api/setup/change-password',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username,current_password,new_password})});
+        const d = await r.json();
+        if(!d.ok){ statusEl.className='status err'; statusEl.textContent=d.error||'Update failed'; saveAppBtn.disabled=false; saveAppBtn.textContent=original; return; }
+        statusEl.className='status ok'; statusEl.textContent='Password updated.';
+        document.getElementById('current').value=''; document.getElementById('next').value=''; document.getElementById('next-confirm').value='';
+        setTimeout(() => { statusEl.textContent=''; statusEl.className='status'; }, 3000);
+        saveAppBtn.textContent = 'Saved';
+        setTimeout(() => { saveAppBtn.textContent = original; saveAppBtn.disabled = false; }, 900);
+      };
+
+      document.getElementById('save-tonies').onclick = async () => {
+        const username = (currentUsername || '').trim();
+        const app_password=(document.getElementById('cred-app-password').value||'').trim();
+        const tonies_email=(document.getElementById('tonies-email').value||'').trim();
+        const tonies_password=(document.getElementById('tonies-password').value||'').trim();
+        if(!username||!app_password||!tonies_password){ statusToniesEl.className='status err'; statusToniesEl.textContent='App password and my.tonies.com password are required.'; return; }
+
+        const original = saveToniesBtn.textContent;
+        saveToniesBtn.disabled = true;
+        saveToniesBtn.textContent = 'Saving…';
+        statusToniesEl.className='status'; statusToniesEl.textContent='Updating…';
+        const r = await fetch('/api/setup/update-tonies-credentials',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username,app_password,tonies_email,tonies_password})});
+        const d = await r.json();
+        if(!d.ok){ statusToniesEl.className='status err'; statusToniesEl.textContent=d.error||'Update failed'; saveToniesBtn.disabled=false; saveToniesBtn.textContent=original; return; }
+        statusToniesEl.className='status ok'; statusToniesEl.textContent='Tonies credentials updated.';
+        document.getElementById('cred-app-password').value='';
+        document.getElementById('tonies-password').value='';
+        setTimeout(() => { statusToniesEl.textContent=''; statusToniesEl.className='status'; }, 3000);
+        saveToniesBtn.textContent = 'Saved';
+        setTimeout(() => { saveToniesBtn.textContent = original; saveToniesBtn.disabled = false; }, 900);
+      };
+
+      init();
+    </script>
+  </body>
+</html>

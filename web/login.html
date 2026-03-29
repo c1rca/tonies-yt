@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>YT-Manager Login</title>
+    <style>
+      :root { color-scheme: dark; }
+      body { margin:0; font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial; background:#0b1220; color:#e9efff; }
+      .wrap { max-width:560px; margin:56px auto; padding:0 16px; }
+      .card { background:#101a2d; border:1px solid #233555; border-radius:12px; padding:16px; }
+      h1 { margin:0 0 6px; font-size:22px; }
+      .muted { color:#9eb1dc; font-size:14px; }
+      .grid { display:grid; gap:10px; margin-top:14px; }
+      label { font-size:13px; color:#b8c8ea; }
+      input { width:100%; box-sizing:border-box; background:#0a1328; color:#e9efff; border:1px solid #385082; border-radius:10px; padding:9px 10px; }
+      button { margin-top:12px; background:#3f75ff; color:white; border:0; border-radius:10px; padding:10px 12px; cursor:pointer; font-weight:600; }
+      .status { margin-top:10px; font-size:13px; color:#9eb1dc; min-height:18px; }
+      .err { color:#ffc9d6; }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="card">
+        <h1>Login to Tonies-YT</h1>
+        <div class="muted">Sign in to access your dashboard and manage uploads.</div>
+
+        <form id="login-form">
+          <div class="grid">
+            <div>
+              <label for="username">Username</label>
+              <input id="username" autocomplete="username" />
+            </div>
+            <div>
+              <label for="app-password">Password</label>
+              <input id="app-password" type="password" autocomplete="current-password" />
+            </div>
+          </div>
+
+          <button id="unlock" type="submit">Login</button>
+        </form>
+        <div id="status" class="status"></div>
+      </div>
+    </div>
+
+    <script>
+      const statusEl = document.getElementById('status');
+
+      async function prefill() {
+        const params = new URLSearchParams(window.location.search || '');
+        if (params.get('locked') === '1') {
+          statusEl.className = 'status';
+          statusEl.textContent = 'Session locked. Please sign in again.';
+        }
+
+        const r = await fetch('/api/setup/status');
+        const d = await r.json();
+        if (!d.configured) {
+          window.location.href = '/setup';
+          return;
+        }
+        if (d.username) document.getElementById('username').value = d.username;
+      }
+
+      async function waitForUnlocked() {
+        for (let i = 0; i < 8; i++) {
+          try {
+            const r = await fetch('/api/setup/status');
+            const d = await r.json();
+            if (d?.unlocked) return true;
+          } catch {}
+          await new Promise((resolve) => setTimeout(resolve, 120));
+        }
+        return false;
+      }
+
+      async function doLogin() {
+        const btn = document.getElementById('unlock');
+        const username = (document.getElementById('username').value || '').trim();
+        const app_password = (document.getElementById('app-password').value || '').trim();
+        if (!username || !app_password) {
+          statusEl.className = 'status err';
+          statusEl.textContent = 'Username and password are required.';
+          return;
+        }
+
+        btn.disabled = true;
+        statusEl.className = 'status';
+        statusEl.textContent = 'Signing in…';
+
+        try {
+          const r = await fetch('/api/setup/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username, app_password })
+          });
+          const d = await r.json();
+          if (!d.ok) {
+            statusEl.className = 'status err';
+            statusEl.textContent = d.error || 'Login failed';
+            return;
+          }
+
+          const unlocked = await waitForUnlocked();
+          if (!unlocked) {
+            statusEl.className = 'status err';
+            statusEl.textContent = 'Login succeeded, but session state did not settle. Please reload once.';
+            return;
+          }
+
+          window.location.replace('/');
+        } catch (e) {
+          statusEl.className = 'status err';
+          statusEl.textContent = `Login failed: ${e?.message || e}`;
+        } finally {
+          btn.disabled = false;
+        }
+      }
+
+      document.getElementById('login-form').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        await doLogin();
+      });
+
+      prefill();
+    </script>
+  </body>
+</html>

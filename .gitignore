@@ -1,0 +1,32 @@
+.env
+__pycache__/
+.pytest_cache/
+*.pyc
+
+# Runtime data (keep repo clean)
+data/logs/
+data/secrets/
+data/staging/
+data/debug/
+data/tonies-storage-state.json
+
+# Downloaded media (allow test fixture)
+data/downloads/*.mp3
+
+# Local branch stacks / scratch volumes
+data-secure-branch/
+data-sse-branch/
+docker-compose.*-branch.yml
+
+# Extra secret/material safety
+.env.*
+*.env
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.sqlite
+
+# Internal/one-off maintainer scripts
+scripts/dev/

@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Tonies-YT Setup</title>
+    <style>
+      :root { color-scheme: dark; }
+      body { margin:0; font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial; background:#0b1220; color:#e9efff; }
+      .wrap { max-width:760px; margin:40px auto; padding:0 16px; }
+      .card { background:#101a2d; border:1px solid #233555; border-radius:12px; padding:16px; }
+      h1 { margin:0 0 6px; font-size:22px; }
+      .muted { color:#9eb1dc; font-size:14px; }
+      .grid { display:grid; gap:10px; margin-top:14px; }
+      label { font-size:13px; color:#b8c8ea; }
+      input { width:100%; box-sizing:border-box; background:#0a1328; color:#e9efff; border:1px solid #385082; border-radius:10px; padding:9px 10px; }
+      button { margin-top:12px; background:#3f75ff; color:white; border:0; border-radius:10px; padding:10px 12px; cursor:pointer; font-weight:600; }
+      .status { margin-top:10px; font-size:13px; color:#9eb1dc; min-height:18px; }
+      .ok { color:#bcf4e0; }
+      .err { color:#ffc9d6; }
+      .chip { border:1px solid #2f456f; border-radius:999px; padding:4px 9px; font-size:12px; color:#c4d6ff; }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="card">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
+          <div>
+            <h1>Complete setup</h1>
+            <div class="muted">Create a local app login and store Tonies credentials encrypted at rest.</div>
+          </div>
+          <span id="source-chip" class="chip">source: none</span>
+        </div>
+
+        <div class="grid">
+          <div>
+            <label for="username">App username</label>
+            <input id="username" autocomplete="username" placeholder="Username" />
+          </div>
+          <div>
+            <label for="app-password">App password</label>
+            <input id="app-password" type="password" autocomplete="new-password" placeholder="Choose a strong password" />
+          </div>
+          <div>
+            <label for="tonies-email">Tonies email</label>
+            <input id="tonies-email" type="email" autocomplete="username" placeholder="you@example.com" />
+          </div>
+          <div>
+            <label for="tonies-password">Tonies password</label>
+            <input id="tonies-password" type="password" autocomplete="current-password" placeholder="••••••••" />
+          </div>
+        </div>
+
+        <button id="create">Setup</button>
+        <div id="status" class="status"></div>
+      </div>
+    </div>
+
+    <script>
+      const statusEl = document.getElementById('status');
+      const sourceChip = document.getElementById('source-chip');
+
+      async function refreshStatus() {
+        const r = await fetch('/api/setup/status');
+        const d = await r.json();
+        sourceChip.textContent = `source: ${d.source || 'none'}`;
+        if (d.configured) {
+          statusEl.className = 'status';
+          statusEl.textContent = d.unlocked
+            ? 'Vault already unlocked. Go to app.'
+            : 'Vault already exists. Please sign in on /login.';
+        }
+      }
+
+      document.getElementById('create').onclick = async () => {
+        const username = (document.getElementById('username').value || '').trim();
+        const app_password = (document.getElementById('app-password').value || '').trim();
+        const tonies_email = (document.getElementById('tonies-email').value || '').trim();
+        const tonies_password = (document.getElementById('tonies-password').value || '').trim();
+
+        if (!username || !app_password || !tonies_email || !tonies_password) {
+          statusEl.className = 'status err';
+          statusEl.textContent = 'All fields are required.';
+          return;
+        }
+
+        statusEl.className = 'status';
+        statusEl.textContent = 'Running setup…';
+
+        const r = await fetch('/api/setup/init', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username, app_password, tonies_email, tonies_password })
+        });
+        const d = await r.json();
+        if (!d.ok) {
+          statusEl.className = 'status err';
+          statusEl.textContent = `Setup failed: ${d.error || 'Unknown error'}`;
+          return;
+        }
+
+        statusEl.className = 'status ok';
+        statusEl.textContent = 'Vault created. Redirecting…';
+        setTimeout(() => { window.location.href = '/'; }, 700);
+      };
+
+      refreshStatus();
+    </script>
+  </body>
+</html>

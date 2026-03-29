@@ -1,0 +1,13 @@
+services:
+  tonies-yt:
+    build: .
+    container_name: tonies-yt
+    env_file:
+      - .env
+    environment:
+      LOG_LEVEL: ${LOG_LEVEL:-DEBUG}
+    ports:
+      - "8090:8080"
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
