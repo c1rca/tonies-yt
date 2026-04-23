@@ -750,6 +750,7 @@
       <button id="file-menu-upload">Upload</button>
       <button id="file-menu-upload-top">Upload to top</button>
       <button id="file-menu-upload-bottom">Upload to bottom</button>
+      <button id="file-menu-download">Download</button>
       <button id="file-menu-cancel" class="ghost">Cancel</button>
     </div>
 
@@ -796,6 +797,7 @@
       const fileMenuUploadEl = document.getElementById('file-menu-upload');
       const fileMenuUploadTopEl = document.getElementById('file-menu-upload-top');
       const fileMenuUploadBottomEl = document.getElementById('file-menu-upload-bottom');
+      const fileMenuDownloadEl = document.getElementById('file-menu-download');
       const fileMenuCancelEl = document.getElementById('file-menu-cancel');
 
       const stCount = document.getElementById('st-count');
@@ -1771,6 +1773,18 @@
         }
         const targetIndex = toniesReverseView ? (toniesContentCache?.chapters || []).length : 0;
         await uploadExistingToIndex(filename, targetIndex);
+      }
+
+      function downloadLocalFile(filename) {
+        const safe = String(filename || '').trim();
+        if (!safe) return;
+        closeFileMenu();
+        const a = document.createElement('a');
+        a.href = `/api/files/${encodeURIComponent(safe)}`;
+        a.download = safe;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
       }
 
       async function moveToniesFromMenu(kind) {
@@ -4544,6 +4558,7 @@
       if (fileMenuUploadEl) fileMenuUploadEl.onclick = () => uploadFromFileMenu('default');
       if (fileMenuUploadTopEl) fileMenuUploadTopEl.onclick = () => uploadFromFileMenu('top');
       if (fileMenuUploadBottomEl) fileMenuUploadBottomEl.onclick = () => uploadFromFileMenu('bottom');
+      if (fileMenuDownloadEl) fileMenuDownloadEl.onclick = () => downloadLocalFile(fileMenuFilename);
       if (fileMenuCancelEl) fileMenuCancelEl.onclick = () => closeFileMenu();
       document.addEventListener('click', (e) => {
         if (toniesMenuEl?.classList.contains('open')) {

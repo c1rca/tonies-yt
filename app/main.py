@@ -397,6 +397,14 @@ def tonies_content_rename(req: ToniesRenameRequest):
         return {"error": str(e)}
 
 
+@app.get('/api/files/{filename}')
+def download_file(filename: str):
+    p = settings.data_dir / 'downloads' / filename
+    if not p.exists() or not p.is_file():
+        return {'ok': False, 'error': 'not_found'}
+    return FileResponse(str(p), filename=p.name, media_type='audio/mpeg')
+
+
 @app.delete('/api/files/{filename}')
 def delete_file(filename: str):
     p = settings.data_dir / 'downloads' / filename
