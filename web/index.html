@@ -1947,10 +1947,12 @@
         renderJobs();
 
         // For YouTube selects, default insertion should follow current visual top.
-        // Newest-first => visual top is native end; Oldest-first => native start.
+        // Store the intended FINAL native index after upload settles.
+        // Newest-first => visual top maps to native last index after insert.
+        // Oldest-first => visual top maps to native first index.
         if (selectedToniesUrl) {
           const chaptersLen = (toniesContentCache?.chapters || []).length;
-          const desiredTopIndex = toniesReverseView ? chaptersLen : 0;
+          const desiredTopIndex = toniesReverseView ? Math.max(0, chaptersLen) : 0;
           const parentJob = getJobById(jobId, jobsCache);
           const picked = (Array.isArray(parentJob?.candidates) ? parentJob.candidates[index] : null) || {};
           pendingDropUploadIntent = {
@@ -2019,9 +2021,10 @@
         }
 
         const chaptersLen = (toniesContentCache?.chapters || []).length;
+        const maxFinalIndexAfterInsert = Math.max(0, chaptersLen);
         const effectiveTargetIndex = (targetIndex == null)
-          ? (toniesReverseView ? chaptersLen : 0)
-          : Math.max(0, Number(targetIndex) || 0);
+          ? (toniesReverseView ? maxFinalIndexAfterInsert : 0)
+          : Math.max(0, Math.min(maxFinalIndexAfterInsert, Number(targetIndex) || 0));
 
         pendingDropUploadIntent = {
           filename,
@@ -3021,7 +3024,7 @@
           e.preventDefault();
 
           // If container-level drop fires (e.g., drop lands on gaps/children), resolve
-          // nearest row under cursor and insert after that row.
+          // nearest row under cursor and insert ABOVE that row in the CURRENT visual order.
           const x = (e.clientX ?? 0);
           const y = (e.clientY ?? 0);
           const under = document.elementFromPoint(x, y);
@@ -3029,13 +3032,14 @@
           if (dropRow) {
             const rowIdx = Number(dropRow.getAttribute('data-source-index'));
             if (!Number.isNaN(rowIdx)) {
-              await uploadExistingToIndex(localFile, rowIdx + 1);
+              const targetIndex = toniesReverseView ? (rowIdx + 1) : rowIdx;
+              await uploadExistingToIndex(localFile, targetIndex);
               return;
             }
           }
 
-          // Fallback: append to end in native order.
-          const targetIndex = (toniesContentCache?.chapters || []).length;
+          // Fallback: append to visual bottom.
+          const targetIndex = toniesReverseView ? 0 : (toniesContentCache?.chapters || []).length;
           await uploadExistingToIndex(localFile, targetIndex);
         };
 
@@ -3182,8 +3186,10 @@
 
             const localFile = e.dataTransfer?.getData('text/local-file');
             if (localFile) {
-              // Local-file drop semantics: dropping ON an item means insert AFTER it.
-              await uploadExistingToIndex(localFile, toIndex + 1);
+              // Local-file drop semantics: dropping ON an item means insert above that row
+              // in the CURRENT visual order.
+              const targetIndex = toniesReverseView ? (toIndex + 1) : toIndex;
+              await uploadExistingToIndex(localFile, targetIndex);
               toniesContentEl.classList.remove('external-drop');
               return;
             }
@@ -3535,10 +3541,9 @@
           hadDropPositionIntent = true;
           const intent = pendingDropUploadIntent;
           const dataChapters = data.chapters || [];
-          // Local-drop semantics in oldest-first view: dropping over row #N inserts AFTER it.
-          // targetIndex is the hovered native row index; backend reorder target must therefore
-          // place the new item at that exact post-insert slot (already +1 at drop-capture time).
-          const desired = Math.max(0, Math.min(dataChapters.length - 1, Number(intent.targetIndex) || 0));
+          // `targetIndex` stores the intended FINAL native index of the uploaded item
+          // after the upload has landed in the chapter list.
+          const desired = Math.max(0, Math.min(Math.max(0, dataChapters.length - 1), Number(intent.targetIndex) || 0));
           const filenameNorm = normalizeToniesTitle(intent.filename || '');
           const prevCount = (prevContent?.chapters || []).length;
           const nextCount = dataChapters.length;
