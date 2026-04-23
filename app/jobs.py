@@ -478,11 +478,11 @@ def upload_worker_loop():
                 _update(job_id, status="uploading")
                 _log(job_id, "Uploading to Tonies")
                 try:
-                    _upload_to_tonies_with_retry(job_id, mp3_path, target=target, target_url=target_url, verify_strict=False, attempts=1, tonies_email=tonies_email, tonies_password=tonies_password)
+                    _upload_to_tonies_with_retry(job_id, mp3_path, target=target, target_url=target_url, verify_strict=True, attempts=1, tonies_email=tonies_email, tonies_password=tonies_password)
                 except Exception:
                     if fallback_path and fallback_path.exists():
-                        _log(job_id, "Prepared file upload failed; retrying once with original file")
-                        _upload_to_tonies_with_retry(job_id, fallback_path, target=target, target_url=target_url, verify_strict=False, attempts=1, tonies_email=tonies_email, tonies_password=tonies_password)
+                        _log(job_id, "Prepared file upload failed strict verification; retrying once with original file")
+                        _upload_to_tonies_with_retry(job_id, fallback_path, target=target, target_url=target_url, verify_strict=True, attempts=1, tonies_email=tonies_email, tonies_password=tonies_password)
                     else:
                         raise
 

@@ -677,7 +677,7 @@
           <div class="row between" style="align-items:flex-start;">
             <div class="row" style="gap:8px;align-items:center;">
               <h2>Tonies MP3 Library</h2>
-              <button id="toggle-tonies-order" class="ghost tiny" style="padding:5px 8px;">Newest first</button>
+              <button id="toggle-tonies-order" class="ghost tiny" style="padding:5px 8px;">Show newest first</button>
               <button id="toggle-tonies-edit" class="ghost tiny" style="padding:5px 8px;">Edit names</button>
             </div>
             <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px;">
@@ -2226,10 +2226,14 @@
         }
       }
 
+      function isToniesShowingNewestFirst() {
+        return !!toniesReverseView;
+      }
+
       function renderToniesOrderToggle() {
         if (!toggleToniesOrderEl) return;
-        // Show the current mode.
-        toggleToniesOrderEl.textContent = toniesReverseView ? 'Show oldest first' : 'Show newest first';
+        const showingNewestFirst = isToniesShowingNewestFirst();
+        toggleToniesOrderEl.textContent = showingNewestFirst ? 'Show newest first' : 'Show oldest first';
       }
 
       function loadToniesViewPrefs() {
@@ -2330,8 +2334,37 @@
         return item.data;
       }
 
+      function hasUsableToniesChapters(data) {
+        return !!(data && Array.isArray(data.chapters) && data.chapters.length);
+      }
+
+      function getDeleteSettlingDisplayContent(url, fallback = null) {
+        const key = String(url || selectedToniesUrl || '');
+        const source = hasUsableToniesChapters(fallback) ? fallback : getCachedToniesContent(key);
+        if (!hasUsableToniesChapters(source)) return null;
+        return {
+          ...source,
+          chapters: filterConfirmedDeletedChapters(source.chapters || [])
+        };
+      }
+
+      function shouldPersistToniesContent(url, data, existing = null) {
+        const key = String(url || selectedToniesUrl || '');
+        if (!key || !data) return false;
+        const incomingHasChapters = hasUsableToniesChapters(data);
+        const existingData = existing || getCachedToniesContent(key);
+        const existingHasChapters = hasUsableToniesChapters(existingData);
+        const deleteSettlingSelected = selectedToniesUrl === key && (pendingDeleteConfirmKeys.size > 0 || pendingDeleteKeys.size > 0);
+
+        if (deleteSettlingSelected && !incomingHasChapters && existingHasChapters) return false;
+        if (!incomingHasChapters && existingHasChapters) return false;
+        return true;
+      }
+
       function setCachedToniesContent(url, data) {
         if (!url || !data) return;
+        const existing = getCachedToniesContent(url);
+        if (!shouldPersistToniesContent(url, data, existing)) return;
         toniesContentByUrlCache[url] = { ts: Date.now(), data };
         saveToniesContentByUrlCache();
       }
@@ -2391,9 +2424,10 @@
                 const incomingEmpty = !Array.isArray(data?.chapters) || (data.chapters || []).length === 0;
                 const existingUsable = !!(existing && Array.isArray(existing.chapters) && existing.chapters.length > 0);
 
-                if (!(incomingEmpty && existingUsable)) {
+                if (!(incomingEmpty && existingUsable) && shouldPersistToniesContent(url, data, existing)) {
                   setCachedToniesContent(url, data);
-                  if (selectedToniesUrl === url && !toniesApplying) {
+                  const deleteSettlingSelected = selectedToniesUrl === url && (pendingDeleteConfirmKeys.size > 0 || pendingDeleteKeys.size > 0);
+                  if (selectedToniesUrl === url && !toniesApplying && !deleteSettlingSelected) {
                     toniesContentCache = data;
                     renderToniesContent();
                   }
@@ -2797,6 +2831,7 @@
 
       function renderToniesContent() {
         const chapters = toniesContentCache?.chapters || [];
+        const deleteSettling = !!selectedToniesUrl && (pendingDeleteConfirmKeys.size > 0 || pendingDeleteKeys.size > 0);
         const freeRaw = toniesContentCache?.free_minutes;
         const freeNum = Number(freeRaw);
         const hasFree = Number.isFinite(freeNum);
@@ -2825,12 +2860,21 @@
           );
 
           const fallbackCached = selectedToniesUrl ? getCachedToniesContent(selectedToniesUrl) : null;
-          if (!deletingAllToniesContent && syncing && fallbackCached && Array.isArray(fallbackCached.chapters) && fallbackCached.chapters.length) {
-            toniesContentCache = fallbackCached;
-            return renderToniesContent();
+          if (!deletingAllToniesContent && hasUsableToniesChapters(fallbackCached)) {
+            if (deleteSettling) {
+              const displayData = getDeleteSettlingDisplayContent(selectedToniesUrl, fallbackCached);
+              if (displayData) {
+                toniesContentCache = displayData;
+                return renderToniesContent();
+              }
+            }
+            if (syncing) {
+              toniesContentCache = fallbackCached;
+              return renderToniesContent();
+            }
           }
 
-          const showInlineSync = syncing && !toniesApplying;
+          const showInlineSync = (syncing || deleteSettling) && !toniesApplying;
           toniesContentEl.innerHTML = showInlineSync
             ? '<div class="tonies-sync-skeleton" title="Syncing with my.tonies.com…"></div>'
             : '<div class="tiny muted">No tracks on this Tonies yet. Upload from local files or YouTube above.</div>';
@@ -2887,9 +2931,9 @@
           const deleteKey = getToniesIdentityKey(c, sourceIndex) || toniesDeleteKey(chapters, sourceIndex, norm);
           const isDeleting = pendingDeleteKeys.has(deleteKey);
           const isQueuedDelete = pendingDeleteQueueKeys.has(deleteKey);
-          const isRemoving = recentlyRemovedTitles.has(norm);
+          const isRemoving = recentlyRemovedTitles.has(norm) || confirmedDeletedKeys.has(deleteKey);
           const html = `
-          <div class="tonies-item ${isNew ? 'new-upload' : ''} ${(isDeleting || isQueuedDelete) ? 'deleting' : ''} ${isRemoving ? 'removing' : ''}" draggable="${(toniesEditMode || busy) ? 'false' : 'true'}" data-source-index="${sourceIndex}">
+          <div class="tonies-item ${isNew ? 'new-upload' : ''} ${(isDeleting || isQueuedDelete) ? 'deleting' : ''} ${isRemoving ? 'removing' : ''}" draggable="${(toniesEditMode || busy) ? 'false' : 'true'}" data-source-index="${sourceIndex}" style="${isRemoving ? 'display:none;' : ''}">
             <div class="drag-handle" style="opacity:${(toniesEditMode || busy) ? '0.35' : '1'};">⋮⋮</div>
             <div>
               ${toniesEditMode
@@ -3319,35 +3363,33 @@
             return;
           }
           if (Array.isArray(data?.chapters)) {
-            data = { ...data, chapters: filterConfirmedDeletedChapters(data.chapters) };
             noteConfirmedDeleteRefreshPass(data.chapters);
+            data = { ...data, chapters: filterConfirmedDeletedChapters(data.chapters) };
           }
           const prevTitles = new Set((toniesContentCache?.chapters || []).map(c => normalizeToniesTitle(c?.title || '')));
           const nextTitles = (data?.chapters || []).map(c => normalizeToniesTitle(c?.title || ''));
           const newlyAdded = nextTitles.filter(t => t && !prevTitles.has(t));
 
-        // Clear pending delete markers once the targeted identity no longer exists.
+        const deletePendingBeforeRefresh = pendingDeleteConfirmKeys.size > 0 || pendingDeleteKeys.size > 0;
+
+        const incomingHasChapters = hasUsableToniesChapters(data);
+
+        // Clear pending delete markers once the targeted identity no longer exists,
+        // but only after Tonies has returned a non-empty settled list again.
         const removedNow = [];
-        for (const k of [...pendingDeleteKeys]) {
-          if (!isPendingDeleteStillPresent(k, data?.chapters || [])) {
-            removedNow.push(k);
+        if (incomingHasChapters) {
+          for (const k of [...pendingDeleteKeys]) {
+            if (!isPendingDeleteStillPresent(k, data?.chapters || [])) {
+              removedNow.push(k);
+            }
           }
         }
 
         if (removedNow.length) {
+          console.debug('[tonies-delete] removedNow on refresh', { removedNow: [...removedNow] });
           removedNow.forEach(k => {
             const norm = String(k || '').split('#')[0];
             if (norm) recentlyRemovedTitles.add(norm);
-            pendingDeleteConfirmKeys.delete(k);
-            pendingDeleteNormMaxCount.delete(k);
-            pendingDeleteSyncAttempts.delete(k);
-          });
-          // Render old list with dissolve effect briefly before applying new list.
-          renderToniesContent();
-          await new Promise(r => setTimeout(r, 300));
-          removedNow.forEach(k => {
-            const norm = String(k || '').split('#')[0];
-            if (norm) recentlyRemovedTitles.delete(norm);
           });
         }
 
@@ -3373,11 +3415,13 @@
           }
         }
 
-        pendingDeleteKeys = new Set([...pendingDeleteKeys].filter(k => isPendingDeleteStillPresent(k, data?.chapters || [])));
-        if (!pendingDeleteKeys.size) {
-          pendingDeleteIndices = new Set();
-          pendingDeleteNormMaxCount = new Map();
-          pendingDeleteSyncAttempts = new Map();
+        if (incomingHasChapters) {
+          pendingDeleteKeys = new Set([...pendingDeleteKeys].filter(k => isPendingDeleteStillPresent(k, data?.chapters || [])));
+          if (!pendingDeleteKeys.size) {
+            pendingDeleteIndices = new Set();
+            pendingDeleteNormMaxCount = new Map();
+            pendingDeleteSyncAttempts = new Map();
+          }
         }
 
         if (shouldScheduleForcedDeleteSync && selectedToniesUrl === url && pendingDeleteConfirmKeys.size) {
@@ -3397,15 +3441,52 @@
         if ((data?.chapters || []).length === 0) {
           const fallbackCached = getCachedToniesContent(url);
           const fallback = (prevContent && (prevContent.chapters || []).length) ? prevContent : fallbackCached;
+          const retryCount = Number(toniesFallbackRetryByUrl[url] || 0);
+          const hasPendingDeleteConfirmation = deletePendingBeforeRefresh;
+
+          if (hasPendingDeleteConfirmation) {
+            const displayData = getDeleteSettlingDisplayContent(url, fallback);
+            if (displayData) {
+              toniesContentCache = displayData;
+            }
+            toniesUploadSyncing = shouldKeepToniesUploadSyncing();
+            setToniesStatus('Delete applied. Waiting for my.tonies.com library to settle…', true);
+            renderTonies();
+            renderToniesContent();
+            if (retryCount < 6) {
+              toniesFallbackRetryByUrl[url] = retryCount + 1;
+              scheduleToniesContentRetry(url, 1200, { clearList: false, preferCache: false, force: true });
+            } else {
+              toniesFallbackRetryByUrl[url] = 0;
+              setToniesStatus('Delete applied, but Tonies is still returning an empty library. Refresh again in a moment.', false);
+              showToast('Tonies is temporarily returning an empty library. Waiting for it to repopulate…', 'warn', 4200);
+            }
+            return;
+          }
+
+          if (!fallback && retryCount < 3) {
+            toniesUploadSyncing = shouldKeepToniesUploadSyncing();
+            setToniesStatus('Syncing Tonies library…', true);
+            renderTonies();
+            renderToniesContent();
+            toniesFallbackRetryByUrl[url] = retryCount + 1;
+            scheduleToniesContentRetry(url, 1200, { clearList: false, preferCache: false, force: true });
+            return;
+          }
+
+          if (!fallback) {
+            toniesFallbackRetryByUrl[url] = 0;
+            toniesUploadSyncing = shouldKeepToniesUploadSyncing();
+            setToniesStatus('No content loaded yet. Tap Refresh to try again.', false);
+            renderTonies();
+            renderToniesContent();
+            return;
+          }
+
           if (fallback && (fallback.chapters || []).length) {
             const fallbackHasPendingDeleteRows = chapterListHasPendingDeleteSignals(fallback.chapters || []);
-            const retryCount = Number(toniesFallbackRetryByUrl[url] || 0);
-
             toniesContentCache = fallback;
-            // Do not refresh cache snapshot with fallback while delete confirmations are pending.
-            if (!fallbackHasPendingDeleteRows) {
-              setCachedToniesContent(url, fallback);
-            }
+            setCachedToniesContent(url, fallback);
             toniesUploadSyncing = shouldKeepToniesUploadSyncing();
             setToniesStatus('Syncing Tonies library…', true);
             renderToniesContent();
@@ -3425,6 +3506,22 @@
             }
             return;
           }
+        }
+
+        if (removedNow.length) {
+          removedNow.forEach(k => {
+            pendingDeleteKeys.delete(k);
+            pendingDeleteConfirmKeys.delete(k);
+            pendingDeleteNormMaxCount.delete(k);
+            pendingDeleteSyncAttempts.delete(k);
+          });
+          // Render old list with dissolve effect briefly before applying new list.
+          renderToniesContent();
+          await new Promise(r => setTimeout(r, 300));
+          removedNow.forEach(k => {
+            const norm = String(k || '').split('#')[0];
+            if (norm) recentlyRemovedTitles.delete(norm);
+          });
         }
 
         toniesFallbackRetryByUrl[url] = 0;
@@ -3511,42 +3608,24 @@
           pendingDropUploadIntent = null;
         }
 
-          // Final guard: never replace a known-good list with transient empty data.
-          if ((finalData?.chapters || []).length === 0) {
-            const fallbackCached = getCachedToniesContent(url);
-            const fallback = (prevContent && (prevContent.chapters || []).length) ? prevContent : fallbackCached;
-            if (fallback && (fallback.chapters || []).length > 0) {
-              const fallbackHasPendingDeleteRows = chapterListHasPendingDeleteSignals(fallback.chapters || []);
-              const retryCount = Number(toniesFallbackRetryByUrl[url] || 0);
-
-              toniesContentCache = fallback;
-              if (!fallbackHasPendingDeleteRows) {
-                setCachedToniesContent(url, fallback);
-              }
+          if (deletePendingBeforeRefresh && !hasUsableToniesChapters(finalData)) {
+            const displayData = getDeleteSettlingDisplayContent(url, prevContent);
+            if (displayData) {
+              toniesContentCache = displayData;
+              lastToniesContentUrl = url;
               toniesUploadSyncing = shouldKeepToniesUploadSyncing();
-              setToniesStatus('Syncing Tonies library…', true);
               renderTonies();
               renderToniesContent();
-
-              if (retryCount < 3) {
-                toniesFallbackRetryByUrl[url] = retryCount + 1;
-                scheduleToniesContentRetry(url, 1200, { clearList: false, preferCache: false, force: true });
-              } else {
-                toniesFallbackRetryByUrl[url] = 0;
-                setToniesStatus('Sync stalled. Tap Refresh to try again.', false);
-                if (fallbackHasPendingDeleteRows) {
-                  showToast('Tonies sync still returning stale data. Try refresh in a moment.', 'warn', 3600);
-                } else {
-                  showToast('Tonies sync stalled. Tap Refresh to retry.', 'warn', 3200);
-                }
-              }
+              setToniesStatus('Delete applied. Waiting for my.tonies.com library to settle…', true);
+              scheduleToniesContentRetry(url, 900, { clearList: false, preferCache: false, force: true });
               return;
             }
           }
 
-          toniesContentCache = finalData;
+          const persistFinalData = shouldPersistToniesContent(url, finalData, prevContent);
+          toniesContentCache = persistFinalData ? finalData : (getDeleteSettlingDisplayContent(url, prevContent) || prevContent || finalData);
           lastToniesContentUrl = url;
-          setCachedToniesContent(url, finalData);
+          if (persistFinalData) setCachedToniesContent(url, finalData);
           toniesUploadSyncing = shouldKeepToniesUploadSyncing();
           renderTonies();
           renderToniesContent();
@@ -3801,15 +3880,39 @@
           const incomingCount = (data?.chapters || []).length;
           const prevCount = (prev?.chapters || []).length;
           const deleteStillPresent = isPendingDeleteStillPresent(deleteKey, data?.chapters || []);
+          console.debug('[tonies-delete] api result', {
+            deleteKey,
+            incomingCount,
+            prevCount,
+            deleteStillPresent,
+            chapters: (data?.chapters || []).map((c, i) => ({ i, key: getToniesIdentityKey(c, i), title: c?.title || '', duration: c?.duration || '' })).slice(0, 30)
+          });
 
           // Guard against transient/indeterminate responses from Tonies UI automation.
-          if ((incomingCount === 0 && prevCount > 0) || deleteStillPresent) {
+          // Do not blindly restore the previous cache just because the backend returned 0 chapters,
+          // since a real post-delete Tonies fetch can transiently come back empty during reprocessing.
+          if (deleteStillPresent) {
             toniesContentCache = prev;
             pendingDeleteIndices.delete(index);
             pendingDeleteConfirmKeys.add(deleteKey);
             pendingDeleteSyncAttempts.set(deleteKey, 0);
             // Keep keyed pending marker until a sync confirms removal.
             setToniesStatus('Delete applied. Syncing my.tonies.com library…', true);
+            renderToniesContent();
+            if (fromQueue) {
+              deleteQueueNeedsFinalSync = true;
+            } else {
+              refreshToniesContent({ clearList: false, preferCache: false, force: true });
+            }
+            return;
+          }
+
+          if (incomingCount === 0 && prevCount > 0) {
+            toniesContentCache = prev;
+            pendingDeleteIndices.delete(index);
+            pendingDeleteConfirmKeys.add(deleteKey);
+            pendingDeleteSyncAttempts.set(deleteKey, 0);
+            setToniesStatus('Delete applied. Waiting for my.tonies.com library to settle…', true);
             renderToniesContent();
             if (fromQueue) {
               deleteQueueNeedsFinalSync = true;
@@ -3931,7 +4034,7 @@
           return;
         }
 
-        toniesContentCache = data;
+        toniesContentCache = shouldPersistToniesContent(selectedToniesUrl, data, prev) ? data : (prev || data);
         setCachedToniesContent(selectedToniesUrl, data);
         setToniesStatus('Reorder applied and saved to Tonies.', false);
         showToast('Order updated', 'ok', 1800);

@@ -616,8 +616,63 @@ def upload_to_tonies(mp3_path: Path, target_character_name: str = None, target_u
             return True
         return False
 
-    # Wait for UI to process attachment.
-    page.wait_for_timeout(1200)
+    def _upload_row_state() -> dict:
+        try:
+            return page.evaluate(r'''(token) => {
+              const bodyText = (document.body?.innerText || '').toLowerCase();
+              const rows = [...document.querySelectorAll("div[draggable='true'].chapter, div[draggable='true'][class*='ChapterDragNode'], [data-testid*='upload'], [class*='upload'], [class*='Upload']")];
+              const norm = (s) => String(s || '').toLowerCase();
+              const hit = rows.find((el) => {
+                const txt = norm(el.innerText || el.textContent || '');
+                return token && txt.includes(token.toLowerCase());
+              });
+              const removeBtn = hit ? hit.querySelector("button[aria-label*='Remove'], button[title*='Remove'], button[class*='Remove'], button") : null;
+              return {
+                bodyText,
+                rowFound: !!hit,
+                rowText: hit ? String(hit.innerText || hit.textContent || '').trim().slice(0, 500) : '',
+                hasRemoveButton: !!removeBtn,
+                hasFinishedText: bodyText.includes('finished!') || bodyText.includes('finished'),
+                hasProcessingText: bodyText.includes('processing') || bodyText.includes('uploading'),
+                hasAssignedText: bodyText.includes('successfully assigned'),
+              };
+            }''', stem_base)
+        except Exception:
+            return {
+                "bodyText": "",
+                "rowFound": False,
+                "rowText": "",
+                "hasRemoveButton": False,
+                "hasFinishedText": False,
+                "hasProcessingText": False,
+                "hasAssignedText": False,
+            }
+
+    # Wait for Tonies upload UI to acknowledge/process the attached file before saving.
+    upload_state = _upload_row_state()
+    nav_trace.append(f"upload_row_initial_found: {upload_state.get('rowFound')}")
+    nav_trace.append(f"upload_row_initial_remove: {upload_state.get('hasRemoveButton')}")
+    nav_trace.append(f"upload_row_initial_finished: {upload_state.get('hasFinishedText')}")
+
+    upload_ready = False
+    for idx in range(24):
+        if idx > 0:
+            page.wait_for_timeout(1000)
+        upload_state = _upload_row_state()
+        nav_trace.append(
+            f"upload_row_poll_{idx+1}: found={upload_state.get('rowFound')} remove={upload_state.get('hasRemoveButton')} finished={upload_state.get('hasFinishedText')} processing={upload_state.get('hasProcessingText')}"
+        )
+        if upload_state.get('hasFinishedText') or upload_state.get('hasAssignedText'):
+            upload_ready = True
+            nav_trace.append(f"upload_row_ready_signal_poll_{idx+1}: success_text")
+            break
+        if upload_state.get('rowFound') and upload_state.get('hasRemoveButton'):
+            upload_ready = True
+            nav_trace.append(f"upload_row_ready_signal_poll_{idx+1}: row_with_remove")
+            break
+
+    if not upload_ready:
+        nav_trace.append(f"upload_row_last_text: {str(upload_state.get('rowText') or '')[:300]}")
 
     # Prefer explicit sticky save button by data-testid.
     save_btn = None
@@ -699,13 +754,52 @@ def upload_to_tonies(mp3_path: Path, target_character_name: str = None, target_u
     confirmed = False
     last_after_count = before_count
 
-    # Fast verification window first (keeps successful uploads snappy).
+    def _current_body_text() -> str:
+        try:
+            return page.locator("body").inner_text(timeout=8000) or ""
+        except Exception:
+            return ""
+
+    def _hint_seen(body_text: str) -> bool:
+        body_low = body_text.lower()
+        hints = ["upload complete", "processing", "transferred", "successfully assigned", "ready to start in", "finished"]
+        return any(h in body_low for h in hints)
+
+    def _resolve_editor_url() -> str:
+        revisit_url = target_url or configured_upload_url or settings.tonies_app_url
+        try:
+            cur_url = page.url or ""
+        except Exception:
+            cur_url = ""
+        if "/refresh?" in cur_url and "relatedUrl=" in cur_url:
+            try:
+                from urllib.parse import urlparse, parse_qs, unquote
+                parsed = urlparse(cur_url)
+                related = parse_qs(parsed.query).get("relatedUrl", [""])[0]
+                related = unquote(related or "").strip()
+                if related:
+                    if related.startswith("http://") or related.startswith("https://"):
+                        revisit_url = related
+                    elif related.startswith("/"):
+                        from urllib.parse import urljoin
+                        revisit_url = urljoin(cur_url, related)
+            except Exception:
+                pass
+        return revisit_url
+
+    def _return_to_editor(reason: str) -> str:
+        revisit_url = _resolve_editor_url()
+        nav_trace.append(f"return_to_editor_{reason}: {revisit_url}")
+        page.goto(revisit_url, wait_until="domcontentloaded")
+        _wait_for_tonies_editor_ready(page, 12000)
+        page.wait_for_timeout(1200)
+        return revisit_url
+
+    # Fast verification window first, but only chapter-list changes count as confirmation.
     for _ in range(5):
         page.wait_for_timeout(500)
         if _has_upload_success_signal():
-            confirmed = True
-            nav_trace.append("verify_fast_signal_confirmed: true")
-            break
+            nav_trace.append("verify_fast_signal_seen: true")
         cur_titles = _chapter_titles()
         last_after_count = len(cur_titles)
         if _is_confirmed(cur_titles):
@@ -713,52 +807,72 @@ def upload_to_tonies(mp3_path: Path, target_character_name: str = None, target_u
             nav_trace.append("verify_fast_list_confirmed: true")
             break
 
-    # Fallback slower verification only when strict mode is requested.
+    body = ""
+    hint_seen = False
+
+    # Strict mode: revisit the creative page and allow longer bounded reconciliation.
     if verify_strict and not confirmed:
-        for _ in range(5):
-            page.wait_for_timeout(1200)
-            if _has_upload_success_signal():
-                confirmed = True
-                nav_trace.append("verify_slow_signal_confirmed: true")
-                break
+        body = _current_body_text()
+        hint_seen = _hint_seen(body)
+        nav_trace.append(f"verify_pending_hint_seen_before_reload: {hint_seen}")
+        revisit_url = _resolve_editor_url()
+
+        for attempt in range(1, 4):
+            try:
+                page.reload(wait_until="domcontentloaded")
+                nav_trace.append(f"verify_reload_attempt_{attempt}: reload")
+            except Exception:
+                page.goto(revisit_url, wait_until="domcontentloaded")
+                nav_trace.append(f"verify_reload_attempt_{attempt}: goto")
+
+            if "/refresh" in (page.url or "") or not has_upload_controls():
+                revisit_url = _return_to_editor(f"verify_reload_attempt_{attempt}")
+            else:
+                _wait_for_tonies_editor_ready(page, 12000)
+                page.wait_for_timeout(1200)
+
             cur_titles = _chapter_titles()
             last_after_count = len(cur_titles)
+            nav_trace.append(f"verify_reload_attempt_{attempt}_after_count: {last_after_count}")
             if _is_confirmed(cur_titles):
                 confirmed = True
-                nav_trace.append("verify_slow_list_confirmed: true")
+                nav_trace.append(f"verify_reload_attempt_{attempt}_confirmed: true")
                 break
+
+            for slow_idx in range(5):
+                page.wait_for_timeout(1500)
+                cur_titles = _chapter_titles()
+                last_after_count = len(cur_titles)
+                nav_trace.append(f"verify_reload_attempt_{attempt}_poll_{slow_idx+1}_after_count: {last_after_count}")
+                if _is_confirmed(cur_titles):
+                    confirmed = True
+                    nav_trace.append(f"verify_reload_attempt_{attempt}_poll_{slow_idx+1}_confirmed: true")
+                    break
+
+            if confirmed:
+                break
+
+            body = _current_body_text()
+            hint_seen = _hint_seen(body)
+            nav_trace.append(f"verify_reload_attempt_{attempt}_hint_seen: {hint_seen}")
 
     if not confirmed:
         logger.warning("upload.verify_pending file=%s elapsed_ms=%d before_count=%d after_count=%d", mp3_path, int((time.time()-t0)*1000), before_count, last_after_count)
-        body = page.locator("body").inner_text(timeout=8000)
+        if not body:
+            body = _current_body_text()
+        hint_seen = _hint_seen(body)
         body_low = body.lower()
-        hints = ["upload complete", "processing", "transferred", "successfully assigned", "ready to start in", "finished"]
-        hint_seen = any(h in body_low for h in hints)
 
-        # Fast mode: accept UI success hints and continue; background reconciliation will catch up.
+        # Non-strict mode may accept UI hints, but strict mode must not.
         if (not verify_strict) and hint_seen:
             confirmed = True
             nav_trace.append("verify_hint_accept_non_strict: true")
 
-        # Strict mode keeps a shortened recovery pass.
-        if verify_strict and not confirmed and hint_seen:
-            try:
-                page.reload(wait_until="domcontentloaded")
-            except Exception:
-                page.goto(target_url or configured_upload_url or settings.tonies_app_url, wait_until="domcontentloaded")
-
-            for _ in range(4):
-                page.wait_for_timeout(1000)
-                cur_titles = _chapter_titles()
-                last_after_count = len(cur_titles)
-                if _is_confirmed(cur_titles):
-                    confirmed = True
-                    break
-
         if not confirmed:
             dbg = dump_debug("upload-verify-failed")
             raise RuntimeError(
-                f"Upload was not confirmed in chapter list (before={before_count}, after={last_after_count}, hints={hint_seen}) "
+                f"Upload was not confirmed on my.tonies.com (before={before_count}, after={last_after_count}, hints={hint_seen}, "
+                f"save_success_signal={_has_upload_success_signal()}, processing_hint={'processing' in body_low}) "
                 f"(debug: {dbg}.png/.txt/.html)"
             )
 
@@ -863,6 +977,12 @@ def _extract_tonies_content(page) -> dict:
     if free_minutes is not None and total_minutes is not None:
         used_minutes = max(total_minutes - free_minutes, 0)
 
+    try:
+        summary = [f"{idx}:{(c.get('chapter_id') or '').strip()}|{(c.get('title') or '').strip()}|{(c.get('duration') or '').strip()}" for idx, c in enumerate(chapters[:30])]
+        logger.info("tonies.content.extract count=%d free=%s summary=%s", len(chapters), free_minutes, summary)
+    except Exception:
+        pass
+
     return {
         "free_minutes": free_minutes,
         "total_minutes": total_minutes,
@@ -881,6 +1001,11 @@ def get_tonies_content(target_url: str) -> dict:
         page = context.new_page()
         _open_tonies_editor(page, target_url)
         out = _extract_tonies_content(page)
+        try:
+            summary = [f"{idx}:{(c.get('chapter_id') or '').strip()}|{(c.get('title') or '').strip()}|{(c.get('duration') or '').strip()}" for idx, c in enumerate((out.get('chapters') or [])[:30])]
+            logger.info("tonies.content.fetch target=%s count=%d summary=%s", target_url, len(out.get('chapters') or []), summary)
+        except Exception:
+            pass
         try:
             context.storage_state(path=str(settings.tonies_storage_state_file))
         except Exception:
@@ -1146,6 +1271,11 @@ def delete_tonies_chapter(target_url: str, index: int, chapter_title: str | None
         page.wait_for_timeout(1800)
 
         out = _extract_tonies_content(page)
+        try:
+            summary = [f"{idx}:{(c.get('chapter_id') or '').strip()}|{(c.get('title') or '').strip()}|{(c.get('duration') or '').strip()}" for idx, c in enumerate((out.get('chapters') or [])[:30])]
+            logger.info("tonies.delete.result target=%s resolved_index=%s count_before=%d count_after=%d summary=%s", target_url, resolved_index, count_before, len(out.get('chapters') or []), summary)
+        except Exception:
+            pass
         try:
             context.storage_state(path=str(settings.tonies_storage_state_file))
         except Exception:
