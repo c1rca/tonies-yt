@@ -2,7 +2,7 @@
 set -euo pipefail
 
 BASE_URL="${BASE_URL:-http://localhost:8096}"
-USERNAME="${USERNAME:-alex}"
+USERNAME="${USERNAME:-}"
 APP_PASSWORD="${APP_PASSWORD:-}"
 SELECTIONS="${SELECTIONS:-3}"
 SEARCH_LIMIT="${SEARCH_LIMIT:-5}"
