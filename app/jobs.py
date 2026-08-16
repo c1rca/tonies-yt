@@ -478,7 +478,9 @@ def upload_worker_loop():
                 _update(job_id, status="uploading")
                 _log(job_id, "Uploading to Tonies")
                 try:
-                    _upload_to_tonies_with_retry(job_id, mp3_path, target=target, target_url=target_url, verify_strict=True, attempts=1, tonies_email=tonies_email, tonies_password=tonies_password)
+                    # The upload page has already seen and saved the new row. Do not block
+                    # completion on Tonies' eventually-consistent listing; the UI confirms it.
+                    _upload_to_tonies_with_retry(job_id, mp3_path, target=target, target_url=target_url, verify_strict=False, attempts=1, tonies_email=tonies_email, tonies_password=tonies_password)
                 except Exception:
                     if fallback_path and fallback_path.exists():
                         _log(job_id, "Prepared file upload failed strict verification; retrying once with original file")
@@ -569,6 +571,8 @@ def run_selected_candidate_async(job_id: str, selected: dict, target_url: Option
             if _is_cancelled(job_id):
                 _update(job_id, status="failed", error="Cancelled by user")
                 return
+            if get_job(job_id).status in {"done", "failed"}:
+                return
 
             target = (parsed.get("target_character_name") if isinstance(parsed, dict) else None)
             _ensure_tonies_capacity(target_url, _probe_audio_duration_seconds(Path(mp3)))
@@ -583,6 +587,11 @@ def run_selected_candidate_async(job_id: str, selected: dict, target_url: Option
 
 
 def create_upload_only_job(file_path: str, note: str = "upload existing file", target_url: Optional[str] = None) -> JobState:
+    # Prevent a second tap from queuing the same file while the first one is active.
+    with _lock:
+        for existing in _jobs.values():
+            if existing.user_message == note and existing.target_url == target_url and existing.status in {"queued_prepare", "preparing", "waiting_upload", "uploading"}:
+                return existing
     job_id = str(uuid.uuid4())
     st = JobState(
         id=job_id,

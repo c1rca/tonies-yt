@@ -4,11 +4,9 @@ __pycache__/
 *.pyc
 
 # Runtime data (keep repo clean)
-data/logs/
-data/secrets/
-data/staging/
-data/debug/
-data/tonies-storage-state.json
+data/
+backups/
+data-pre-start-*.tar.gz
 
 # Downloaded media (allow test fixture)
 data/downloads/*.mp3

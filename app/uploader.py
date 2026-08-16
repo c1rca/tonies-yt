@@ -1,6 +1,6 @@
 from pathlib import Path
 from datetime import datetime
-from threading import Lock, Thread
+from threading import Event, Lock, Thread
 from uuid import uuid4
 import re
 from .config import settings
@@ -21,6 +21,26 @@ def _extract_app_track_token(value: str) -> str:
 def _strip_app_track_token(value: str) -> str:
     raw = str(value or '').strip()
     return _APP_TRACK_TOKEN_RE.sub('', raw).strip() or raw
+
+
+def _titles_contain_track_token(titles: list[str], token: str) -> bool:
+    expected = str(token or '').strip().lower()
+    return bool(expected) and any(_extract_app_track_token(title) == expected for title in titles)
+
+
+def _upload_persisted(before_count: int, current_titles: list[str], token: str) -> bool:
+    # Tonies can derive the chapter title from MP3 metadata and discard the filename token.
+    return _titles_contain_track_token(current_titles, token) or len(current_titles) > before_count
+
+
+def _is_transient_editor_error(exc: Exception) -> bool:
+    return "Tonies editor content was not available" in str(exc)
+
+
+def _renamed_title(current_title: str, requested_title: str) -> str:
+    base = _strip_app_track_token(requested_title)
+    token = _extract_app_track_token(current_title)
+    return f"{base} [oc:{token}]" if token else base
 
 
 _upload_session_lock = Lock()
@@ -167,33 +187,11 @@ def _resolved_tonies_auth() -> tuple[str, str, str]:
 
 
 
+@_offloop_playwright
 @_serialized_tonies_mutation
 def upload_to_tonies(mp3_path: Path, target_character_name: str = None, target_url: str = None, verify_strict: bool = False, _allow_thread_handoff: bool = True, tonies_email_override: str = None, tonies_password_override: str = None) -> None:
     t0 = time.time()
     logger.info("upload.start file=%s target_url=%s verify_strict=%s", mp3_path, bool(target_url), verify_strict)
-    # Guard against accidental sync-API execution on a running asyncio loop thread.
-    # If detected, hand off once to a plain worker thread and execute there.
-    if _allow_thread_handoff:
-        try:
-            import asyncio
-            loop = asyncio.get_running_loop()
-            if loop and loop.is_running():
-                err: dict[str, Exception] = {}
-
-                def _runner():
-                    try:
-                        upload_to_tonies(mp3_path, target_character_name, target_url, verify_strict, _allow_thread_handoff=False, tonies_email_override=tonies_email_override, tonies_password_override=tonies_password_override)
-                    except Exception as e:
-                        err["e"] = e
-
-                t = Thread(target=_runner, daemon=True)
-                t.start()
-                t.join()
-                if "e" in err:
-                    raise err["e"]
-                return
-        except RuntimeError:
-            pass
 
     # Always start from a fresh Playwright upload session per upload action.
     # This avoids stale cross-thread state after prior local-upload threads.
@@ -636,7 +634,7 @@ def upload_to_tonies(mp3_path: Path, target_character_name: str = None, target_u
                 hasProcessingText: bodyText.includes('processing') || bodyText.includes('uploading'),
                 hasAssignedText: bodyText.includes('successfully assigned'),
               };
-            }''', stem_base)
+            }''', unique_token)
         except Exception:
             return {
                 "bodyText": "",
@@ -655,20 +653,46 @@ def upload_to_tonies(mp3_path: Path, target_character_name: str = None, target_u
     nav_trace.append(f"upload_row_initial_finished: {upload_state.get('hasFinishedText')}")
 
     upload_ready = False
-    for idx in range(24):
+    chapter_name_set = False
+    new_row_seen_poll = None
+    for idx in range(90):
         if idx > 0:
             page.wait_for_timeout(1000)
         upload_state = _upload_row_state()
         nav_trace.append(
             f"upload_row_poll_{idx+1}: found={upload_state.get('rowFound')} remove={upload_state.get('hasRemoveButton')} finished={upload_state.get('hasFinishedText')} processing={upload_state.get('hasProcessingText')}"
         )
-        if upload_state.get('hasFinishedText') or upload_state.get('hasAssignedText'):
+        current_titles = _chapter_titles()
+        if len(current_titles) > before_count and new_row_seen_poll is None:
+            new_row_seen_poll = idx
+            nav_trace.append(f"upload_row_first_seen_poll_{idx+1}")
+        if not chapter_name_set:
+            try:
+                new_index = _new_upload_row_index(before_count, len(current_titles))
+                row = page.locator("div[draggable='true'].chapter, div[draggable='true'][class*='ChapterDragNode']").nth(new_index)
+                title_input = row.locator("input[data-testid='input']").first
+                title_input.fill(f"{stem_base} [oc:{unique_token}]", timeout=5000)
+                title_input.press("Tab")
+                chapter_name_set = True
+                nav_trace.append(f"upload_row_named_poll_{idx+1}: index={new_index}")
+            except Exception:
+                pass
+        # The per-upload row was identified and renamed with a unique token. A short
+        # stabilization window is enough to let Tonies enable Save; 15 seconds made every
+        # otherwise-ready local upload look stuck without adding meaningful safety.
+        if chapter_name_set and new_row_seen_poll is not None and idx - new_row_seen_poll >= 4:
             upload_ready = True
-            nav_trace.append(f"upload_row_ready_signal_poll_{idx+1}: success_text")
+            nav_trace.append(f"upload_row_ready_signal_poll_{idx+1}: stable_for_4_seconds")
             break
-        if upload_state.get('rowFound') and upload_state.get('hasRemoveButton'):
+        # "Finished" is page-wide and can describe an older chapter; never let it
+        # bypass the new row's stability window.
+        if (upload_state.get('hasFinishedText') or upload_state.get('hasAssignedText')) and new_row_seen_poll is not None and idx - new_row_seen_poll >= 15:
             upload_ready = True
-            nav_trace.append(f"upload_row_ready_signal_poll_{idx+1}: row_with_remove")
+            nav_trace.append(f"upload_row_ready_signal_poll_{idx+1}: stable_success_text")
+            break
+        if upload_state.get('rowFound') and upload_state.get('hasRemoveButton') and new_row_seen_poll is not None and idx - new_row_seen_poll >= 15:
+            upload_ready = True
+            nav_trace.append(f"upload_row_ready_signal_poll_{idx+1}: stable_remove_row")
             break
 
     if not upload_ready:
@@ -692,16 +716,9 @@ def upload_to_tonies(mp3_path: Path, target_character_name: str = None, target_u
         except Exception:
             pass
 
-    # Fast path: when Tonies already reports "Finished" / saved-success, avoid extra save click.
-    saw_success_signal = False
-    for _ in range(5):
-        if _has_upload_success_signal():
-            saw_success_signal = True
-            nav_trace.append("upload_success_signal_seen: true")
-            break
-        page.wait_for_timeout(700)
-
-    if (not saw_success_signal) and save_btn is not None:
+    # A page-wide "Finished" message can belong to an older chapter. If Tonies exposes
+    # a save control for this edit, click it and let unique-token verification decide.
+    if save_btn is not None:
         try:
             page.wait_for_function(
                 "el => !!el && !el.disabled && el.getAttribute('aria-disabled') !== 'true'",
@@ -727,29 +744,10 @@ def upload_to_tonies(mp3_path: Path, target_character_name: str = None, target_u
                 pass
         page.wait_for_timeout(900)
 
-    # Verification: require chapter-list change (count grows or new matching title appears).
-    def _norm(s: str) -> str:
-        import re
-        return re.sub(r"[^a-z0-9]+", "", (s or "").lower())
-
-    before_norm_set = {_norm(t) for t in before_titles if t}
-    stem_norm = _norm(mp3_path.stem)
-    stem_probe = stem_norm[:14] if stem_norm else ""
-
+    # Prefer the per-upload token; Tonies sometimes replaces it with embedded MP3 metadata,
+    # so a newly persisted chapter count is the safe serialized-operation fallback.
     def _is_confirmed(cur_titles: list[str]) -> bool:
-        cur_count = len(cur_titles)
-        if cur_count > before_count:
-            return True
-        cur_norm = {_norm(t) for t in cur_titles if t}
-        # New normalized title appeared in list.
-        if any(n and n not in before_norm_set for n in cur_norm):
-            return True
-        if stem_probe:
-            for t in cur_titles:
-                tn = _norm(t)
-                if tn and (stem_probe in tn or tn in stem_norm):
-                    return True
-        return False
+        return _upload_persisted(before_count, cur_titles, unique_token)
 
     confirmed = False
     last_after_count = before_count
@@ -812,12 +810,23 @@ def upload_to_tonies(mp3_path: Path, target_character_name: str = None, target_u
 
     # Strict mode: revisit the creative page and allow longer bounded reconciliation.
     if verify_strict and not confirmed:
+        if "/refresh" in (page.url or ""):
+            nav_trace.append("verify_refresh_wait_started: true")
+            refresh_completed = _wait_for_tonies_refresh(page, 60000)
+            nav_trace.append(f"verify_refresh_wait_completed: {refresh_completed} url={page.url}")
+            if refresh_completed:
+                _wait_for_tonies_editor_ready(page, 12000)
+                cur_titles = _chapter_titles()
+                last_after_count = len(cur_titles)
+                if _is_confirmed(cur_titles):
+                    confirmed = True
+                    nav_trace.append("verify_refresh_list_confirmed: true")
         body = _current_body_text()
         hint_seen = _hint_seen(body)
         nav_trace.append(f"verify_pending_hint_seen_before_reload: {hint_seen}")
         revisit_url = _resolve_editor_url()
 
-        for attempt in range(1, 4):
+        for attempt in ([] if confirmed else range(1, 4)):
             try:
                 page.reload(wait_until="domcontentloaded")
                 nav_trace.append(f"verify_reload_attempt_{attempt}: reload")
@@ -908,11 +917,57 @@ def _wait_for_tonies_editor_ready(page, timeout_ms: int = 7000):
         page.wait_for_timeout(220)
 
 
+def _click_tonies_sign_in_shell(page) -> bool:
+    for sel in [
+        "button:has-text('SIGN IN')",
+        "a:has-text('SIGN IN')",
+        "button:has-text('Sign in')",
+        "a:has-text('Sign in')",
+    ]:
+        try:
+            loc = page.locator(sel).first
+            if loc.count() > 0 and loc.is_visible(timeout=800):
+                loc.click()
+                return True
+        except Exception:
+            pass
+    return False
+
+
+def _finish_tonies_sign_in_handoff(page, target_url: str) -> bool:
+    # Tonies' OAuth callback can take several seconds before its session cookie is usable.
+    page.wait_for_timeout(8000)
+    if page.locator("#username").count() > 0 or page.locator("#password").count() > 0:
+        return False
+    page.goto(target_url, wait_until="domcontentloaded")
+    return True
+
+
+def _wait_for_tonies_refresh(page, timeout_ms: int = 60000) -> bool:
+    if "/refresh" not in (page.url or ""):
+        return False
+    deadline = time.time() + max(1.0, timeout_ms / 1000.0)
+    while time.time() < deadline and "/refresh" in (page.url or ""):
+        page.wait_for_timeout(1500)
+        try:
+            page.reload(wait_until="domcontentloaded", timeout=15000)
+        except Exception:
+            pass
+    return "/refresh" not in (page.url or "")
+
+
 def _open_tonies_editor(page, target_url: str):
     tonies_email, tonies_password, configured_upload_url = _resolved_tonies_auth()
     direct_url = target_url or configured_upload_url or settings.tonies_app_url
     page.goto(direct_url, wait_until="domcontentloaded")
-    _wait_for_tonies_editor_ready(page, 7000)
+    # The first SSO callback can return to the my.tonies login shell before its
+    # cookie is accepted; follow the shell once more rather than extracting it as
+    # an empty editor.
+    for _ in range(2):
+        if not _click_tonies_sign_in_shell(page):
+            break
+        _finish_tonies_sign_in_handoff(page, direct_url)
+    _wait_for_tonies_editor_ready(page, 9000)
 
     if page.locator("#username").count() > 0 and page.locator("#password").count() > 0:
         if not tonies_email or not tonies_password:
@@ -931,6 +986,18 @@ def _open_tonies_editor(page, target_url: str):
         page.goto(direct_url, wait_until="domcontentloaded")
         _wait_for_tonies_editor_ready(page, 9000)
 
+
+def _open_tonies_editor_with_retry(page, target_url: str) -> dict:
+    for attempt in range(2):
+        _open_tonies_editor(page, target_url)
+        try:
+            return _extract_tonies_content(page)
+        except Exception as exc:
+            if not _is_transient_editor_error(exc) or attempt:
+                raise
+            logger.warning("tonies.mutation.transient_editor_retry target=%s", target_url)
+            page.wait_for_timeout(2000)
+    raise RuntimeError("Tonies editor content was not available")
 
 
 def _extract_tonies_content(page) -> dict:
@@ -973,6 +1040,9 @@ def _extract_tonies_content(page) -> dict:
       });
     }''')
 
+    if not chapters and free_minutes is None:
+        raise RuntimeError("Tonies editor content was not available (login or transient page)")
+
     used_minutes = None
     if free_minutes is not None and total_minutes is not None:
         used_minutes = max(total_minutes - free_minutes, 0)
@@ -992,27 +1062,86 @@ def _extract_tonies_content(page) -> dict:
 
 
 
+_content_fetch_lock = Lock()
+_content_fetches: dict[str, dict] = {}
+
+
 def get_tonies_content(target_url: str) -> dict:
+    """Fetch a fresh Tonies listing, coalescing simultaneous requests per editor URL.
+
+    A manual refresh is never served from a stale cache.  If another request is already
+    loading the same editor, it waits for — and receives — that same fresh remote result
+    instead of starting another Chromium/SSO session that makes both requests slower.
+    """
+    key = str(target_url or "")
+    with _content_fetch_lock:
+        active = _content_fetches.get(key)
+        if active is None:
+            active = {"done": Event(), "result": None, "error": None}
+            _content_fetches[key] = active
+            leader = True
+        else:
+            leader = False
+
+    if leader:
+        try:
+            active["result"] = _get_tonies_content_uncached(target_url)
+        except BaseException as exc:
+            active["error"] = exc
+        finally:
+            active["done"].set()
+            with _content_fetch_lock:
+                _content_fetches.pop(key, None)
+    else:
+        active["done"].wait()
+
+    if active["error"] is not None:
+        raise active["error"]
+    return active["result"]
+
+
+def _get_tonies_content_uncached(target_url: str) -> dict:
     from playwright.sync_api import sync_playwright
 
+    last_error = None
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        context = browser.new_context(storage_state=str(settings.tonies_storage_state_file) if settings.tonies_storage_state_file.exists() else None)
-        page = context.new_page()
-        _open_tonies_editor(page, target_url)
-        out = _extract_tonies_content(page)
-        try:
-            summary = [f"{idx}:{(c.get('chapter_id') or '').strip()}|{(c.get('title') or '').strip()}|{(c.get('duration') or '').strip()}" for idx, c in enumerate((out.get('chapters') or [])[:30])]
-            logger.info("tonies.content.fetch target=%s count=%d summary=%s", target_url, len(out.get('chapters') or []), summary)
-        except Exception:
-            pass
-        try:
-            context.storage_state(path=str(settings.tonies_storage_state_file))
-        except Exception:
-            pass
-        context.close()
-        browser.close()
-        return out
+        for attempt in range(2):
+            browser = p.chromium.launch(headless=True)
+            context = browser.new_context(storage_state=str(settings.tonies_storage_state_file) if settings.tonies_storage_state_file.exists() else None)
+            try:
+                page = context.new_page()
+                if attempt:
+                    # A direct editor URL can remain on the SSO shell after a cold restart.
+                    # Visiting the authenticated Creative-Tonies index first establishes the
+                    # session cookie before returning to the requested editor.
+                    creative_url = f"{settings.tonies_app_url.rstrip('/')}/creative-tonies"
+                    page.goto(creative_url, wait_until="domcontentloaded")
+                    if _click_tonies_sign_in_shell(page):
+                        _finish_tonies_sign_in_handoff(page, creative_url)
+                    try:
+                        page.wait_for_selector("a[href*='/creative-tonies/']", timeout=15000)
+                    except Exception:
+                        # The SSO shell can authenticate the editor before the listing cards render.
+                        # The editor itself is the authoritative readiness check below.
+                        logger.warning("tonies.content.listing_cards_not_ready; continuing_to_editor")
+                    page.goto(target_url, wait_until="domcontentloaded")
+                    _wait_for_tonies_editor_ready(page, 9000)
+                else:
+                    _open_tonies_editor(page, target_url)
+                out = _extract_tonies_content(page)
+                summary = [f"{idx}:{(c.get('chapter_id') or '').strip()}|{(c.get('title') or '').strip()}|{(c.get('duration') or '').strip()}" for idx, c in enumerate((out.get('chapters') or [])[:30])]
+                logger.info("tonies.content.fetch target=%s attempt=%d count=%d summary=%s", target_url, attempt + 1, len(out.get('chapters') or []), summary)
+                return out
+            except Exception as exc:
+                last_error = exc
+                if not _is_transient_editor_error(exc) or attempt == 1:
+                    raise
+                logger.warning("tonies.content.transient_retry target=%s", target_url)
+                time.sleep(2)
+            finally:
+                context.close()
+                browser.close()
+    raise last_error or RuntimeError("Tonies editor content was not available")
 
 
 
@@ -1027,7 +1156,7 @@ def delete_tonies_chapter(target_url: str, index: int, chapter_title: str | None
         browser = p.chromium.launch(headless=True)
         context = browser.new_context(storage_state=str(settings.tonies_storage_state_file) if settings.tonies_storage_state_file.exists() else None)
         page = context.new_page()
-        _open_tonies_editor(page, target_url)
+        _open_tonies_editor_with_retry(page, target_url)
 
         # Handle any browser confirm dialogs defensively.
         page.on("dialog", lambda d: d.accept())
@@ -1178,6 +1307,8 @@ def delete_tonies_chapter(target_url: str, index: int, chapter_title: str | None
             if resolved_index < 0:
                 raise RuntimeError(f"Invalid chapter index ({index}) for {count_before} rows")
 
+        before_titles = _extract_chapter_titles(page)
+        expected_titles = _remove_list_item(before_titles, resolved_index)
         row = rows.nth(resolved_index)
         btn = row.locator("button[class*='RemoveChapterButton'], button[data-testid*='remove'], button[aria-label*='Remove'], button[title*='Remove'], button").first
 
@@ -1224,8 +1355,8 @@ def delete_tonies_chapter(target_url: str, index: int, chapter_title: str | None
         # Wait for list to reflect removal.
         try:
             page.wait_for_function(
-                "(sel, c) => document.querySelectorAll(sel).length < c",
-                arg=["div[draggable='true'].chapter, div[draggable='true'][class*='ChapterDragNode']", count_before],
+                "({sel, count}) => document.querySelectorAll(sel).length < count",
+                arg={"sel": "div[draggable='true'].chapter, div[draggable='true'][class*='ChapterDragNode']", "count": count_before},
                 timeout=10000,
             )
         except Exception:
@@ -1268,9 +1399,7 @@ def delete_tonies_chapter(target_url: str, index: int, chapter_title: str | None
         if not saved:
             raise RuntimeError("Could not find Save Content button after delete")
 
-        page.wait_for_timeout(1800)
-
-        out = _extract_tonies_content(page)
+        out = _wait_for_tonies_order(page, target_url, expected_titles)
         try:
             summary = [f"{idx}:{(c.get('chapter_id') or '').strip()}|{(c.get('title') or '').strip()}|{(c.get('duration') or '').strip()}" for idx, c in enumerate((out.get('chapters') or [])[:30])]
             logger.info("tonies.delete.result target=%s resolved_index=%s count_before=%d count_after=%d summary=%s", target_url, resolved_index, count_before, len(out.get('chapters') or []), summary)
@@ -1294,7 +1423,7 @@ def delete_all_tonies_content(target_url: str) -> dict:
         browser = p.chromium.launch(headless=True)
         context = browser.new_context(storage_state=str(settings.tonies_storage_state_file) if settings.tonies_storage_state_file.exists() else None)
         page = context.new_page()
-        _open_tonies_editor(page, target_url)
+        _open_tonies_editor_with_retry(page, target_url)
 
         opened = False
         for sel in [
@@ -1427,7 +1556,7 @@ def rename_tonies_chapter(target_url: str, index: int, title: str) -> dict:
         browser = p.chromium.launch(headless=True)
         context = browser.new_context(storage_state=str(settings.tonies_storage_state_file) if settings.tonies_storage_state_file.exists() else None)
         page = context.new_page()
-        _open_tonies_editor(page, target_url)
+        _open_tonies_editor_with_retry(page, target_url)
 
         row_sel = "div[draggable='true'].chapter, div[draggable='true'][class*='ChapterDragNode']"
         rows = page.locator(row_sel)
@@ -1435,13 +1564,18 @@ def rename_tonies_chapter(target_url: str, index: int, title: str) -> dict:
         if index < 0 or index >= count:
             raise RuntimeError("Invalid chapter index")
 
+        before_titles = _extract_chapter_titles(page)
+        effective_title = _renamed_title(before_titles[index], new_title)
+        expected_titles = list(before_titles)
+        expected_titles[index] = effective_title
+
         row = rows.nth(index)
         inp = row.locator("input[data-testid='input']").first
         if inp.count() == 0:
             raise RuntimeError("Could not find chapter title input")
 
         inp.click(timeout=5000)
-        inp.fill(new_title, timeout=5000)
+        inp.fill(effective_title, timeout=5000)
         inp.press("Tab")
 
         saved = False
@@ -1462,9 +1596,7 @@ def rename_tonies_chapter(target_url: str, index: int, title: str) -> dict:
         if not saved:
             raise RuntimeError("Could not find Save Content button after rename")
 
-        page.wait_for_timeout(1800)
-
-        out = _extract_tonies_content(page)
+        out = _wait_for_tonies_order(page, target_url, expected_titles)
         try:
             context.storage_state(path=str(settings.tonies_storage_state_file))
         except Exception:
@@ -1473,6 +1605,60 @@ def rename_tonies_chapter(target_url: str, index: int, title: str) -> dict:
         browser.close()
         return out
 
+
+
+def _extract_chapter_titles(page) -> list[str]:
+    values = page.evaluate(r'''() => {
+      const rows=[...document.querySelectorAll("div[draggable='true'].chapter, div[draggable='true'][class*='ChapterDragNode']")];
+      return rows.map((r, idx) => {
+        const input=r.querySelector("input[data-testid='input']");
+        const label=r.querySelector("label[data-testid='input-label']");
+        return ((input?.value || label?.textContent || `Chapter ${idx+1}`) || '').trim();
+      });
+    }''')
+    return [str(value).strip() for value in (values or [])]
+
+
+def _move_list_item(values: list[str], from_index: int, to_index: int) -> list[str]:
+    moved = list(values)
+    item = moved.pop(from_index)
+    moved.insert(to_index, item)
+    return moved
+
+
+def _remove_list_item(values: list[str], index: int) -> list[str]:
+    remaining = list(values)
+    remaining.pop(index)
+    return remaining
+
+
+def _new_upload_row_index(before_count: int, current_count: int) -> int:
+    if current_count <= before_count:
+        raise ValueError("No newly uploaded chapter row")
+    return before_count
+
+
+def _drag_adjacent(page, row_selector: str, from_index: int, to_index: int) -> None:
+    # Locator.drag_to performs its own actionability scrolling. Pre-scrolling each
+    # dynamic nth locator can virtualize/rebind it to a different chapter.
+    rows = page.locator(row_selector)
+    rows.nth(from_index).drag_to(rows.nth(to_index))
+
+
+def _wait_for_tonies_order(page, target_url: str, expected_titles: list[str], timeout_ms: int = 30000) -> dict:
+    """Return only after my.tonies.com exposes the exact saved order."""
+    deadline = time.time() + max(1.0, timeout_ms / 1000.0)
+    last_titles: list[str] = []
+    while time.time() < deadline:
+        last_titles = _extract_chapter_titles(page)
+        if last_titles == expected_titles:
+            return _extract_tonies_content(page)
+        page.wait_for_timeout(700)
+        page.goto(target_url, wait_until="domcontentloaded")
+        _wait_for_tonies_editor_ready(page, 9000)
+    raise RuntimeError(
+        f"Saved Tonies order was not confirmed (expected={expected_titles}, observed={last_titles})"
+    )
 
 
 @_offloop_playwright
@@ -1484,7 +1670,7 @@ def reorder_tonies_chapter(target_url: str, from_index: int, to_index: int) -> d
         browser = p.chromium.launch(headless=True)
         context = browser.new_context(storage_state=str(settings.tonies_storage_state_file) if settings.tonies_storage_state_file.exists() else None)
         page = context.new_page()
-        _open_tonies_editor(page, target_url)
+        _open_tonies_editor_with_retry(page, target_url)
 
         row_sel = "div[draggable='true'].chapter, div[draggable='true'][class*='ChapterDragNode']"
         rows = page.locator(row_sel)
@@ -1492,29 +1678,16 @@ def reorder_tonies_chapter(target_url: str, from_index: int, to_index: int) -> d
         if from_index < 0 or to_index < 0 or from_index >= count or to_index >= count:
             raise RuntimeError("Invalid reorder indices")
 
-        def _titles() -> list[str]:
-            try:
-                vals = page.evaluate(r'''() => {
-                  const rows=[...document.querySelectorAll("div[draggable='true'].chapter, div[draggable='true'][class*='ChapterDragNode']")];
-                  return rows.map((r, idx) => {
-                    const input=r.querySelector("input[data-testid='input']");
-                    const label=r.querySelector("label[data-testid='input-label']");
-                    return ((input?.value || label?.textContent || `Chapter ${idx+1}`) || '').trim();
-                  });
-                }''')
-                return [str(v).strip() for v in (vals or [])]
-            except Exception:
-                return []
-
         # Robust stepwise reorder: after each drag, re-read current index of moved title.
-        titles0 = _titles()
+        titles0 = _extract_chapter_titles(page)
         moving_title = titles0[from_index] if from_index < len(titles0) else ""
+        expected_titles = _move_list_item(titles0, from_index, to_index)
         target = to_index
         max_steps = max(8, count * 3)
         steps = 0
 
         while steps < max_steps:
-            cur_titles = _titles()
+            cur_titles = _extract_chapter_titles(page)
             try:
                 cur = cur_titles.index(moving_title) if moving_title else from_index
             except ValueError:
@@ -1528,24 +1701,13 @@ def reorder_tonies_chapter(target_url: str, from_index: int, to_index: int) -> d
             if nxt < 0 or nxt >= count:
                 break
 
-            src = page.locator(row_sel).nth(cur)
-            dst = page.locator(row_sel).nth(nxt)
-            try:
-                src.scroll_into_view_if_needed(timeout=2000)
-            except Exception:
-                pass
-            try:
-                dst.scroll_into_view_if_needed(timeout=2000)
-            except Exception:
-                pass
-
-            src.drag_to(dst)
+            _drag_adjacent(page, row_sel, cur, nxt)
             page.wait_for_timeout(420)
             steps += 1
 
         page.wait_for_timeout(650)
 
-        final_titles = _titles()
+        final_titles = _extract_chapter_titles(page)
         try:
             final_idx = final_titles.index(moving_title) if moving_title else to_index
         except ValueError:
@@ -1571,9 +1733,7 @@ def reorder_tonies_chapter(target_url: str, from_index: int, to_index: int) -> d
         if not saved:
             raise RuntimeError("Could not find Save Content button after reorder")
 
-        page.wait_for_timeout(1800)
-
-        out = _extract_tonies_content(page)
+        out = _wait_for_tonies_order(page, target_url, expected_titles)
         try:
             context.storage_state(path=str(settings.tonies_storage_state_file))
         except Exception:
@@ -1585,6 +1745,7 @@ def reorder_tonies_chapter(target_url: str, from_index: int, to_index: int) -> d
 
 
 @_offloop_playwright
+@_serialized_tonies_mutation
 def list_creative_tonies() -> list[dict]:
     from playwright.sync_api import sync_playwright
     tonies_email, tonies_password, _ = _resolved_tonies_auth()
@@ -1600,19 +1761,22 @@ def list_creative_tonies() -> list[dict]:
         base_url = settings.tonies_app_url.rstrip('/')
         creative_url = f"{base_url}/creative-tonies"
         page.goto(creative_url, wait_until="domcontentloaded")
-        page.wait_for_load_state("networkidle")
 
         def do_login_if_present():
             # If login gate appears, click in and submit credentials.
+            clicked_sign_in = False
             for sel in ["button:has-text('SIGN IN')", "a:has-text('SIGN IN')", "text=SIGN IN", "button:has-text('Login')", "a:has-text('Login')"]:
                 try:
                     loc = page.locator(sel).first
                     if loc.count() > 0 and loc.is_visible(timeout=900):
                         loc.click()
-                        page.wait_for_timeout(1000)
+                        clicked_sign_in = True
                         break
                 except Exception:
                     pass
+
+            if clicked_sign_in and _finish_tonies_sign_in_handoff(page, creative_url):
+                return
 
             if page.locator("#username").count() > 0 and page.locator("#password").count() > 0:
                 if not tonies_email or not tonies_password:
@@ -1627,9 +1791,11 @@ def list_creative_tonies() -> list[dict]:
                             break
                     except Exception:
                         pass
-                page.wait_for_load_state("networkidle")
+                try:
+                    page.wait_for_url(lambda url: "login.tonies.com" not in str(url), timeout=15000)
+                except Exception:
+                    pass
                 page.goto(creative_url, wait_until="domcontentloaded")
-                page.wait_for_load_state("networkidle")
 
         do_login_if_present()
 
@@ -1639,9 +1805,8 @@ def list_creative_tonies() -> list[dict]:
         except Exception:
             page.wait_for_timeout(1800)
             page.reload(wait_until="domcontentloaded")
-            page.wait_for_load_state("networkidle")
             do_login_if_present()
-            page.wait_for_timeout(1500)
+            page.wait_for_selector("a[href*='/creative-tonies/']", timeout=10000)
 
         cards = page.eval_on_selector_all(
             "a[href*='/creative-tonies/']",
@@ -1681,11 +1846,12 @@ def list_creative_tonies() -> list[dict]:
                 "edit_url": edit_url,
             })
 
-        try:
-            settings.tonies_storage_state_file.parent.mkdir(parents=True, exist_ok=True)
-            context.storage_state(path=str(settings.tonies_storage_state_file))
-        except Exception:
-            pass
+        if out:
+            try:
+                settings.tonies_storage_state_file.parent.mkdir(parents=True, exist_ok=True)
+                context.storage_state(path=str(settings.tonies_storage_state_file))
+            except Exception:
+                pass
 
         context.close()
         browser.close()
