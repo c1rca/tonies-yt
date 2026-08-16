@@ -59,3 +59,13 @@ def test_completed_upload_sync_has_a_bounded_ui_watchdog():
     assert "}, 180000);" in body
     assert "Upload still processing on my.tonies.com" in body
     assert "toniesUploadSyncing = false" in body
+
+
+def test_inflight_remote_sync_is_not_marked_stalled_before_api_timeout():
+    html = (Path(__file__).parents[1] / "web" / "index.html").read_text(encoding="utf-8")
+    start = html.index("toniesRefreshHardWatchdogByUrl[url] = setTimeout")
+    end = html.index("        try {", start)
+    watchdog = html[start:end]
+    assert "Still syncing with my.tonies.com…" in watchdog
+    assert "Sync stalled. Tap Refresh to try again." not in watchdog
+    assert "loadingToniesContent = false" not in watchdog
