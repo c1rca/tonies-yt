@@ -3376,12 +3376,12 @@
             setToniesStatus('Syncing Tonies library…', true);
           }
         }, 4500);
+        // MyTonies' editor can legitimately take slightly over 30s after an SSO retry.
+        // Do not call an in-flight request "stalled" moments before its authoritative
+        // result arrives; the API timeout remains the real failure boundary.
         toniesRefreshHardWatchdogByUrl[url] = setTimeout(() => {
           if (loadingToniesContent && loadingToniesContentUrl === url && selectedToniesUrl === url) {
-            setToniesStatus('Sync stalled. Tap Refresh to try again.', false);
-            loadingToniesContent = false;
-            loadingToniesContentUrl = '';
-            renderToniesContent();
+            setToniesStatus('Still syncing with my.tonies.com…', true);
           }
         }, 30000);
 
