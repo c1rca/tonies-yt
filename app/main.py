@@ -1,4 +1,4 @@
-from fastapi import FastAPI, File, UploadFile
+from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse, PlainTextResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -304,7 +304,11 @@ def files():
 
 @app.post('/api/upload-existing')
 def upload_existing(req: UploadExistingRequest):
+    if Path(req.filename).name != req.filename or Path(req.filename).suffix.lower() != '.mp3':
+        raise HTTPException(status_code=400, detail='Invalid library filename')
     p = settings.data_dir / 'downloads' / req.filename
+    if not p.is_file():
+        raise HTTPException(status_code=404, detail='Library file not found')
     job = create_upload_only_job(str(p), note=f'upload existing: {req.filename}', target_url=req.target_url)
     return {'job_id': job.id, 'status': job.status}
 
@@ -401,7 +405,7 @@ def tonies_content_rename(req: ToniesRenameRequest):
 def download_file(filename: str):
     p = settings.data_dir / 'downloads' / filename
     if not p.exists() or not p.is_file():
-        return {'ok': False, 'error': 'not_found'}
+        raise HTTPException(status_code=404, detail='not_found')
     return FileResponse(str(p), filename=p.name, media_type='audio/mpeg')
 
 
@@ -409,7 +413,7 @@ def download_file(filename: str):
 def delete_file(filename: str):
     p = settings.data_dir / 'downloads' / filename
     if not p.exists() or not p.is_file():
-        return {'ok': False, 'error': 'not_found'}
+        raise HTTPException(status_code=404, detail='not_found')
     p.unlink()
     return {'ok': True, 'deleted': filename}
 

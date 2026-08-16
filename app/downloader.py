@@ -91,6 +91,10 @@ def search_youtube(youtube_query: str, limit: int = 3) -> list[dict]:
 def download_mp3(youtube_query_or_url: str, out_dir: Path, preferred_title: str = None) -> Path:
     base = sanitize_filename(preferred_title or youtube_query_or_url)
     output_template = str(out_dir / f"{base}.%(ext)s")
+    before = {
+        p: (p.stat().st_mtime_ns, p.stat().st_size)
+        for p in out_dir.glob(f"{base}*.mp3")
+    }
 
     # Strict single-attempt download (no retry/fallback here).
     cmd = [
@@ -117,7 +121,11 @@ def download_mp3(youtube_query_or_url: str, out_dir: Path, preferred_title: str 
             f"yt-dlp failed for URL/query: {youtube_query_or_url}. Command: {' '.join(cmd)}. Error: exit={e.returncode}; yt-dlp output: {out[-900:]}"
         )
 
-    matches = sorted(out_dir.glob(f"{base}*.mp3"), key=lambda p: p.stat().st_mtime, reverse=True)
+    matches = [
+        p for p in out_dir.glob(f"{base}*.mp3")
+        if p not in before or (p.stat().st_mtime_ns, p.stat().st_size) != before[p]
+    ]
+    matches.sort(key=lambda p: p.stat().st_mtime_ns, reverse=True)
     if not matches:
         out = (proc.stdout or "") + "\n" + (proc.stderr or "")
         raise RuntimeError(f"Download command finished but no MP3 file found. yt-dlp output: {out[-700:]}")
