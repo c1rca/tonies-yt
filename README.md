@@ -19,7 +19,9 @@ Fast web app for managing Creative Tonies audio.
 
 The app calls the Tonies cloud directly over HTTPS (`httpx`): OAuth login at `login.tonies.com`, then the same API the my.tonies.com web app uses. There is no browser, Playwright or Chromium involved.
 
-- Every change (upload, rename, reorder, delete) re-reads the Tonie first, writes the full chapter list by exact chapter ID, then reads it back. If the Tonie changed in between, the app refuses instead of guessing.
+- Changes queue up instead of waiting for each other. Delete, move or rename as fast as you like: the list updates straight away, and everything queued for a Tonie is saved together in one write (one read, one write, one confirming read).
+- Uploads send their audio up to three at a time, alongside your edits, and land in the order you queued them, at the position you chose.
+- Every change names tracks by their Tonies chapter ID, not by row number, so a queued edit still hits the right track after the list has moved. If a track is gone (for example deleted on another device) that one change fails and the rest still save.
 - A write whose outcome is unknown (for example a timeout) is never retried automatically; the app asks you to refresh first.
 - Uploads go straight to Tonies' storage with a presigned form; your login token is never sent there.
 - OAuth tokens live in memory only and renew automatically. After a restart you sign in to the app again and the next Tonies action signs in to Tonies fresh.

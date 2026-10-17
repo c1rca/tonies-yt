@@ -2,6 +2,21 @@
 
 All notable changes to Tonies-YT. Versions follow [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- **Action queue.** Deletes, moves, renames, delete-all and uploads queue per Tonie and are saved in batches: one read, one write and one confirming read for any number of changes. The list shows each change immediately; nothing waits for the previous change to finish.
+- Uploads send their audio up to three at a time, alongside edits and library reads, and are attached in the order they were queued at their chosen position (no follow-up reorder). A placeholder row marks where each upload will land.
+- `POST/GET /api/tonies-actions`, and `tonies_actions` events on `/api/events` with the resulting library.
+- `scripts/dev/fake_cloud_app.py`: run the app against a fake Tonies cloud with simulated latency.
+
+### Changed
+- Changes refer to tracks by chapter ID with anchored positions, so a queued change still hits the right track after the list moved; one failing change no longer blocks the others in its batch.
+- Upload jobs no longer re-check free space with an extra read before queuing; the queue checks capacity for the whole batch.
+
+### Fixed
+- Live updates: the event stream named every event `job`, which the page never received, so job progress only arrived through the 3–20 s fallback poll.
+
 ## [2.0.0] - 2026-10-17
 
 Tonies-YT now talks to the Tonies cloud directly over HTTPS instead of driving my.tonies.com in a headless browser, and the app login now actually protects the app.

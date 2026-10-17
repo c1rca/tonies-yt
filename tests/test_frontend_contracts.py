@@ -36,6 +36,17 @@ showToast = () => {};
 refreshFiles = async () => {};
 askConfirm = async () => true;
 selectedToniesUrl = 'tonie-a';
+const uploadLaneBusy = () => toniesUploadReconciliations.length > 0 || toniesUploadReconciliationRunning || syncingResultJobIds.size > 0;
+// Fake server action queue: records POST /api/tonies-actions and answers "queued".
+let queuedSeq = 0; const actionPosts = [];
+function queueResponse(options) {
+  const body = JSON.parse(options.body); actionPosts.push(body);
+  return {actions: body.actions.map(a => ({id:`act-${++queuedSeq}`, status:'queued', type:a.type,
+    params:Object.fromEntries(Object.entries(a).filter(([k]) => k !== 'type'))}))};
+}
+function finishActions(url, ids, content, status='done', error=null) {
+  handleToniesActionsEvent({target_url:url, content, actions:ids.map(id => ({id, status, error}))});
+}
 """
     script = harness + source + stubs + "\n(async () => {\n" + body + "\n})().then(() => { console.log('__frontend_contract_completed__'); }).catch(e => { console.error(e); process.exitCode = 1; });"
     result = subprocess.run(["node"], input=script, text=True, capture_output=True, timeout=10)
@@ -71,47 +82,53 @@ api = async (path, options, timeout) => {
 };
 await saveToniesNameEdits();
 assert.equal(calls.length, 1);
-assert.deepEqual(calls[0].payload, {target_url:'tonie-a',index:1,chapter_id:'cloud-b',title:'New name'});
+assert.equal(calls[0].path, '/api/tonies-actions');
+assert.deepEqual(calls[0].payload, {target_url:'tonie-a',actions:[{type:'rename',chapter_id:'cloud-b',title:'New name'}]});
 assert.ok(calls[0].timeout >= 15000);
 assert.equal(toniesEditMode, true);
 assert.equal(toniesNameDrafts['id:cloud-b'], 'New name');
 assert.equal(toniesContentCache.chapters[1].title, 'Same');
+assert.equal(toniesQueuedActions.size, 0);
 assert.match(toniesStatusEl.innerHTML, /Refused by API/);
 """)
 
 
-def test_rename_applies_each_canonical_result_without_refresh_or_losing_other_drafts():
+def test_renames_go_in_one_request_show_at_once_and_settle_on_the_server_result():
     run_js("""
-toniesContentCache = {chapters:[{chapter_id:'a',title:'Old A'}, {chapter_id:'b',title:'Old B'}]};
+toniesContentCache = {chapters:[{chapter_id:'a',title:'Old A [oc:aaaaaa]'}, {chapter_id:'b',title:'Old B'}]};
+setCachedToniesContent('tonie-a', toniesContentCache);
 beginToniesEditMode();
 toniesNameDrafts['id:a'] = 'New A'; toniesNameDrafts['id:b'] = 'New B';
-const calls=[];
-api = async (path, options) => {
-  const payload=JSON.parse(options.body); calls.push(payload);
-  assert.equal(path, '/api/tonies-content/rename');
-  if (calls.length === 1) return {chapters:[{chapter_id:'b',title:'Old B'},{chapter_id:'a',title:'New A'}],free_minutes:80};
-  return {chapters:[{chapter_id:'b',title:'New B'},{chapter_id:'a',title:'New A'}],free_minutes:79};
-};
+const paths=[];
+api = async (path, options) => { paths.push(path); return queueResponse(options); };
 await saveToniesNameEdits();
-assert.deepEqual(calls.map(x => [x.index,x.chapter_id]), [[0,'a'],[0,'b']]);
-assert.equal(toniesContentCache.free_minutes,79);
+assert.deepEqual(paths, ['/api/tonies-actions']);
+assert.deepEqual(actionPosts[0].actions.map(a => [a.chapter_id, a.title]), [['a','New A'],['b','New B']]);
 assert.equal(toniesEditMode,false);
+// Shown immediately, keeping the hidden track token.
+assert.deepEqual(toniesContentCache.chapters.map(c => c.title), ['New A [oc:aaaaaa]','New B']);
+assert.match(toniesStatusEl.innerHTML, /Saving 2 changes/);
+finishActions('tonie-a', ['act-1','act-2'], {chapters:[{chapter_id:'a',title:'New A [oc:aaaaaa]'},{chapter_id:'b',title:'New B'}],free_minutes:79});
+assert.equal(toniesContentCache.free_minutes,79);
+assert.equal(toniesQueuedActions.size,0);
+assert.doesNotMatch(toniesStatusEl.innerHTML, /Saving/);
 """)
 
 
-def test_reorder_uses_exact_cloud_id_and_canonical_response_once():
+def test_reorder_queues_a_move_by_cloud_id_and_anchor_and_shows_it_at_once():
     run_js("""
-toniesContentCache = {chapters:[{chapter_id:' CLOUD/A ',title:'Same'}, {chapter_id:'b',title:'Same'}]};
-let calls=0;
-api=async (path, options) => {
-  calls++;
-  assert.equal(path,'/api/tonies-content/reorder');
-  assert.deepEqual(JSON.parse(options.body),{target_url:'tonie-a',from_index:0,to_index:1,chapter_id:' CLOUD/A '});
-  return {chapters:[{chapter_id:'b',title:'Same'}, {chapter_id:' CLOUD/A ',title:'Canonical'}],free_minutes:73};
-};
+toniesContentCache = {chapters:[{chapter_id:' CLOUD/A ',title:'Same'}, {chapter_id:'b',title:'Same'}, {chapter_id:'c',title:'Same'}]};
+setCachedToniesContent('tonie-a', toniesContentCache);
+const paths=[];
+api=async (path, options) => { paths.push(path); return queueResponse(options); };
 await reorderToniesChapter(0,1);
-assert.equal(calls,1);
-assert.equal(toniesContentCache.chapters[1].title,'Canonical');
+await reorderToniesChapter(2,0);
+assert.deepEqual(paths,['/api/tonies-actions','/api/tonies-actions']);
+assert.deepEqual(actionPosts[0].actions,[{type:'move',chapter_id:' CLOUD/A ',position:{before:'c',index:1}}]);
+assert.deepEqual(actionPosts[1].actions,[{type:'move',chapter_id:'c',position:{edge:'start'}}]);
+assert.deepEqual(toniesContentCache.chapters.map(c => c.chapter_id),['c','b',' CLOUD/A ']);
+finishActions('tonie-a',['act-1','act-2'],{chapters:[{chapter_id:'c'},{chapter_id:'b'},{chapter_id:' CLOUD/A ',title:'Canonical'}],free_minutes:73});
+assert.equal(toniesContentCache.chapters[2].title,'Canonical');
 assert.equal(toniesContentCache.free_minutes,73);
 """)
 
@@ -131,39 +148,37 @@ assert.equal(toniesApplying,false);
 """)
 
 
-def test_delete_last_chapter_accepts_empty_result_without_refresh():
+def test_delete_last_chapter_disappears_at_once_and_accepts_the_empty_result():
     run_js("""
 toniesContentCache={chapters:[{chapter_id:'last',title:'Last'}]};
+setCachedToniesContent('tonie-a', toniesContentCache);
 let calls=0;
 api=async (path,options) => {
-  calls++; assert.equal(path,'/api/tonies-content/delete');
-  assert.equal(JSON.parse(options.body).chapter_id,'last');
-  return {chapters:[],free_minutes:90,processing:false};
+  calls++; assert.equal(path,'/api/tonies-actions');
+  assert.deepEqual(JSON.parse(options.body).actions,[{type:'delete',chapter_id:'last'}]);
+  return queueResponse(options);
 };
 await enqueueToniesDelete(0);
-await new Promise(resolve => setImmediate(resolve));
 assert.equal(calls,1);
 assert.deepEqual(toniesContentCache.chapters,[]);
+finishActions('tonie-a',['act-1'],{chapters:[],free_minutes:90,processing:false});
+assert.deepEqual(toniesContentCache.chapters,[]);
 assert.deepEqual(getCachedToniesContent('tonie-a').chapters,[]);
-assert.equal(pendingDeleteKeys.size,0);
+assert.equal(toniesQueuedActions.size,0);
 assert.equal(toniesApplying,false);
 """)
 
 
-def test_queued_deletes_follow_ids_after_indices_change_not_duplicate_titles():
+def test_rapid_deletes_queue_without_waiting_and_follow_cloud_ids():
     run_js("""
 toniesContentCache={chapters:[{chapter_id:'a',title:'Same'},{chapter_id:'b',title:'Same'},{chapter_id:'c',title:'Same'}]};
-let resolveFirst; const calls=[];
-api=async (path,options) => {
-  const payload=JSON.parse(options.body); calls.push(payload);
-  if (calls.length===1) return await new Promise(resolve => {resolveFirst=resolve;});
-  return {chapters:[{chapter_id:'b',title:'Same'}],free_minutes:89};
-};
-await enqueueToniesDelete(0);
-await enqueueToniesDelete(2);
-resolveFirst({chapters:[{chapter_id:'c',title:'Same'},{chapter_id:'b',title:'Same'}],free_minutes:88});
-await new Promise(resolve => setImmediate(resolve));
-assert.deepEqual(calls.map(c => [c.index,c.chapter_id]),[[0,'a'],[0,'c']]);
+setCachedToniesContent('tonie-a', toniesContentCache);
+api=async (path,options) => queueResponse(options);
+await enqueueToniesDelete(0);   // 'a'; the list re-renders without it straight away
+await enqueueToniesDelete(1);   // the second row is now 'c'
+assert.deepEqual(actionPosts.map(p => p.actions[0].chapter_id),['a','c']);
+assert.deepEqual(toniesContentCache.chapters.map(c => c.chapter_id),['b']);
+finishActions('tonie-a',['act-1','act-2'],{chapters:[{chapter_id:'b',title:'Same'}],free_minutes:89});
 assert.deepEqual(toniesContentCache.chapters.map(c => c.chapter_id),['b']);
 """)
 
@@ -233,20 +248,23 @@ assert.equal(toniesApplying,false);
 """)
 
 
-def test_stale_refresh_cannot_override_newer_mutation_or_selection():
+def test_stale_refresh_cannot_bring_back_a_queued_delete():
     run_js("""
 toniesContentCache={chapters:[{chapter_id:'a',title:'Old'}]};
+setCachedToniesContent('tonie-a', toniesContentCache);
 let resolveRead;
-api=async path => {
+api=async (path,options) => {
   if (path==='/api/tonies-content') return await new Promise(resolve => {resolveRead=resolve;});
-  return {chapters:[],free_minutes:90,processing:false};
+  return queueResponse(options);
 };
 const reading=refreshToniesContent({force:true});
-await deleteToniesChapter(0,true,true);
+await enqueueToniesDelete(0);
 resolveRead({chapters:[{chapter_id:'a',title:'Stale'}],free_minutes:89});
 await reading;
 assert.deepEqual(toniesContentCache.chapters,[]);
 assert.equal(loadingToniesContent,false);
+finishActions('tonie-a',['act-1'],{chapters:[],free_minutes:90});
+assert.deepEqual(toniesContentCache.chapters,[]);
 """)
 
 
@@ -274,7 +292,7 @@ assert.deepEqual(calls.filter(c=>c[0]==='/api/tonies-content').map(c=>c[1]).sort
 """)
 
 
-def test_completion_keeps_upload_queue_blocked_until_positioning_finishes():
+def test_legacy_positioning_keeps_the_receipt_lane_busy_until_it_finishes():
     run_js("""
 activeUploadJobIds.add('job');
 jobsCache=[{id:'job',status:'done'}];
@@ -287,11 +305,11 @@ api=async path => {
 };
 const finishing=finalizePendingToniesUpload({id:'job',target_url:'tonie-a',uploaded_chapter_id:'new',
   tonies_content:{chapters:[{chapter_id:'old'},{chapter_id:'new'}]}},true);
-assert.equal(hasToniesUploadBusy(),true);
+assert.equal(uploadLaneBusy(),true);
 await new Promise(resolve=>setImmediate(resolve));
 resolveReorder({chapters:[{chapter_id:'new'},{chapter_id:'old'}]});
 await finishing;
-assert.equal(hasToniesUploadBusy(),false);
+assert.equal(uploadLaneBusy(),false);
 """)
 
 
@@ -340,7 +358,7 @@ assert.match(toniesContentEl.innerHTML,/data-source-index="0" value="Draft &quot
 def test_queued_upload_keeps_original_target_and_native_edge_intent():
     run_js("""
 toniesContentCache={chapters:[{chapter_id:'old-a'},{chapter_id:'old-b'}]};
-activeUploadJobIds.add('busy');
+localUploadQueuePumping=true;  // another submission is in flight
 await uploadExisting('Track.mp3',{targetIndex:2});
 selectedToniesUrl='tonie-b';
 assert.equal(queuedLocalUploads[0].options.targetUrl,'tonie-a');
@@ -371,12 +389,13 @@ assert.equal(toniesContentCache.chapters[3].chapter_id,'new');
 def test_pending_rename_preserves_newer_human_edits_and_replacement_edit_session():
     run_js("""
 toniesContentCache={chapters:[{chapter_id:'a',title:'Old'}]};
+setCachedToniesContent('tonie-a', toniesContentCache);
 beginToniesEditMode(); toniesNameDrafts['id:a']='Submitted';
-let resolveSave;
-api=async () => await new Promise(resolve => {resolveSave=resolve;});
+let resolveSave, saveOptions;
+api=async (path, options) => { saveOptions=options; return await new Promise(resolve => {resolveSave=resolve;}); };
 const saving=saveToniesNameEdits();
 toniesNameDrafts['id:a']='Newer draft';
-resolveSave({chapters:[{chapter_id:'a',title:'Submitted'}]});
+resolveSave(queueResponse(saveOptions));
 await saving;
 assert.equal(toniesEditMode,true);
 assert.equal(toniesNameDrafts['id:a'],'Newer draft');
@@ -420,37 +439,49 @@ assert.equal(toniesApplying,false);
 """)
 
 
-def test_mutation_refusals_are_not_retried_and_keep_authoritative_content():
+def test_refused_requests_are_not_retried_and_keep_the_library():
     run_js("""
 toniesContentCache={chapters:[{chapter_id:'a',title:'Old'},{chapter_id:'b',title:'Other'}]};
+setCachedToniesContent('tonie-a', toniesContentCache);
 let calls=0; api=async () => {calls++; return {error:'Refused'};};
 await reorderToniesChapter(0,1);
 assert.equal(calls,1); assert.equal(toniesContentCache.chapters[0].chapter_id,'a');
-await deleteToniesChapter(0,true,true);
+await enqueueToniesDelete(0);
 assert.equal(calls,2); assert.equal(toniesContentCache.chapters.length,2);
-assert.equal(pendingDeleteKeys.size,0); assert.equal(toniesApplying,false);
+assert.equal(toniesQueuedActions.size,0); assert.equal(toniesApplying,false);
 assert.equal(timers.size,0);
+assert.match(toniesStatusEl.innerHTML,/Refused/);
 """)
 
 
-def test_selection_change_cannot_unlock_a_pending_library_mutation():
+def test_a_failed_queued_action_is_reported_and_dropped_from_the_view():
+    run_js("""
+toniesContentCache={chapters:[{chapter_id:'a',title:'A'},{chapter_id:'b',title:'B'}]};
+setCachedToniesContent('tonie-a', toniesContentCache);
+const toasts=[]; showToast=(m)=>toasts.push(m);
+api=async (path,options) => queueResponse(options);
+await enqueueToniesDelete(0);
+assert.deepEqual(toniesContentCache.chapters.map(c=>c.chapter_id),['b']);
+finishActions('tonie-a',['act-1'],{chapters:[{chapter_id:'a',title:'A'},{chapter_id:'b',title:'B'}]},'failed','Track is no longer on this Tonie');
+assert.deepEqual(toniesContentCache.chapters.map(c=>c.chapter_id),['a','b']);
+assert.match(toasts.at(-1),/Change failed: Track is no longer on this Tonie/);
+""")
+
+
+def test_edits_queued_for_one_tonie_never_change_another_tonies_view():
     run_js("""
 toniesContentCache={chapters:[{chapter_id:'a',title:'Old'}]};
+setCachedToniesContent('tonie-a', toniesContentCache);
 setCachedToniesContent('tonie-b',{chapters:[{chapter_id:'b'},{chapter_id:'c'}]});
 beginToniesEditMode(); toniesNameDrafts['id:a']='Submitted';
-let resolveSave; let calls=0;
-api=async () => {
-  calls++;
-  if(calls===1) return await new Promise(resolve => {resolveSave=resolve;});
-  return {chapters:[{chapter_id:'c'},{chapter_id:'b'}]};
-};
-const saving=saveToniesNameEdits();
+api=async (path,options) => queueResponse(options);
+await saveToniesNameEdits();
 selectTonies('tonie-b');
 await reorderToniesChapter(0,1);
-assert.equal(calls,1);
-resolveSave({chapters:[{chapter_id:'a',title:'Submitted'}]});
-await saving;
-assert.equal(toniesContentCache.chapters[0].chapter_id,'b');
+assert.deepEqual(actionPosts.map(p => p.target_url),['tonie-a','tonie-b']);
+finishActions('tonie-a',['act-1'],{chapters:[{chapter_id:'a',title:'Submitted'}]});
+assert.deepEqual(toniesContentCache.chapters.map(c=>c.chapter_id),['c','b']);
+assert.equal(getCachedToniesContent('tonie-a').chapters[0].title,'Submitted');
 """)
 
 
@@ -490,21 +521,23 @@ assert.equal(toniesApplying,false);
 """)
 
 
-def test_delete_all_confirmation_and_empty_canonical_response_are_preserved():
+def test_delete_all_needs_confirmation_and_queues_one_clear():
     run_js("""
 toniesContentCache={chapters:[{chapter_id:'a',title:'Old'}]};
+setCachedToniesContent('tonie-a', toniesContentCache);
 beginToniesEditMode();
 let calls=0;
 api=async (path,options) => {
-  calls++; assert.equal(path,'/api/tonies-content/delete-all');
-  assert.deepEqual(JSON.parse(options.body),{target_url:'tonie-a'});
-  return {chapters:[],free_minutes:90,processing:false};
+  calls++; assert.equal(path,'/api/tonies-actions');
+  assert.deepEqual(JSON.parse(options.body),{target_url:'tonie-a',actions:[{type:'clear'}]});
+  return queueResponse(options);
 };
 askConfirm=async()=>false; await deleteAllToniesContent();
 assert.equal(calls,0); assert.equal(toniesEditMode,true);
 askConfirm=async()=>true; await deleteAllToniesContent();
 assert.equal(calls,1); assert.equal(toniesEditMode,false);
 assert.deepEqual(toniesContentCache.chapters,[]);
+finishActions('tonie-a',['act-1'],{chapters:[],free_minutes:90,processing:false});
 assert.deepEqual(getCachedToniesContent('tonie-a').chapters,[]);
 assert.equal(toniesApplying,false);
 """)
@@ -563,7 +596,7 @@ assert.deepEqual(calls.map(c=>c[0]),['/api/tonies-content','/api/tonies-content/
 assert.deepEqual(calls.filter(c=>c[0].endsWith('/reorder')).map(c=>c[1].chapter_id),['new-1','new-2']);
 processTrackedJobTransitions(jobsCache);
 await new Promise(resolve=>setImmediate(resolve));
-assert.equal(calls.length,4); assert.equal(hasToniesUploadBusy(),false);
+assert.equal(calls.length,4); assert.equal(uploadLaneBusy(),false);
 """)
 
 
@@ -596,48 +629,43 @@ assert.deepEqual(getCachedToniesContent('tonie-a')?.chapters.map(c=>c.chapter_id
   'Late confirmed attachment must reconcile the original target even after job failure was finalized');
 assert.equal(toniesContentCache.chapters[0].chapter_id,'untouched-b');
 assert.equal(reads,1); assert.equal(settlements,1); assert.equal(fileRefreshes,0);
-assert.equal(pendingToniesUpload,null); assert.equal(hasToniesUploadBusy(),false);
+assert.equal(pendingToniesUpload,null); assert.equal(uploadLaneBusy(),false);
 """.replace("STATUS", repr(status)))
 
 
 @pytest.mark.parametrize("mutation", ["reorder", "rename", "delete", "delete-all"])
-def test_late_receipt_waits_for_existing_library_mutation(mutation):
+def test_late_receipt_reconciles_under_still_queued_edits(mutation):
     run_js("""
 const failed={id:'late',status:'failed',target_url:'tonie-a'};
 activeUploadJobIds.add('late'); processTrackedJobTransitions([failed]);
 await new Promise(resolve=>setImmediate(resolve));
 toniesContentCache={chapters:[{chapter_id:'a',title:'A'},{chapter_id:'b',title:'B'}]};
-let finishMutation; const calls=[];
-const current={chapters:[{chapter_id:'accepted',title:'Current'}],processing:false};
+setCachedToniesContent('tonie-a', toniesContentCache);
+const calls=[];
+const current={chapters:[{chapter_id:'accepted',title:'Current'},{chapter_id:'a',title:'A'},{chapter_id:'b',title:'B'}],processing:false};
 api=async (path,options)=>{
   calls.push(path);
   if(path==='/api/tonies-content') return current;
-  assert.equal(path,'/api/tonies-content/'+MUTATION);
-  return await new Promise(resolve=>{finishMutation=resolve;});
+  return queueResponse(options);
 };
-let changing;
 if(MUTATION==='rename') {
-  beginToniesEditMode(); toniesNameDrafts['id:a']='Submitted'; changing=saveToniesNameEdits();
-  toniesNameDrafts['id:a']='Newer draft';
-} else if(MUTATION==='delete-all') {beginToniesEditMode(); changing=deleteAllToniesContent();}
-else if(MUTATION==='delete') changing=deleteToniesChapter(0,true,true);
-else changing=reorderToniesChapter(0,1);
-await new Promise(resolve=>setImmediate(resolve));
+  beginToniesEditMode(); toniesNameDrafts['id:a']='Submitted'; await saveToniesNameEdits();
+} else if(MUTATION==='delete-all') {beginToniesEditMode(); await deleteAllToniesContent();}
+else if(MUTATION==='delete') await enqueueToniesDelete(0);
+else await reorderToniesChapter(0,1);
 const receipt={...failed,uploaded_chapter_id:'accepted',tonies_content:{chapters:[{chapter_id:'accepted',title:'Historical'}]}};
 processTrackedJobTransitions([receipt]);
 await new Promise(resolve=>setImmediate(resolve));
-assert.equal(calls.length,1,'Receipt must not read or position while an earlier mutation is pending');
-assert.equal(hasToniesUploadBusy(),true);
-finishMutation({chapters:[],processing:false}); await changing;
-await new Promise(resolve=>setImmediate(resolve));
-assert.deepEqual(calls,['/api/tonies-content/'+MUTATION,'/api/tonies-content']);
-assert.equal(toniesContentCache.chapters[0].title,'Current');
-assert.equal(hasToniesUploadBusy(),false); assert.equal(toniesMutationInFlight,false);
-if(MUTATION==='rename') {assert.equal(toniesEditMode,true); assert.equal(toniesNameDrafts['id:a'],'Newer draft');}
+assert.deepEqual(calls,['/api/tonies-actions','/api/tonies-content']);
+const ids=toniesContentCache.chapters.map(c=>c.chapter_id);
+const expected={reorder:['accepted','b','a'], rename:['accepted','a','b'], delete:['accepted','b'], 'delete-all':[]}[MUTATION];
+assert.deepEqual(ids,expected, 'the queued edit stays applied over the fresh read');
+if(MUTATION==='rename') assert.equal(toniesContentCache.chapters[1].title,'Submitted');
+assert.equal(uploadLaneBusy(),false);
 """.replace("MUTATION", repr(mutation)))
 
 
-def test_concurrent_upload_completions_serialize_authoritative_read_and_positioning():
+def test_concurrent_upload_completions_serialize_read_and_positioning_while_edits_queue():
     run_js("""
 const first={id:'first',target_url:'tonie-a',uploaded_chapter_id:'new-1',
   tonies_content:{chapters:[{chapter_id:'old'},{chapter_id:'new-1'}]}};
@@ -647,6 +675,7 @@ uploadIntentsByJobId.set('first',{targetUrl:'tonie-a',targetEdge:'start'});
 uploadIntentsByJobId.set('second',{targetUrl:'tonie-a',targetEdge:'start'});
 let releaseRead,releaseReorder; const calls=[];
 api=async (path,options)=>{
+  if(path==='/api/tonies-actions') return queueResponse(options);
   const payload=JSON.parse(options.body); calls.push([path,payload]);
   if(calls.length===1) return await new Promise(resolve=>{releaseRead=resolve;});
   if(calls.length===2) return await new Promise(resolve=>{releaseReorder=resolve;});
@@ -662,14 +691,13 @@ assert.equal(calls.length,1);
 releaseRead({chapters:[{chapter_id:'old'},{chapter_id:'new-1'},{chapter_id:'new-2'}]});
 await new Promise(resolve=>setImmediate(resolve));
 assert.equal(calls.length,2); assert.equal(calls[1][1].chapter_id,'new-1');
-await reorderToniesChapter(0,1); // Human mutation cannot overlap completion positioning.
-assert.equal(calls.length,2);
+await reorderToniesChapter(0,1); // A human edit queues on the server instead of waiting.
+assert.equal(actionPosts.length,1); assert.equal(calls.length,2);
 releaseReorder({chapters:[{chapter_id:'new-1'},{chapter_id:'old'},{chapter_id:'new-2'}]});
 await Promise.all([finishingFirst,finishingSecond]);
 assert.deepEqual(calls.map(c=>c[0]),['/api/tonies-content','/api/tonies-content/reorder',
   '/api/tonies-content','/api/tonies-content/reorder']);
-assert.deepEqual(toniesContentCache.chapters.map(c=>c.chapter_id),['new-2','new-1','old']);
-assert.equal(hasToniesUploadBusy(),false);
+assert.equal(uploadLaneBusy(),false);
 """)
 
 
@@ -699,7 +727,7 @@ processTrackedJobTransitions([receipt]);
 await new Promise(resolve=>setImmediate(resolve));
 assert.deepEqual(calls,['/api/tonies-content','/api/tonies-content/reorder']);
 assert.equal(toniesContentCache.chapters[2].chapter_id,' ID/A ');
-assert.equal(uploadIntentsByJobId.has('late'),false); assert.equal(hasToniesUploadBusy(),false);
+assert.equal(uploadIntentsByJobId.has('late'),false); assert.equal(uploadLaneBusy(),false);
 """.replace("INITIAL_STATUS", repr(initial_status)))
 
 
@@ -716,7 +744,7 @@ await finalizePendingToniesUpload({id:'job',target_url:'tonie-a',uploaded_chapte
 assert.equal(reads,1); assert.deepEqual(toniesContentCache.chapters,[]);
 assert.deepEqual(getCachedToniesContent('tonie-a').chapters,[]);
 assert.match(toniesStatusEl.innerHTML,/cloud ID is missing/);
-assert.equal(hasToniesUploadBusy(),false);
+assert.equal(uploadLaneBusy(),false);
 assert.equal(toniesProcessingTimer,null); // Historical processing is not a reason to poll.
 """)
 
@@ -737,7 +765,7 @@ assert.equal(calls,1); assert.equal(timers.size,0);
 assert.equal(toniesContentCache.chapters[0].title,'Saved');
 assert.equal(toniesEditMode,true); assert.equal(toniesNameDrafts['id:a'],'Unsaved draft');
 assert.match(toniesStatusEl.innerHTML,/Upload saved; library update failed: Unavailable/);
-assert.equal(hasToniesUploadBusy(),false);
+assert.equal(uploadLaneBusy(),false);
 """)
 
 
@@ -757,15 +785,16 @@ const id=toniesProcessingTimer; const poll=timers.get(id); timers.delete(id); aw
 assert.equal(calls,2); assert.equal(toniesProcessingTimer,null);
 processTrackedJobTransitions([receipt]);
 await new Promise(resolve=>setImmediate(resolve));
-assert.equal(calls,2); assert.equal(hasToniesUploadBusy(),false);
+assert.equal(calls,2); assert.equal(uploadLaneBusy(),false);
 """)
 
 
-def test_receipt_arriving_during_initial_finalization_keeps_mutation_lane_busy():
+def test_receipt_arriving_during_initial_finalization_keeps_the_receipt_lane_busy():
     run_js("""
 uploadIntentsByJobId.set('job',{targetUrl:'tonie-a',targetEdge:'start'});
 let firstRead,secondRead; const calls=[];
 api=async (path,options)=>{
+  if(path==='/api/tonies-actions') return queueResponse(options);
   calls.push(path);
   if(calls.length===1) return await new Promise(resolve=>{firstRead=resolve;});
   if(calls.length===2) return await new Promise(resolve=>{secondRead=resolve;});
@@ -779,13 +808,11 @@ const receipt={id:'job',target_url:'tonie-a',status:'done',uploaded_chapter_id:'
 const reconciling=finalizePendingToniesUpload(receipt,true);
 firstRead({chapters:[{chapter_id:'old'},{chapter_id:'new'}]});
 await new Promise(resolve=>setImmediate(resolve));
-assert.equal(calls.length,2); assert.equal(hasToniesUploadBusy(),true);
-await reorderToniesChapter(0,1);
-assert.equal(calls.length,2,'A second receipt for the same job must keep the lane locked after lifecycle cleanup');
+assert.equal(calls.length,2); assert.equal(uploadLaneBusy(),true);
 secondRead({chapters:[{chapter_id:'old'},{chapter_id:'new'}]});
 await Promise.all([finishing,reconciling]);
 assert.equal(calls.length,3); assert.equal(toniesContentCache.chapters[0].chapter_id,'new');
-assert.equal(hasToniesUploadBusy(),false);
+assert.equal(uploadLaneBusy(),false);
 """)
 
 
@@ -831,5 +858,114 @@ assert.deepEqual(getCachedToniesContent('tonie-a').chapters.map(c=>c.chapter_id)
 assert.equal(toniesContentCache.chapters.find(c=>c.chapter_id==='accepted').title,'Renamed externally');
 assert.notEqual(toniesProcessingTimer,null);
 assert.equal(writes,POSITION?1:0);
-assert.equal(hasToniesUploadBusy(),false);
+assert.equal(uploadLaneBusy(),false);
 """.replace("POSITION", str(position).lower()))
+
+
+
+def test_a_result_event_that_beats_the_post_response_leaves_no_ghost_pending_edit():
+    run_js("""
+toniesContentCache={chapters:[{chapter_id:'a'},{chapter_id:'b'}]};
+setCachedToniesContent('tonie-a', toniesContentCache);
+api=async (path,options) => {
+  const res=queueResponse(options);
+  finishActions('tonie-a',[res.actions[0].id],{chapters:[{chapter_id:'b'}]});  // event first
+  return res;
+};
+await enqueueToniesDelete(0);
+assert.equal(toniesQueuedActions.size,0);
+assert.deepEqual(toniesContentCache.chapters.map(c=>c.chapter_id),['b']);
+""")
+
+
+def test_without_the_event_stream_queued_edits_settle_through_polling():
+    run_js("""
+toniesContentCache={chapters:[{chapter_id:'a'},{chapter_id:'b'}]};
+setCachedToniesContent('tonie-a', toniesContentCache);
+const paths=[];
+api=async (path,options) => {
+  paths.push(path);
+  if(path==='/api/tonies-actions') return queueResponse(options);
+  if(path.startsWith('/api/tonies-actions?')) return {actions:[{id:'act-1',status:'done'}]};
+  assert.equal(path,'/api/tonies-content'); return {chapters:[{chapter_id:'b'}]};
+};
+await enqueueToniesDelete(0);
+assert.equal(toniesQueuedActions.size,1);
+const [id,timer]=[...timers.entries()].find(([,t]) => t.ms===1200); timers.delete(id);
+await timer.fn();
+assert.deepEqual(paths,['/api/tonies-actions','/api/tonies-actions?target_url=tonie-a','/api/tonies-content']);
+assert.equal(toniesQueuedActions.size,0);
+assert.deepEqual(toniesContentCache.chapters.map(c=>c.chapter_id),['b']);
+""")
+
+
+def test_overlay_follows_the_server_planner_rules():
+    run_js("""
+const base={chapters:['a','b','c','d'].map(chapter_id=>({chapter_id,title:chapter_id.toUpperCase()}))};
+const add=(id,type,params)=>toniesQueuedActions.set(id,{id,url:'tonie-a',type,params});
+add('1','delete',{chapter_id:'b'});
+add('2','move',{chapter_id:'d',position:{edge:'start'}});
+add('3','move',{chapter_id:'a',position:{before:'b',index:2}});  // anchor deleted: index fallback
+add('4','rename',{chapter_id:'c',title:'Renamed'});
+add('5','delete',{chapter_id:'gone'});                           // no-op, as on the server
+const shown=overlayToniesContent('tonie-a',base);
+assert.deepEqual(shown.chapters.map(c=>c.chapter_id),['d','c','a']);
+assert.equal(shown.chapters[1].title,'Renamed');
+assert.deepEqual(shown.chapters.map(c=>c.index),[0,1,2]);
+assert.deepEqual(base.chapters.map(c=>c.chapter_id),['a','b','c','d']);  // server copy untouched
+assert.deepEqual(overlayToniesContent('tonie-b',base),base);
+""")
+
+
+def test_local_uploads_send_their_position_and_do_not_wait_for_each_other():
+    run_js("""
+toniesContentCache={chapters:[{chapter_id:'a'},{chapter_id:'b'},{chapter_id:'c'}]};
+setCachedToniesContent('tonie-a', toniesContentCache);
+toniesReverseView=false;
+const posts=[]; let jobs=[];
+api=async (path,options) => {
+  if(path==='/api/upload-existing') {
+    const body=JSON.parse(options.body); posts.push(body);
+    const job={id:`job-${posts.length}`,status:'waiting_upload',target_url:body.target_url}; jobs=[job,...jobs];
+    return {job_id:job.id};
+  }
+  if(path==='/api/jobs') return jobs;
+  throw Error(`Unexpected ${path}`);
+};
+await uploadExisting('One.mp3',{targetIndex:1});
+await uploadExisting('Two.mp3',{targetIndex:0});
+await uploadExisting('Three.mp3',{targetIndex:3});
+assert.deepEqual(posts.map(p=>p.position),[{before:'b',index:1},{edge:'start'},{edge:'end'}]);
+assert.equal(queuedLocalUploads.length,0);
+assert.equal(activeUploadJobIds.size,3);
+""")
+
+
+def test_server_positioned_upload_is_not_reordered_again():
+    run_js("""
+activeUploadJobIds.add('job');
+uploadIntentsByJobId.set('job',{targetUrl:'tonie-a',targetEdge:'start',position:{edge:'start'},filename:'New.mp3'});
+markLocalUploadPlanned('New.mp3');
+const paths=[];
+api=async path => { paths.push(path); return {chapters:[{chapter_id:'new'},{chapter_id:'old'}]}; };
+await finalizePendingToniesUpload({id:'job',status:'done',target_url:'tonie-a',uploaded_chapter_id:'new',upload_positioned:true,
+  tonies_content:{chapters:[{chapter_id:'new'},{chapter_id:'old'}]}},true);
+assert.deepEqual(paths,['/api/tonies-content']);
+assert.deepEqual(localUploadOutstandingByName,{});
+""")
+
+
+def test_each_upload_in_flight_shows_a_placeholder_where_it_will_land():
+    run_js("""
+toniesContentCache={chapters:[{chapter_id:'a',title:'A'},{chapter_id:'b',title:'B'},{chapter_id:'c',title:'C'}]};
+for (const [jobId,position] of [['j1',{edge:'start'}],['j2',{before:'c',index:2}],['j3',{edge:'end'}]]) {
+  activeUploadJobIds.add(jobId);
+  uploadIntentsByJobId.set(jobId,{jobId,targetUrl:'tonie-a',position,filename:`${jobId}.mp3`});
+}
+uploadIntentsByJobId.set('done',{jobId:'done',targetUrl:'tonie-a',position:{edge:'start'}});  // finished: no placeholder
+const order=()=>[...toniesContentEl.innerHTML.matchAll(/data-source-index="(\\d)"|Uploading (j\\d)/g)].map(m=>m[1]??m[2]);
+toniesReverseView=false; actualRenderToniesContent();
+assert.deepEqual(order(),['j1','0','1','j2','2','j3']);
+toniesReverseView=true; actualRenderToniesContent();
+assert.deepEqual(order(),['j3','2','j2','1','0','j1']);
+""")

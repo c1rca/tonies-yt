@@ -825,7 +825,6 @@
       let toniesImagesLoading = false;
       let toniesContentCache = { chapters: [], free_minutes: null, total_minutes: 90, used_minutes: null };
       let toniesApplying = false;
-      let toniesMutationInFlight = false;
       let toniesReverseView = true;
       let toniesEditMode = false;
       let toniesNameDrafts = {};
@@ -845,13 +844,13 @@
       let toniesProcessingPolls = 0;
       const localUploadToastShownJobIds = new Set();
       let toniesNewClearTimer = null;
-      let pendingDeleteIndices = new Set();
-      let pendingDeleteKeys = new Set();
-      let pendingDeleteQueue = [];
-      let pendingDeleteQueueKeys = new Set();
-      let deleteQueueRunning = false;
+      // Library edits queued on the server (app/actions.py), by action id. The list shows
+      // the server's last content with these still-pending edits applied on top.
+      const toniesQueuedActions = new Map();
+      const finishedToniesActionIds = new Set();
+      const attachedUploadJobIds = new Set();  // upload jobs whose chapter is already in the list
+      let toniesActionPollTimer = null;
       let fileMenuFilename = '';
-      let deletingAllToniesContent = false;
       const TONIES_NEW_HIGHLIGHT_MS = 5000;
       let loadingFiles = false;
       let searchResultsCutoffMs = null;
@@ -998,7 +997,7 @@
         pendingToniesUpload = { filename, targetUrl, jobId: '', stage: 'preparing' };
         if (targetUrl === selectedToniesUrl) {
           toniesUploadSyncing = true;
-          setToniesStatus('Preparing local file for Tonies…', true);
+          setToniesProgress('Preparing local file for Tonies…');
         }
         renderToniesContent();
       }
@@ -1008,11 +1007,11 @@
       }
 
       async function drainToniesUploadReconciliations() {
-        if (toniesUploadReconciliationRunning || toniesMutationInFlight) return;
-        // One UI mutation lane: a receipt's read + optional positioning must stay together.
+        if (toniesUploadReconciliationRunning) return;
+        // Receipts reconcile one at a time: a receipt's read + optional positioning stay together.
         toniesUploadReconciliationRunning = true;
         try {
-          while (toniesUploadReconciliations.length && !toniesMutationInFlight) {
+          while (toniesUploadReconciliations.length) {
             await toniesUploadReconciliations.shift().run();
           }
         } finally {
@@ -1070,7 +1069,7 @@
                 renderToniesContent();
               }, TONIES_NEW_HIGHLIGHT_MS);
             }
-            if (intent) {
+            if (intent && !job.upload_positioned) {
               const from = content.chapters.findIndex(c => c.chapter_id === chapterId);
               if (!chapterId || from < 0) throw new Error('Upload saved, but its cloud ID is missing. Refresh before positioning it.');
               const to = intent.targetEdge === 'end' ? content.chapters.length - 1
@@ -1096,10 +1095,11 @@
             if (firstCompletion) {
               activeUploadJobIds.delete(job.id);
               localUploadToastShownJobIds.delete(job.id);
-              if (pending && pendingToniesUpload === pending) {
-                clearPendingToniesUpload();
-                resolveLocalUploadPlanned(pending.filename);
-              }
+              if (pending && pendingToniesUpload === pending) clearPendingToniesUpload();
+              // Several local uploads can be in flight; each resolves its own file row.
+              attachedUploadJobIds.delete(job.id);
+              const uploadedFilename = pending?.filename || intent?.filename;
+              if (uploadedFilename) resolveLocalUploadPlanned(uploadedFilename);
             }
             toniesUploadSyncing = hasInFlightTrackedUploadForSelectedTonies();
             renderTonies();
@@ -1108,7 +1108,6 @@
             // Local files and search downloads share this one completion path.
             if (firstCompletion && succeeded) void refreshFiles().catch(e => showToast(`Local library refresh failed: ${e?.message || e}`, 'err'));
             void pumpLocalUploadQueue();
-            void processPendingToniesDeletes();
           }
         };
         if (!saved) return finish();
@@ -1133,9 +1132,9 @@
         const selectedMatchesPending = !!(pendingTarget && pendingTarget === getEffectiveSelectedToniesUrl());
 
         if (selectedMatchesPending) {
-          if (status === 'queued_prepare' || status === 'preparing') setToniesStatus('Preparing local file for Tonies…', true);
-          else if (status === 'queued_upload' || status === 'waiting_upload') setToniesStatus('Waiting for Tonies uploader slot…', true);
-          else if (status === 'uploading') setToniesStatus('Uploading to my.tonies.com…', true);
+          if (status === 'queued_prepare' || status === 'preparing') setToniesProgress('Preparing local file for Tonies…');
+          else if (status === 'queued_upload' || status === 'waiting_upload') setToniesProgress('Queued for Tonies…');
+          else if (status === 'uploading') setToniesProgress('Uploading to my.tonies.com…');
           else if (status === 'done') setToniesStatus('Upload saved to Tonies.', false);
         }
 
@@ -1541,29 +1540,17 @@
         }
       }
 
-      function hasToniesUploadBusy() {
-        if (selectingCandidateJobIds.size > 0 || syncingResultJobIds.size > 0 || toniesUploadReconciliations.length > 0) return true;
-        if (activeUploadJobIds.size === 0) return false;
-
-        for (const id of activeUploadJobIds) {
-          const j = getJobById(id);
-          if (!j) return true; // optimistic block until first status poll arrives
-          const s = String(j.status || '');
-          if (!['done', 'failed'].includes(s)) return true;
-        }
-        return false;
-      }
-
       function blockIfActionInProgress() {
-        if (toniesApplying || toniesMutationInFlight || syncingResultJobIds.size > 0) {
-          showToast('Please wait for the current Tonies update to finish.', 'warn', 5200);
+        if (toniesApplying) {
+          showToast('Please wait for the Tonies library to load.', 'warn', 3000);
           return true;
         }
         return false;
       }
 
+      // Only a blocking library load stops edits; uploads and queued edits never do.
       function isToniesActionBusy() {
-        return !!(deletingAllToniesContent || toniesApplying || toniesMutationInFlight || toniesUploadSyncing || syncingResultJobIds.size > 0 || activeUploadJobIds.size > 0);
+        return !!toniesApplying;
       }
 
       function getSearchUxState() {
@@ -1909,7 +1896,9 @@
       }
 
       function getCandidateSelectionPayload(index) {
-        return { index, target_url: selectedToniesUrl || null };
+        // YouTube picks land at the visual top; the server places them there directly.
+        const position = selectedToniesUrl ? { edge: toniesReverseView ? 'end' : 'start' } : null;
+        return { index, target_url: selectedToniesUrl || null, position };
       }
 
       function hasSelectionAdvanced(job) {
@@ -1937,6 +1926,7 @@
             jobId,
             targetIndex: desiredTopIndex,
             targetEdge: toniesReverseView ? 'end' : 'start',
+            position: { edge: toniesReverseView ? 'end' : 'start' },
             targetUrl: selectedToniesUrl,
             createdAt: Date.now(),
           };
@@ -2011,29 +2001,33 @@
           ? (toniesReverseView ? maxFinalIndexAfterInsert : 0)
           : Math.max(0, Math.min(maxFinalIndexAfterInsert, Number(targetIndex) || 0));
 
-        pendingDropUploadIntent = {
+        // The server places the upload, so no follow-up reorder is needed.
+        const position = toniesUploadPosition(targetContent?.chapters || [], options.targetEdge, effectiveTargetIndex);
+        const intent = {
           filename,
           targetIndex: effectiveTargetIndex,
           targetEdge: options.targetEdge,
           targetUrl,
+          position,
           createdAt: Date.now(),
         };
+        pendingDropUploadIntent = intent;
 
         startPendingToniesUpload(filename, targetUrl);
         try {
           const res = await api('/api/upload-existing', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ filename, target_url: targetUrl })
+            body: JSON.stringify({ filename, target_url: targetUrl, position })
           });
 
           highlightedJobId = res?.job_id || '';
           if (res?.job_id) {
             activeUploadJobIds.add(res.job_id);
             localUploadToastShownJobIds.add(res.job_id);
-            if (pendingToniesUpload) pendingToniesUpload.jobId = res.job_id;
-            pendingDropUploadIntent.jobId = res.job_id;
-            uploadIntentsByJobId.set(res.job_id, pendingDropUploadIntent);
+            if (pendingToniesUpload?.filename === filename && !pendingToniesUpload.jobId) pendingToniesUpload.jobId = res.job_id;
+            intent.jobId = res.job_id;
+            uploadIntentsByJobId.set(res.job_id, intent);
           }
           if (!skipQueuedToast) showToast('Upload queued', 'warn', 3000);
           if (skipQueuedToast && !suppressInitialToast) showToast('Preparing local file…', 'warn', 3000);
@@ -2049,9 +2043,9 @@
           if (scrollToResults && jobsCard) jobsCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
           return true;
         } catch (e) {
-          pendingDropUploadIntent = null;
-          clearPendingToniesUpload();
-          toniesUploadSyncing = false;
+          if (pendingDropUploadIntent === intent) pendingDropUploadIntent = null;
+          if (pendingToniesUpload?.filename === filename && !pendingToniesUpload.jobId) clearPendingToniesUpload();
+          toniesUploadSyncing = hasInFlightTrackedUploadForSelectedTonies();
           setToniesStatus(`Upload failed: ${e?.message || e}`, false);
           renderToniesContent();
           showToast(`Upload failed: ${e?.message || e}`, 'err', 3200);
@@ -2063,8 +2057,9 @@
         if (localUploadQueuePumping) return;
         localUploadQueuePumping = true;
         try {
+          // Submissions go one at a time (each is a quick POST); the server queue then
+          // sends up to three files in parallel and attaches them in this order.
           while (queuedLocalUploads.length) {
-            if (hasToniesUploadBusy() || toniesApplying || toniesMutationInFlight) break;
             const next = queuedLocalUploads.shift();
             queuedLocalUploadNames.delete(String(next?.filename || ''));
             renderFiles();
@@ -2086,12 +2081,9 @@
         const targetEdge = options.targetEdge ?? (targetIndex == null ? (toniesReverseView ? 'end' : 'start')
           : targetIndex === 0 ? 'start' : targetIndex >= count ? 'end' : null);
         options = { ...options, targetUrl, targetEdge };
-        if (deletingAllToniesContent) {
-          showToast('Please wait for delete-all to finish.', 'warn', 2600);
-          return;
-        }
 
-        if (hasToniesUploadBusy() || toniesApplying || toniesMutationInFlight) {
+        // Only one submission POST at a time; the upload itself never blocks the next.
+        if (localUploadQueuePumping) {
           const key = String(filename || '');
           if (!queuedLocalUploadNames.has(key)) {
             queuedLocalUploadNames.add(key);
@@ -2104,8 +2096,14 @@
         }
 
         markLocalUploadPlanned(filename);
-        const ok = await startSingleLocalUpload(filename, options);
-        if (!ok) resolveLocalUploadPlanned(filename);
+        localUploadQueuePumping = true;
+        try {
+          const ok = await startSingleLocalUpload(filename, options);
+          if (!ok) resolveLocalUploadPlanned(filename);
+        } finally {
+          localUploadQueuePumping = false;
+        }
+        void pumpLocalUploadQueue();
       }
 
       async function uploadExistingToIndex(filename, targetIndex) {
@@ -2428,6 +2426,15 @@
         }
       }
 
+      // A spinner status that, unlike setToniesStatus(text, true), never blocks edits.
+      function setToniesProgress(text) {
+        toniesApplying = false;
+        toniesStatusEl.innerHTML = `<span class="spinner"></span>${esc(text || '')}`;
+        if (typeof renderTonies === 'function') {
+          try { renderTonies(); } catch {}
+        }
+      }
+
       function syncToniesProgressWidth() {
         if (!toniesMinutesEl || !toniesProgressTrackEl) return;
         const w = Math.max(90, Math.ceil(toniesMinutesEl.getBoundingClientRect().width));
@@ -2488,38 +2495,13 @@
           message: 'This will permanently delete all tracks from the selected Creative Tonie.\n\nThis cannot be undone.',
           confirmText: 'Delete all content'
         });
-        if (!ok || url !== selectedToniesUrl || isToniesActionBusy()) return;
-        deletingAllToniesContent = true;
-        toniesMutationInFlight = true;
-        invalidateToniesContentRequests(url);
-        setToniesStatus('Deleting all content on Creative Tonie…', true);
-        try {
-          const data = await api('/api/tonies-content/delete-all', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ target_url: url })
-          }, 120000);
-          applyToniesContent(url, data);
-          if (url === selectedToniesUrl) {
-            toniesEditMode = false;
-            toniesNameDrafts = {};
-            setToniesStatus('All content deleted from Tonie.', false);
-          }
-          showToast('Deleted all content', 'ok', 2800);
-        } catch (e) {
-          if (url === selectedToniesUrl) setToniesStatus(`Delete all failed: ${e?.message || e}`, false);
-          showToast(`Delete all failed: ${e?.message || e}`, 'err', 5000);
-        } finally {
-          deletingAllToniesContent = false;
-          toniesMutationInFlight = false;
-          toniesApplying = false;
-          void drainToniesUploadReconciliations();
-          renderToniesEditUI();
-          renderToniesContent();
-          renderTonies();
-          void processPendingToniesDeletes();
-          void pumpLocalUploadQueue();
+        if (!ok || url !== selectedToniesUrl) return;
+        if (await queueToniesEdits(url, [{ type: 'clear' }], 'Delete all') && url === selectedToniesUrl) {
+          toniesEditMode = false;
+          toniesNameDrafts = {};
         }
+        renderToniesEditUI();
+        renderToniesContent();
       }
 
       async function saveToniesNameEdits() {
@@ -2527,51 +2509,24 @@
         const url = selectedToniesUrl;
         const drafts = toniesNameDrafts;
         const submittedDrafts = { ...drafts };
-        let content = toniesContentCache;
         const changes = (toniesContentCache?.chapters || []).flatMap((c, i) => {
           const key = getToniesIdentityKey(c);
           const current = toniesDisplayTitle(uiText(c.title || `Chapter ${i + 1}`));
           const title = String(drafts[key] ?? current).trim();
-          return title && title !== current ? [{ chapter_id: c.chapter_id, title }] : [];
+          return title && title !== current && c.chapter_id ? [{ type: 'rename', chapter_id: c.chapter_id, title }] : [];
         });
         if (!changes.length) { cancelToniesEditMode(); return; }
-        toniesMutationInFlight = true;
-        invalidateToniesContentRequests(url);
-        setToniesStatus('Saving renamed tracks…', true);
-        try {
-          for (const change of changes) {
-            const index = content.chapters.findIndex(c => c.chapter_id === change.chapter_id);
-            if (!change.chapter_id || index < 0) throw new Error('Track no longer exists. Refresh before renaming.');
-            const data = await api('/api/tonies-content/rename', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ target_url: url, index, chapter_id: change.chapter_id, title: change.title })
-            }, 60000);
-            applyToniesContent(url, data);
-            content = data;
+        // All renames go in one request and one batch. Drafts survive a rejected request,
+        // and edits typed while the request was in flight stay open for another save.
+        if (await queueToniesEdits(url, changes, 'Rename') && url === selectedToniesUrl && drafts === toniesNameDrafts) {
+          const hasNewerEdits = Object.keys(drafts).some(key => drafts[key] !== submittedDrafts[key]);
+          if (!hasNewerEdits) {
+            toniesEditMode = false;
+            toniesNameDrafts = {};
           }
-          if (url === selectedToniesUrl && drafts === toniesNameDrafts) {
-            const hasNewerEdits = Object.keys(drafts).some(key => drafts[key] !== submittedDrafts[key]);
-            if (!hasNewerEdits) {
-              toniesEditMode = false;
-              toniesNameDrafts = {};
-            }
-            setToniesStatus(hasNewerEdits ? 'Names updated. Unsaved edits remain.' : 'Names updated.', false);
-          }
-          showToast('Names updated', 'ok', 1500);
-        } catch (e) {
-          if (url === selectedToniesUrl && drafts === toniesNameDrafts) setToniesStatus(`Rename failed: ${e?.message || e}`, false);
-          showToast(`Rename failed: ${e?.message || e}`, 'err', 5200);
-        } finally {
-          toniesMutationInFlight = false;
-          toniesApplying = false;
-          void drainToniesUploadReconciliations();
-          renderToniesEditUI();
-          renderToniesContent();
-          renderTonies();
-          void processPendingToniesDeletes();
-          void pumpLocalUploadQueue();
         }
+        renderToniesEditUI();
+        renderToniesContent();
       }
 
       function renderToniesContent() {
@@ -2612,6 +2567,8 @@
 
         const nowTs = Date.now();
         const busy = isToniesActionBusy();
+        const pendingDeleteIds = new Set(pendingToniesActions(selectedToniesUrl)
+          .filter(a => a.type === 'delete').map(a => a.params?.chapter_id));
         // Drop stale NEW markers aggressively so highlights always clear quickly.
         recentUploadedChapterIds = Object.fromEntries(
           Object.entries(recentUploadedChapterIds).filter(([, ts]) => (nowTs - Number(ts || 0)) < TONIES_NEW_HIGHLIGHT_MS)
@@ -2620,21 +2577,15 @@
         const viewItems = chapters.map((c, i) => ({ c, sourceIndex: i }));
         if (toniesReverseView) viewItems.reverse();
 
-        const dropIntentActive = !!(
-          toniesUploadSyncing
-          && pendingDropUploadIntent
-          && pendingDropUploadIntent.targetUrl
-          && pendingDropUploadIntent.targetUrl === selectedToniesUrl
-        );
-        const nativeDropTargetIndex = dropIntentActive
-          ? Math.max(0, Math.min(chapters.length, Number(pendingDropUploadIntent.targetIndex) || 0))
-          : -1;
-        // Skeleton placement should follow the current visual order, while targetIndex
-        // remains in native order for backend/apply semantics.
-        const dropTargetIndex = dropIntentActive
-          ? (toniesReverseView ? Math.max(0, Math.min(chapters.length, chapters.length - nativeDropTargetIndex)) : nativeDropTargetIndex)
-          : -1;
-        const inlineDropSkeleton = '<div class="tonies-sync-skeleton" title="Uploading to this position…"></div>';
+        // One placeholder per upload still in flight to this Tonie, where it will land.
+        const uploadPlaceholders = activeUploadPlaceholders(selectedToniesUrl);
+        const placeholdersAt = new Map();
+        for (const intent of uploadPlaceholders) {
+          let at = intent.position ? resolveToniesPosition(chapters, intent.position) : -1;
+          if (at < 0) at = Math.max(0, Math.min(chapters.length, Number(intent.targetIndex) || 0));
+          placeholdersAt.set(at, [...(placeholdersAt.get(at) || []), intent]);
+        }
+        const inlineDropSkeleton = (intent) => `<div class="tonies-sync-skeleton" title="${esc(intent.filename ? `Uploading ${intent.filename}…` : 'Uploading to this position…')}"></div>`;
 
         const rowHtmlByIndex = new Map(viewItems.map(({ c, sourceIndex }) => {
           const rawTitle = uiText(c.title || `Chapter ${sourceIndex + 1}`);
@@ -2644,11 +2595,9 @@
           const draftTitle = String(toniesNameDrafts[identityKey] ?? title);
           const ts = recentUploadedChapterIds[c.chapter_id] || 0;
           const isNew = ts && (nowTs - ts) < TONIES_NEW_HIGHLIGHT_MS;
-          const deleteKey = identityKey;
-          const isDeleting = pendingDeleteKeys.has(deleteKey);
-          const isQueuedDelete = pendingDeleteQueueKeys.has(deleteKey);
+          const isDeleting = pendingDeleteIds.has(c.chapter_id);
           const html = `
-          <div class="tonies-item ${isNew ? 'new-upload' : ''} ${(isDeleting || isQueuedDelete) ? 'deleting' : ''} " draggable="${(toniesEditMode || busy) ? 'false' : 'true'}" data-source-index="${sourceIndex}">
+          <div class="tonies-item ${isNew ? 'new-upload' : ''} ${isDeleting ? 'deleting' : ''} " draggable="${(toniesEditMode || busy) ? 'false' : 'true'}" data-source-index="${sourceIndex}">
             <div class="drag-handle" style="opacity:${(toniesEditMode || busy) ? '0.35' : '1'};">⋮⋮</div>
             <div>
               ${toniesEditMode
@@ -2658,27 +2607,25 @@
             </div>
             <div class="row" style="justify-content:flex-end;gap:6px;">
               <div class="tiny mono">#${displayNumber}</div>
-              <button class="trash-btn" title="Remove" aria-label="Remove" ${(isDeleting || isQueuedDelete || toniesEditMode) ? 'disabled' : ''} onclick="enqueueToniesDelete(${sourceIndex})">${(isDeleting || isQueuedDelete) ? 'Deleting…' : '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M6 6l1 14h10l1-14"/><path d="M10 10v7"/><path d="M14 10v7"/></svg>'}</button>
+              <button class="trash-btn" title="Remove" aria-label="Remove" ${(isDeleting || toniesEditMode) ? 'disabled' : ''} onclick="enqueueToniesDelete(${sourceIndex})">${isDeleting ? 'Deleting…' : '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M6 6l1 14h10l1-14"/><path d="M10 10v7"/><path d="M14 10v7"/></svg>'}</button>
             </div>
           </div>
         `;
           return [sourceIndex, html];
         }));
 
+        // Build in native order (a placeholder sits before the chapter at its index), then
+        // flip for the newest-first view so placeholders keep their place between rows.
         const combined = [];
-        const displayOrderIndices = viewItems.map(({ sourceIndex }) => sourceIndex);
-        let injectedDropSkeleton = false;
-        displayOrderIndices.forEach((i, visualPos) => {
-          if (dropIntentActive && dropTargetIndex === visualPos) {
-            combined.push(inlineDropSkeleton);
-            injectedDropSkeleton = true;
-          }
-          combined.push(rowHtmlByIndex.get(i) || '');
-        });
-        if (dropIntentActive && !injectedDropSkeleton) combined.push(inlineDropSkeleton);
+        for (let k = 0; k <= chapters.length; k++) {
+          for (const intent of placeholdersAt.get(k) || []) combined.push(inlineDropSkeleton(intent));
+          if (k < chapters.length) combined.push(rowHtmlByIndex.get(k) || '');
+        }
+        if (toniesReverseView) combined.reverse();
         const rowsHtml = combined.join('');
 
-        const syncSkeleton = (toniesUploadSyncing && !dropIntentActive && !pendingDropUploadIntent) ? '<div class="tonies-sync-skeleton" title="Syncing with my.tonies.com…"></div>' : '';
+        const unplacedUpload = activeUploadJobIds.size === 0 || [...activeUploadJobIds].some(id => !attachedUploadJobIds.has(id));
+        const syncSkeleton = (toniesUploadSyncing && !uploadPlaceholders.length && unplacedUpload) ? '<div class="tonies-sync-skeleton" title="Syncing with my.tonies.com…"></div>' : '';
         const endDropZone = toniesEditMode ? '' : '<div class="tonies-end-drop-zone" data-end-drop-zone="1">Drop here to upload to bottom</div>';
         toniesContentEl.innerHTML = syncSkeleton + rowsHtml + endDropZone;
 
@@ -2978,9 +2925,9 @@
         if (data?.error) throw new Error(data.error);
         if (!Array.isArray(data?.chapters)) throw new Error('Invalid Tonies content response. Tap Refresh to retry.');
         invalidateToniesContentRequests(url);
-        setCachedToniesContent(url, data);
+        setCachedToniesContent(url, data);  // the server's content; queued edits are layered on top
         if (url === selectedToniesUrl) {
-          toniesContentCache = data;
+          toniesContentCache = overlayToniesContent(url, data);
           scheduleToniesProcessingPoll(url, data, !options.processingPoll);
           renderToniesContent();
         }
@@ -2990,11 +2937,11 @@
       async function refreshToniesContent(options = {}) {
         const { clearList = false, preferCache = false, force = false, targetUrl = '', processingPoll = false } = options;
         const url = targetUrl || selectedToniesUrl;
-        if (!url || deletingAllToniesContent) return;
+        if (!url) return;
         const selected = url === selectedToniesUrl;
         const cached = getCachedToniesContent(url);
         if (selected && preferCache && cached) {
-          toniesContentCache = cached;
+          toniesContentCache = overlayToniesContent(url, cached);
           renderToniesContent();
           if (!force) {
             scheduleToniesProcessingPoll(url, cached, true);
@@ -3021,7 +2968,7 @@
           if (version !== (toniesContentVersionByUrl[url] || 0)) return;
           if (selected && (reqId !== toniesContentRequestSeq || url !== selectedToniesUrl)) return;
           applyToniesContent(url, data, { processingPoll });
-          if (url === selectedToniesUrl) setToniesStatus(toniesProcessingStatus(data), false);
+          if (url === selectedToniesUrl) showToniesSettledStatus(url, data);
         } catch (e) {
           if (version !== (toniesContentVersionByUrl[url] || 0)) return;
           if (selected && reqId === toniesContentRequestSeq && url === selectedToniesUrl) {
@@ -3042,94 +2989,203 @@
         return chapter?.chapter_id ? `id:${chapter.chapter_id}` : '';
       }
 
-      function findToniesIndexByDeleteKey(entry) {
-        const content = entry.targetUrl === selectedToniesUrl ? toniesContentCache : getCachedToniesContent(entry.targetUrl);
-        return (content?.chapters || []).findIndex(c => c.chapter_id === entry.chapterId);
+      // ---- Library action queue -------------------------------------------------------
+      // Deletes, moves, renames and delete-all are sent to the server queue
+      // (POST /api/tonies-actions), which applies everything queued for a Tonie in one
+      // batch. The list shows each edit right away by layering still-pending actions on
+      // the server's last content; `tonies_actions` events bring the real result.
+
+      function pendingToniesActions(url) {
+        return [...toniesQueuedActions.values()].filter(action => action.url === url);
       }
 
-      async function processPendingToniesDeletes() {
-        if (deleteQueueRunning || toniesApplying || toniesMutationInFlight || hasToniesUploadBusy()) return;
-        deleteQueueRunning = true;
-        try {
-          while (pendingDeleteQueue.length && !hasToniesUploadBusy()) {
-            const entry = pendingDeleteQueue.shift();
-            pendingDeleteQueueKeys.delete(entry.key);
-            const index = findToniesIndexByDeleteKey(entry);
-            if (index < 0) continue;
-            await deleteToniesChapter(index, true, true, entry.targetUrl, entry.chapterId);
-          }
-        } finally {
-          deleteQueueRunning = false;
-          renderToniesContent();
+      function toniesTitleWithToken(current, title) {
+        const token = String(current || '').match(/\s\[(?:oc:)?[a-f0-9]{4,12}\]$/i);
+        return `${String(title || '').trim()}${token ? token[0] : ''}`;
+      }
+
+      // Mirrors resolve rules in app/tonies_batch.py: -1 means the anchor is gone.
+      function resolveToniesPosition(chapters, position) {
+        if (position?.edge === 'start') return 0;
+        if (position?.edge === 'end') return chapters.length;
+        for (const [key, offset] of [['before', 0], ['after', 1]]) {
+          if (!position?.[key]) continue;
+          const at = chapters.findIndex(c => c.chapter_id === position[key]);
+          if (at >= 0) return at + offset;
+          if (position.index == null) return -1;
         }
+        return Math.max(0, Math.min(chapters.length, Number(position?.index) || 0));
+      }
+
+      // Position for something placed at native index `index` of `chapters`.
+      function toniesPositionAt(chapters, index) {
+        if (index <= 0) return { edge: 'start' };
+        if (index >= chapters.length) return { edge: 'end' };
+        return { before: chapters[index].chapter_id, index };
+      }
+
+      function toniesUploadPosition(chapters, edge, index) {
+        if (edge === 'start' || edge === 'end') return { edge };
+        return toniesPositionAt(chapters, Math.max(0, Number(index) || 0));
+      }
+
+      function overlayToniesContent(url, data) {
+        const pending = pendingToniesActions(url);
+        if (!pending.length || !Array.isArray(data?.chapters)) return data;
+        let chapters = data.chapters.map(c => ({ ...c }));
+        for (const action of pending) {
+          const params = action.params || {};
+          const at = chapters.findIndex(c => c.chapter_id === params.chapter_id);
+          if (action.type === 'clear') chapters = [];
+          else if (action.type === 'delete' && at >= 0) chapters.splice(at, 1);
+          else if (action.type === 'rename' && at >= 0) chapters[at].title = toniesTitleWithToken(chapters[at].title, params.title);
+          else if (action.type === 'move' && at >= 0) {
+            const [moved] = chapters.splice(at, 1);
+            const to = resolveToniesPosition(chapters, params.position);
+            chapters.splice(to < 0 ? at : to, 0, moved);
+          }
+        }
+        return { ...data, chapters: chapters.map((c, index) => ({ ...c, index })) };
+      }
+
+      function activeUploadPlaceholders(url) {
+        const intents = new Set([...uploadIntentsByJobId.values(), pendingDropUploadIntent]);
+        const finished = (jobId) => attachedUploadJobIds.has(jobId)
+          || ['done', 'failed'].includes(String(getJobById(jobId)?.status || ''));
+        return [...intents].filter(intent => intent && intent.targetUrl === url
+          && (intent.jobId ? activeUploadJobIds.has(intent.jobId) && !finished(intent.jobId)
+            : intent === pendingDropUploadIntent));
+      }
+
+      function showToniesSettledStatus(url, data) {
+        const count = pendingToniesActions(url).length;
+        if (count) setToniesProgress(`Saving ${count} change${count === 1 ? '' : 's'}…`);
+        else setToniesStatus(toniesProcessingStatus(data), false);
+      }
+
+      function showQueuedToniesContent(url) {
+        if (url !== selectedToniesUrl) return;
+        const base = getCachedToniesContent(url) || toniesContentCache;
+        toniesContentCache = overlayToniesContent(url, base);
+        showToniesSettledStatus(url, base);
+        renderToniesContent();
+      }
+
+      function rememberFinishedToniesAction(id) {
+        finishedToniesActionIds.add(id);
+        if (finishedToniesActionIds.size > 500) finishedToniesActionIds.delete(finishedToniesActionIds.values().next().value);
+      }
+
+      async function submitToniesActions(url, specs) {
+        const res = await api('/api/tonies-actions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ target_url: url, actions: specs })
+        }, 20000);
+        if (res?.error) throw new Error(res.error);
+        for (const action of res?.actions || []) {
+          // The result event can beat this response; never resurrect a finished action.
+          if (['done', 'failed'].includes(action.status) || finishedToniesActionIds.has(action.id)) continue;
+          toniesQueuedActions.set(action.id, { id: action.id, url, type: action.type, params: action.params || {} });
+        }
+        showQueuedToniesContent(url);
+        scheduleToniesActionPoll();
+        return res?.actions || [];
+      }
+
+      async function queueToniesEdits(url, specs, label) {
+        try {
+          await submitToniesActions(url, specs);
+          return true;
+        } catch (e) {
+          if (url === selectedToniesUrl) setToniesStatus(`${label} failed: ${e?.message || e}`, false);
+          showToast(`${label} failed: ${e?.message || e}`, 'err', 5200);
+          return false;
+        }
+      }
+
+      function handleToniesActionsEvent(evt, options = {}) {
+        const url = evt?.target_url;
+        if (!url) return;
+        const failures = [];
+        let succeeded = 0;
+        for (const action of evt.actions || []) {
+          if (!['done', 'failed'].includes(action.status)) continue;
+          rememberFinishedToniesAction(action.id);
+          if (!toniesQueuedActions.delete(action.id)) continue;  // not queued from this page
+          if (action.status === 'failed') failures.push(action);
+          else succeeded += 1;
+        }
+        if (evt.content) applyToniesContent(url, evt.content);
+        else showQueuedToniesContent(url);
+        // An attached upload replaces its placeholder at once; its job catches up right after.
+        const finishedUploads = (evt.actions || []).filter(a => a.type === 'upload' && ['done', 'failed'].includes(a.status));
+        for (const action of finishedUploads) {
+          const job = jobsCache.find(j => j.tonies_action_id === action.id);
+          if (job) attachedUploadJobIds.add(job.id);
+          // The job list may not know the action yet; local uploads also match by file name.
+          for (const intent of uploadIntentsByJobId.values()) {
+            if (intent?.jobId && intent.targetUrl === url && intent.filename
+                && intent.filename === action.params?.filename) attachedUploadJobIds.add(intent.jobId);
+          }
+        }
+        if (finishedUploads.length) {
+          renderToniesContent();
+          if (typeof refreshJobs === 'function') void refreshJobs({ background: true }).catch(() => {});
+        }
+        if (url === selectedToniesUrl && evt.content) showToniesSettledStatus(url, evt.content);
+        if (failures.length) {
+          const first = failures[0].error || 'Unknown error';
+          const message = failures.length === 1 ? `Change failed: ${first}` : `${failures.length} changes failed: ${first}`;
+          if (url === selectedToniesUrl) setToniesStatus(message, false);
+          showToast(message, 'err', 5200);
+          if (!evt.content && !options.refreshing) void refreshToniesContent({ targetUrl: url, force: true });
+        } else if (succeeded && !pendingToniesActions(url).length) {
+          showToast(succeeded === 1 ? 'Saved to Tonies' : `Saved ${succeeded} changes to Tonies`, 'ok', 1600);
+        }
+      }
+
+      // Safety net when the event stream is down: ask the server how queued edits ended.
+      function scheduleToniesActionPoll() {
+        if (toniesActionPollTimer || !toniesQueuedActions.size) return;
+        const streaming = typeof sseConnected !== 'undefined' && sseConnected;
+        toniesActionPollTimer = setTimeout(pollToniesActions, streaming ? 5000 : 1200);
+      }
+
+      async function pollToniesActions() {
+        toniesActionPollTimer = null;
+        for (const url of new Set([...toniesQueuedActions.values()].map(action => action.url))) {
+          try {
+            const res = await api(`/api/tonies-actions?target_url=${encodeURIComponent(url)}`);
+            const known = new Map((res?.actions || []).map(action => [action.id, action]));
+            const finished = [];
+            for (const action of pendingToniesActions(url)) {
+              const latest = known.get(action.id);
+              if (!latest) toniesQueuedActions.delete(action.id);  // server restarted; it's gone
+              else if (['done', 'failed'].includes(latest.status)) finished.push(latest);
+            }
+            if (finished.length) {
+              handleToniesActionsEvent({ target_url: url, actions: finished }, { refreshing: true });
+              await refreshToniesContent({ targetUrl: url, force: true });
+            }
+          } catch {}
+        }
+        scheduleToniesActionPoll();
       }
 
       async function enqueueToniesDelete(index) {
         if (!selectedToniesUrl) return;
-        if (hasToniesUploadBusy()) {
-          showToast('Please wait for the current Tonies upload to finish.', 'warn', 5200);
-          return;
-        }
-        const targetUrl = selectedToniesUrl;
+        const url = selectedToniesUrl;
         const chapter = toniesContentCache?.chapters?.[index];
-        const key = getToniesIdentityKey(chapter);
-        if (!key) { showToast('Track ID is missing. Refresh before deleting.', 'err'); return; }
-        if (pendingDeleteKeys.has(key) || pendingDeleteQueueKeys.has(key)) return;
+        if (!chapter?.chapter_id) { showToast('Track ID is missing. Refresh before deleting.', 'err'); return; }
         const chapterName = toniesDisplayTitle(uiText(chapter.title || `Chapter #${index + 1}`));
         const ok = await askConfirm({
           title: 'Remove from Tonies?',
           message: `${chapterName}\n\nThis will update the Tonies library.`,
           confirmText: 'Remove'
         });
-        if (!ok || targetUrl !== selectedToniesUrl || pendingDeleteKeys.has(key) || pendingDeleteQueueKeys.has(key)) return;
-        pendingDeleteQueue.push({ key, chapterId: chapter.chapter_id, targetUrl });
-        pendingDeleteQueueKeys.add(key);
-        renderToniesContent();
-        if (deleteQueueRunning || toniesApplying) showToast('Queued for delete', 'ok', 1400);
-        void processPendingToniesDeletes();
-      }
-
-      async function deleteToniesChapter(index, assumeConfirmed = false, fromQueue = false, targetUrl = selectedToniesUrl, expectedChapterId = null) {
-        if (!targetUrl || (!fromQueue && blockIfActionInProgress())) return;
-        const content = targetUrl === selectedToniesUrl ? toniesContentCache : getCachedToniesContent(targetUrl);
-        const chapter = content?.chapters?.[index];
-        const chapterId = chapter?.chapter_id;
-        const key = getToniesIdentityKey(chapter);
-        if (!key || (expectedChapterId && chapterId !== expectedChapterId) || pendingDeleteKeys.has(key)) return;
-        if (!assumeConfirmed) {
-          // All human deletes enter the identity-bound confirmation queue.
-          await enqueueToniesDelete(index);
-          return;
-        }
-        pendingDeleteIndices.add(index);
-        pendingDeleteKeys.add(key);
-        toniesMutationInFlight = true;
-        invalidateToniesContentRequests(targetUrl);
-        if (targetUrl === selectedToniesUrl) setToniesStatus('Applying delete…', true);
-        renderToniesContent();
-        try {
-          const data = await api('/api/tonies-content/delete', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ target_url: targetUrl, index, chapter_id: chapterId })
-          }, 60000);
-          applyToniesContent(targetUrl, data);
-          if (targetUrl === selectedToniesUrl) setToniesStatus(toniesProcessingStatus(data), false);
-          showToast('Removed from Tonies', 'ok');
-        } catch (e) {
-          if (targetUrl === selectedToniesUrl) setToniesStatus(`Delete failed: ${e?.message || e}`, false);
-          showToast(`Delete failed: ${e?.message || e}`, 'err', 5200);
-        } finally {
-          pendingDeleteIndices.delete(index);
-          pendingDeleteKeys.delete(key);
-          toniesMutationInFlight = false;
-          toniesApplying = false;
-          void drainToniesUploadReconciliations();
-          renderToniesContent();
-          renderTonies();
-          if (!fromQueue) void processPendingToniesDeletes();
-          void pumpLocalUploadQueue();
-        }
+        if (!ok || url !== selectedToniesUrl) return;
+        await queueToniesEdits(url, [{ type: 'delete', chapter_id: chapter.chapter_id }], 'Delete');
       }
 
       async function reorderToniesChapter(fromIndex, toIndex) {
@@ -3138,32 +3194,10 @@
         const chapters = toniesContentCache?.chapters || [];
         const chapterId = chapters[fromIndex]?.chapter_id;
         if (!chapterId || toIndex < 0 || toIndex >= chapters.length || fromIndex === toIndex) return;
-        toniesMutationInFlight = true;
-        invalidateToniesContentRequests(url);
-        setToniesStatus('Applying reorder…', true);
-        try {
-          const data = await api('/api/tonies-content/reorder', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ target_url: url, from_index: fromIndex, to_index: toIndex, chapter_id: chapterId })
-          }, 60000);
-          applyToniesContent(url, data);
-          if (url === selectedToniesUrl) {
-            setToniesStatus(toniesProcessingStatus(data), false);
-            pulseToniesRow(toIndex);
-          }
-          showToast('Order updated', 'ok', 1800);
-        } catch (e) {
-          if (url === selectedToniesUrl) setToniesStatus(`Reorder failed: ${e?.message || e}`, false);
-          showToast(`Reorder failed: ${e?.message || e}`, 'err', 5200);
-        } finally {
-          toniesMutationInFlight = false;
-          toniesApplying = false;
-          void drainToniesUploadReconciliations();
-          renderTonies();
-          renderToniesContent();
-          void processPendingToniesDeletes();
-          void pumpLocalUploadQueue();
+        const rest = chapters.filter((_, i) => i !== fromIndex);
+        const position = toniesPositionAt(rest, toIndex);
+        if (await queueToniesEdits(url, [{ type: 'move', chapter_id: chapterId, position }], 'Reorder') && url === selectedToniesUrl) {
+          pulseToniesRow(toIndex);
         }
       }
 
@@ -3191,7 +3225,6 @@
 
       function renderFiles() {
         const q = (fileFilterEl.value || '').toLowerCase().trim();
-        const fileDeleteBusy = !!deletingAllToniesContent;
         const filtered = !q ? filesCache : filesCache.filter(f => String(f.name).toLowerCase().includes(q));
 
         const totalSize = filesCache.reduce((acc, f) => acc + (f.size_bytes || 0), 0);
@@ -3221,7 +3254,7 @@
               </div>
               <div class="row" style="justify-content:flex-end;flex-wrap:nowrap;">
                 <button class="good local-upload-btn">Upload</button>
-                <button class="trash-btn" ${fileDeleteBusy ? 'disabled' : ''} title="Delete local file" aria-label="Delete local file"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M6 6l1 14h10l1-14"/><path d="M10 10v7"/><path d="M14 10v7"/></svg></button>
+                <button class="trash-btn" title="Delete local file" aria-label="Delete local file"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M6 6l1 14h10l1-14"/><path d="M10 10v7"/><path d="M14 10v7"/></svg></button>
               </div>
             </article>
           `;
@@ -3366,7 +3399,7 @@
 
         if (transitions.justUploading && isTracked) {
           toniesUploadSyncing = true;
-          setToniesStatus('Uploading to my.tonies.com…', true);
+          setToniesProgress('Uploading to my.tonies.com…');
           renderToniesContent();
           if (job.selected_candidate) {
             showToast('Download complete. Uploading to Tonies…', 'warn', 3200);
@@ -3446,6 +3479,7 @@
         loadingJobs = false;
         hasLoadedJobsOnce = true;
         renderJobs();
+        renderToniesContent();  // upload placeholders follow job status
         pumpLocalUploadQueue();
       }
 
@@ -3510,7 +3544,7 @@
       window.deleteFile = deleteFile;
       window.pickCandidate = pickCandidate;
       window.selectTonies = selectTonies;
-      window.deleteToniesChapter = deleteToniesChapter;
+      window.enqueueToniesDelete = enqueueToniesDelete;
 
       if (searchBtnEl) searchBtnEl.onclick = sendQuery;
       if (clearResultsEl) clearResultsEl.onclick = clearResults;
@@ -3633,7 +3667,7 @@
       renderTonies();
       const cachedContent = getCachedToniesContent(selectedToniesUrl);
       if (cachedContent) {
-        toniesContentCache = cachedContent;
+        toniesContentCache = overlayToniesContent(selectedToniesUrl, cachedContent);
         renderToniesContent();
       }
       void refreshTonies({ force: true });
@@ -3694,10 +3728,16 @@
           if (Number.isFinite(idNum) && idNum > 0) sseLastEventId = idNum;
 
           let kind = '';
+          let payload = null;
           try {
-            const payload = JSON.parse(ev.data || '{}');
+            payload = JSON.parse(ev.data || '{}');
             kind = String(payload?.kind || '');
           } catch {}
+
+          if (kind === 'tonies_actions') {
+            try { handleToniesActionsEvent(payload); } catch (e) { console.warn('tonies action event failed', e); }
+            return;
+          }
 
           // Only refresh jobs for state-changing events.
           if (!['job_created', 'job_updated', 'job_selected'].includes(kind)) return;

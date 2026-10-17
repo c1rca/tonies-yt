@@ -70,6 +70,15 @@ curl -c jar -H 'Content-Type: application/json' \
 curl -b jar http://localhost:8090/api/jobs
 ```
 
+To queue library changes from a script, send them in one request; they are saved in one batch:
+```bash
+curl -b jar -H 'Content-Type: application/json' http://localhost:8090/api/tonies-actions -d '{
+  "target_url": "https://my.tonies.com/creative-tonies/<household>/<tonie>/edit",
+  "actions": [{"type": "delete", "chapter_id": "..."},
+              {"type": "move", "chapter_id": "...", "position": {"edge": "start"}},
+              {"type": "rename", "chapter_id": "...", "title": "New name"}]}'
+```
+
 ## Running behind a reverse proxy
 
 Tonies-YT serves plain HTTP. To reach it from outside your home network, put it behind an HTTPS reverse proxy and keep port 8090 closed to the internet. The proxy must:
@@ -96,9 +105,22 @@ The client signs in with OAuth (password grant against `login.tonies.com`) and r
 
 Tonies can revoke or expire a refresh token at any time; the client then signs in again once. If that fails, check the credentials in Settings.
 
-## Write safety
+## Action queue and write safety
 
-Every change goes through the same steps: read the Tonie, check the chapter you acted on is still where the UI saw it (by chapter ID), write the whole chapter list, then read it back until it matches. If the Tonie changed in between, or a chapter ID or title doesn't match, the write is refused with a "refresh first" message. A write that may or may not have landed (timeout, connection drop) is never retried automatically.
+Every library change (delete, rename, move, delete all, upload) goes into a per-Tonie queue (`app/actions.py`). Each Tonie has one worker that waits 0.15 s for more changes to arrive, then saves everything that's ready in one batch:
+
+1. read the Tonie;
+2. apply the queued changes in order, each by chapter ID (`app/tonies_batch.py`); a change whose track is gone, or that would exceed the Tonie's capacity or chapter limit, fails on its own and the rest still apply;
+3. write the whole chapter list once;
+4. read it back until it matches.
+
+A batch of any size costs three requests. Positions are anchors ("before this chapter", "at the start/end") with an index fallback, so a move or upload queued behind other edits still lands where it was dropped.
+
+Uploads first send their audio to Tonies storage, up to three at a time, while edits and reads carry on. They are attached in the order they were queued, at their requested position, so there is no follow-up reorder.
+
+A write that may or may not have landed (timeout, connection drop) is never retried automatically; every change in that batch is reported as failed with a "refresh first" message. Progress and the resulting library are published as `tonies_actions` events on `/api/events`; `GET /api/tonies-actions` lists recent changes and their status.
+
+Queued changes live in memory. A restart drops anything not yet saved; the page notices and shows the library as it is on Tonies.
 
 ## Vault
 
@@ -151,7 +173,13 @@ DATA_DIR=$(mktemp -d) .venv/bin/python -m pytest -q
 
 GitHub Actions runs the same suite, plus a Docker build and health check, on every push to `main` and every pull request.
 
-The suite is offline: the Tonies cloud is a fake (`tests/tonies_fake.py`) that follows the observed OAuth, GraphQL, REST and S3 contracts. It covers sign-in and sessions (every API route is checked for `401` without one), token renewal, exact-ID writes, stale and ambiguous writes, no-retry on unknown outcomes, upload placement, processing readback, job-state saves, log privacy and the container dependency contract. It does not build an image or talk to Tonies.
+The suite is offline: the Tonies cloud is a fake (`tests/tonies_fake.py`) that follows the observed OAuth, GraphQL, REST and S3 contracts. It covers sign-in and sessions (every API route is checked for `401` without one), the action queue and batch planner, token renewal, exact-ID writes, stale and ambiguous writes, no-retry on unknown outcomes, upload placement, processing readback, job-state saves, log privacy and the container dependency contract. It does not build an image or talk to Tonies.
+
+To try UI changes without a Tonies account, run the app against the same fake cloud with simulated network delay:
+```bash
+.venv/bin/python scripts/dev/fake_cloud_app.py --port 8099 --latency 0.25
+```
+It prints its throwaway data directory; set the token from `session.txt` there as the `tonies_yt_session` cookie.
 
 Before a release, check by hand:
 - search → download → upload → processing finishes → library shows the track

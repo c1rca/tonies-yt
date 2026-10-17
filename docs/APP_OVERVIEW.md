@@ -37,7 +37,9 @@ flowchart LR
   UI[Web UI] --> API[FastAPI]
   API --> JOBS[Job queue]
   JOBS --> YTDLP[yt-dlp + ffmpeg + Deno]
-  JOBS --> TONIES[ToniesAPI client]
+  JOBS --> QUEUE[Action queue]
+  API --> QUEUE
+  QUEUE --> TONIES[ToniesAPI client]
   API --> TONIES
   TONIES --> AUTH[login.tonies.com OAuth]
   TONIES --> CLOUD[Tonies GraphQL / REST API]
@@ -48,8 +50,10 @@ flowchart LR
 `ToniesAPI` (`app/tonies_api.py`) owns all Tonies traffic:
 - **Auth:** OAuth password grant, refresh in memory, one re-login if the refresh is rejected.
 - **Reads:** households, Creative Tonies and their chapters via one GraphQL query.
-- **Writes:** re-read, check the expected chapter ID, PATCH the full chapter list over REST, read back until it matches. Unknown outcomes are never retried.
-- **Uploads:** allocate a file ID, stream the file to the presigned S3 form (no bearer token), add the chapter at the requested position, then confirm it by its server-assigned ID.
+- **Writes (`apply`):** one read, a batch of edits planned by chapter ID, one PATCH of the full chapter list over REST, one read-back until it matches. Unknown outcomes are never retried.
+- **Uploads:** `prepare_upload` allocates a file ID and streams the file to the presigned S3 form (no bearer token); `apply` attaches it at the requested position and confirms it by its server-assigned ID.
+
+`app/actions.py` queues every library change per Tonie and applies them in batches; uploads transfer three at a time in parallel and attach in queue order. `app/tonies_batch.py` is the pure planner that turns a list of changes into one chapter list. The page (`web/index.html`) shows queued changes at once by layering them on the last server content, and settles on the `tonies_actions` events. See [Operations](OPERATIONS.md#action-queue-and-write-safety).
 
 `app/auth.py` guards everything else: per-browser session cookies, sign-in throttling and cross-site write checks (see [Operations](OPERATIONS.md#app-sign-in-and-sessions)).
 
@@ -60,7 +64,10 @@ flowchart LR
 ### Backend
 - `app/main.py`: routes and API
 - `app/auth.py`: sign-in sessions and request guard
-- `app/jobs.py`: search/download/upload job queue (one upload at a time)
+- `app/jobs.py`: search/download jobs; uploads hand over to the action queue
+- `app/actions.py`: per-Tonie queue of library changes, applied in batches
+- `app/tonies_batch.py`: batch planner (pure, no I/O)
+- `app/events.py`: event stream for `/api/events`
 - `app/tonies_api.py`: Tonies OAuth/HTTP client
 - `app/uploader.py`: app-facing Tonies operations
 - `app/downloader.py`: YouTube search/download
@@ -98,13 +105,15 @@ Kept in memory only:
 - `POST /api/jobs/{job_id}/select`
 
 ### Tonies library
+- `POST /api/tonies-actions`: queue changes (`delete`, `rename`, `move`, `clear`) for one Tonie
+- `GET /api/tonies-actions`: recent changes and their status
 - `POST /api/tonies-content`
 - `POST /api/tonies-content/delete`
 - `POST /api/tonies-content/delete-all`
 - `POST /api/tonies-content/reorder`
 - `POST /api/tonies-content/rename`
 
-Rename, reorder and delete take the `chapter_id` the UI is acting on. Delete follows that ID if the chapter has moved; rename and reorder refuse if it is no longer at the given index. All three refuse if the ID is gone.
+The single-change endpoints below `tonies-content` predate the queue and still work; the app itself uses `tonies-actions`. Rename, reorder and delete take the `chapter_id` the UI is acting on. Delete follows that ID if the chapter has moved; rename and reorder refuse if it is no longer at the given index. All three refuse if the ID is gone.
 
 ### Files
 - `GET /api/files`
