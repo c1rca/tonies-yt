@@ -1,8 +1,12 @@
-from pathlib import Path
+"""Persisted API readback is immediate; no page-ready stabilization waits."""
+from test_tonies_api import URL, cloud_api
 
 
-def test_upload_save_wait_is_short_after_named_row_is_stable():
-    source = (Path(__file__).parents[1] / "app" / "uploader.py").read_text()
-    assert "stable_for_4_seconds" in source
-    assert "idx - new_row_seen_poll >= 4" in source
-    assert "stable_for_15_seconds" not in source
+def test_upload_never_sleeps_once_authoritative_attachment_is_visible(cloud_api, tmp_path, monkeypatch):
+    from app import tonies_api
+    _, api = cloud_api
+    monkeypatch.setattr(tonies_api, "_audio_seconds", lambda path: 1)
+    monkeypatch.setattr(tonies_api.time, "sleep", lambda _: (_ for _ in ()).throw(AssertionError("no stabilization delay")))
+    path = tmp_path / "clip.mp3"
+    path.write_bytes(b"synthetic")
+    assert api.upload(path, URL, "New")["chapter_id"] == "permanent"

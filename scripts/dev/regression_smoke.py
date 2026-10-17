@@ -8,9 +8,11 @@ import sys
 import time
 from urllib import error, parse, request
 
+# Log lines that mean an upload failed even when the job reported success.
 KNOWN_BAD = [
-    "using playwright sync api inside the asyncio loop",
-    "cannot switch to a different thread",
+    "tonies http transport failed",
+    "saved tonies content was not confirmed",
+    "upload attachment identity was not confirmed",
 ]
 
 
@@ -164,7 +166,7 @@ def main():
         for b in bad:
             print(f" - {b}")
         sys.exit(2)
-    print("No known Playwright thread/async-loop error patterns found.")
+    print("No known Tonies transport error patterns found.")
 
 
 if __name__ == "__main__":

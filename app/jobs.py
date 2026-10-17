@@ -3,7 +3,7 @@ import threading
 import queue
 import uuid
 import subprocess
-import multiprocessing as mp
+
 import time
 import json
 from datetime import datetime, timezone
@@ -13,8 +13,7 @@ from typing import Dict, Optional, Any
 from .models import JobState
 from .ai import parse_request
 from .downloader import download_mp3, search_youtube
-from .uploader import upload_to_tonies, reset_upload_session, get_tonies_content
-from .credentials import get_credentials
+from .uploader import upload_to_tonies, get_tonies_content
 from .config import settings
 from .logger import get_logger
 
@@ -48,7 +47,7 @@ _STAGE_TIMEOUT_SEC: dict[str, int] = {
     "uploading": 420,
 }
 
-_UPLOAD_ATTEMPT_TIMEOUT_SEC = 420
+
 _JOBS_STATE_FILE = settings.data_dir / "jobs-state.json"
 _MAX_PERSISTED_JOBS = 200
 
@@ -326,96 +325,17 @@ def _ensure_tonies_capacity(target_url: Optional[str], incoming_seconds: float) 
     except Exception as e:
         raise RuntimeError(f"Could not verify free minutes before upload: {e}")
 
-    free_minutes = content.get('free_minutes')
-    if free_minutes is None:
-        return
-
-    free_seconds = max(float(free_minutes), 0.0) * 60.0
+    free_seconds = content.get('free_seconds')
+    if free_seconds is None:
+        free_minutes = content.get('free_minutes')
+        if free_minutes is None:
+            raise RuntimeError('Could not verify free space before upload')
+        free_seconds = float(free_minutes) * 60.0
+    free_seconds = max(float(free_seconds), 0.0)
     if incoming_seconds > free_seconds + 1.0:
         need = incoming_seconds / 60.0
         have = free_seconds / 60.0
         raise RuntimeError(f"Not enough free space on selected Creative Tonie (need {need:.1f} min, have {have:.1f} min).")
-
-
-def _normalize_local_mp3_for_tonies(src: Path) -> Path:
-    staging_root = settings.data_dir / "staging"
-    # Keep a clean filename for Tonies display while still isolating each job in a unique folder.
-    job_stage = staging_root / f"job-{uuid.uuid4().hex[:8]}"
-    job_stage.mkdir(parents=True, exist_ok=True)
-    out = job_stage / f"{src.stem}.mp3"
-
-    cmd = [
-        "ffmpeg", "-y",
-        "-i", str(src),
-        "-vn",
-        "-ar", "44100",
-        "-ac", "2",
-        "-codec:a", "libmp3lame",
-        "-b:a", "128k",
-        str(out),
-    ]
-    subprocess.run(cmd, check=True, capture_output=True, text=True)
-    return out
-
-
-def _upload_subprocess_main(result_q: mp.Queue, file_path: str, target: Optional[str], target_url: Optional[str], verify_strict: bool, tonies_email: str = "", tonies_password: str = ""):
-    try:
-        upload_to_tonies(
-            Path(file_path),
-            target_character_name=target,
-            target_url=target_url,
-            verify_strict=verify_strict,
-            tonies_email_override=tonies_email,
-            tonies_password_override=tonies_password,
-        )
-        result_q.put({"ok": True})
-    except Exception as e:
-        result_q.put({"ok": False, "error": str(e)})
-
-
-def _upload_once_with_timeout(job_id: str, file_path: Path, target: Optional[str], target_url: Optional[str], verify_strict: bool, tonies_email: str = "", tonies_password: str = "", timeout_sec: int = _UPLOAD_ATTEMPT_TIMEOUT_SEC):
-    q: mp.Queue = mp.Queue(maxsize=1)
-    p = mp.Process(target=_upload_subprocess_main, args=(q, str(file_path), target, target_url, verify_strict, tonies_email, tonies_password), daemon=True)
-    t0 = time.time()
-    p.start()
-    p.join(timeout=timeout_sec)
-    elapsed = int(time.time() - t0)
-    if p.is_alive():
-        _log(job_id, f"Upload attempt timed out after {elapsed}s; terminating worker process")
-        p.terminate()
-        p.join(timeout=5)
-        raise RuntimeError(f"Upload attempt timed out after {elapsed}s")
-    try:
-        result = q.get_nowait()
-    except Exception:
-        result = {"ok": p.exitcode == 0, "error": f"Upload worker exited with code {p.exitcode}"}
-    if not result.get("ok"):
-        raise RuntimeError(result.get("error") or "Upload attempt failed")
-
-
-def _upload_to_tonies_with_retry(job_id: str, file_path: Path, target: Optional[str] = None, target_url: Optional[str] = None, verify_strict: bool = True, attempts: int = 2, tonies_email: str = "", tonies_password: str = ""):
-    last_err: Optional[Exception] = None
-    for attempt in range(1, max(1, attempts) + 1):
-        try:
-            _log(job_id, f"Upload attempt {attempt}/{max(1, attempts)} starting for {file_path.name}")
-            _upload_once_with_timeout(job_id, file_path, target=target, target_url=target_url, verify_strict=verify_strict, tonies_email=tonies_email, tonies_password=tonies_password)
-            _log(job_id, f"Upload attempt {attempt}/{max(1, attempts)} finished successfully")
-            return
-        except Exception as e:
-            last_err = e
-            msg = str(e).lower()
-            if "cannot switch to a different thread" in msg or "asyncio loop" in msg:
-                _log(job_id, "Resetting upload browser session after Playwright thread/loop error…")
-                try:
-                    reset_upload_session()
-                except Exception:
-                    pass
-            if attempt < max(1, attempts):
-                _log(job_id, f"Upload to Tonies failed, retrying once… ({e})")
-            else:
-                break
-    if last_err:
-        raise last_err
 
 
 def _classify_download_error(err: Exception) -> str:
@@ -437,63 +357,45 @@ def _classify_download_error(err: Exception) -> str:
     return "Download failed"
 
 
-def _enqueue_upload(job_id: str, mp3_path: Path, target: Optional[str], target_url: Optional[str], fallback_path: Optional[Path] = None):
-    creds = get_credentials()
-    tonies_email = str(creds.get("email") or "").strip()
-    tonies_password = str(creds.get("password") or "").strip()
-
+def _enqueue_upload(job_id: str, mp3_path: Path, target: Optional[str], target_url: Optional[str]):
     _update(job_id, status="waiting_upload", output_file=str(mp3_path), target_url=target_url)
     _log(job_id, "Waiting for Tonies uploader slot")
-    _upload_q.put({
-        "job_id": job_id,
-        "mp3_path": str(mp3_path),
-        "target": target,
-        "target_url": target_url,
-        "fallback_path": str(fallback_path) if fallback_path else None,
-        "tonies_email": tonies_email,
-        "tonies_password": tonies_password,
-    })
+    _upload_q.put({"job_id": job_id, "mp3_path": str(mp3_path), "target": target, "target_url": target_url})
+
+
+def _process_upload_item(item: dict[str, Any]) -> None:
+    job_id = item["job_id"]
+    if _is_cancelled(job_id) or get_job(job_id).status in {"done", "failed"}:
+        return
+    try:
+        with _upload_lock:
+            if _is_cancelled(job_id):
+                _update(job_id, status="failed", error="Cancelled by user")
+                return
+            _update(job_id, status="uploading")
+            _log(job_id, "Uploading audio through Tonies API")
+            result = upload_to_tonies(Path(item["mp3_path"]), target_character_name=item.get("target"), target_url=item.get("target_url"))
+            if (not isinstance(result, dict) or not result.get("chapter_id")
+                    or not isinstance(result.get("content"), dict)
+                    or sum(row.get("chapter_id") == result["chapter_id"] for row in result["content"].get("chapters", [])) != 1):
+                raise RuntimeError("Tonies upload returned no confirmed chapter; refresh the library before retrying")
+            receipt = {"uploaded_chapter_id": result["chapter_id"], "tonies_content": result["content"], "target_url": result.get("target_url") or item.get("target_url")}
+            if get_job(job_id).status == "failed":
+                _update(job_id, **receipt)
+                _log(job_id, "Tonies accepted the upload after the job stopped; the recorded chapter is present. Do not upload it again.")
+                return
+            _update(job_id, status="done", error=None, **receipt)
+            _log(job_id, "Audio added to Tonies; processing continues in the library" if result["content"].get("processing") else "Completed")
+    except Exception as error:
+        _update(job_id, status="failed", error=str(error))
+        _log(job_id, f"Upload failed: {error}")
 
 
 def upload_worker_loop():
     while True:
         item = _upload_q.get()
         try:
-            job_id = item["job_id"]
-            mp3_path = Path(item["mp3_path"])
-            target = item.get("target")
-            target_url = item.get("target_url")
-            fallback_path = Path(item["fallback_path"]) if item.get("fallback_path") else None
-            tonies_email = str(item.get("tonies_email") or "")
-            tonies_password = str(item.get("tonies_password") or "")
-
-            if _is_cancelled(job_id):
-                _update(job_id, status="failed", error="Cancelled by user")
-                continue
-
-            with _upload_lock:
-                if _is_cancelled(job_id):
-                    _update(job_id, status="failed", error="Cancelled by user")
-                    continue
-                _update(job_id, status="uploading")
-                _log(job_id, "Uploading to Tonies")
-                try:
-                    # The upload page has already seen and saved the new row. Do not block
-                    # completion on Tonies' eventually-consistent listing; the UI confirms it.
-                    _upload_to_tonies_with_retry(job_id, mp3_path, target=target, target_url=target_url, verify_strict=False, attempts=1, tonies_email=tonies_email, tonies_password=tonies_password)
-                except Exception:
-                    if fallback_path and fallback_path.exists():
-                        _log(job_id, "Prepared file upload failed strict verification; retrying once with original file")
-                        _upload_to_tonies_with_retry(job_id, fallback_path, target=target, target_url=target_url, verify_strict=True, attempts=1, tonies_email=tonies_email, tonies_password=tonies_password)
-                    else:
-                        raise
-
-            _update(job_id, status="done")
-            _log(job_id, "Completed")
-        except Exception as e:
-            reason = _classify_download_error(e)
-            _update(job_id, status="failed", error=f"{e}")
-            _log(job_id, f"Failed ({reason}): {e}")
+            _process_upload_item(item)
         finally:
             _upload_q.task_done()
 
@@ -617,17 +519,17 @@ def create_upload_only_job(file_path: str, note: str = "upload existing file", t
             if not p.exists():
                 raise RuntimeError(f"File not found: {file_path}")
             _update(job_id, status="preparing")
-            _log(job_id, "Preparing local file for Tonies (re-encode)")
-            prep_started = time.time()
-            prepared = _normalize_local_mp3_for_tonies(p)
-            _log(job_id, f"Timing: local prepare completed in {time.time() - prep_started:.1f}s")
+            _log(job_id, "Checking local audio for Tonies")
+            incoming_seconds = _probe_audio_duration_seconds(p)
+            if incoming_seconds <= 0:
+                raise RuntimeError('Local audio duration could not be verified')
 
             if _is_cancelled(job_id):
                 _update(job_id, status="failed", error="Cancelled by user")
                 return
 
-            _ensure_tonies_capacity(target_url, _probe_audio_duration_seconds(prepared))
-            _enqueue_upload(job_id, prepared, target=None, target_url=target_url, fallback_path=p)
+            _ensure_tonies_capacity(target_url, incoming_seconds)
+            _enqueue_upload(job_id, p, target=None, target_url=target_url)
             _log(job_id, f"Timing: total upload-only->queued_upload in {time.time() - t0:.1f}s")
         except Exception as e:
             reason = _classify_download_error(e)

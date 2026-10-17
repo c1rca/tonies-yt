@@ -12,7 +12,7 @@ from collections import deque
 from .jobs import create_job, get_job, list_jobs, start_worker, select_candidate_and_continue, create_upload_only_job, get_events_since, get_event_stats, get_queue_stats, cancel_job
 from .models import ChatRequest
 from .config import settings
-from .uploader import list_creative_tonies, get_tonies_content, delete_tonies_chapter, delete_all_tonies_content, reorder_tonies_chapter, rename_tonies_chapter
+from .uploader import list_creative_tonies, get_tonies_content, delete_tonies_chapter, delete_all_tonies_content, reorder_tonies_chapter, rename_tonies_chapter, reset_upload_session
 from .logger import setup_logging
 from .credentials import setup_status, initialize_vault, login_unlock, lock_runtime, get_credentials, change_app_password, update_tonies_credentials
 from .downloader import sanitize_filename, clear_search_cache
@@ -61,7 +61,6 @@ class ToniesDeleteRequest(BaseModel):
     target_url: str
     index: int
     chapter_title: str = ""
-    chapter_occurrence: int = 0
     chapter_id: str = ""
     chapter_fingerprint: str = ""
     app_track_token: str = ""
@@ -71,12 +70,14 @@ class ToniesReorderRequest(BaseModel):
     target_url: str
     from_index: int
     to_index: int
+    chapter_id: str | None = None
 
 
 class ToniesRenameRequest(BaseModel):
     target_url: str
     index: int
     title: str
+    chapter_id: str | None = None
 
 
 class SetupInitRequest(BaseModel):
@@ -162,6 +163,7 @@ def api_setup_status():
 def api_setup_init(req: SetupInitRequest):
     try:
         out = initialize_vault(req.username, req.app_password, req.tonies_email, req.tonies_password)
+        reset_upload_session()
         return {"ok": True, **out}
     except Exception as e:
         return {"ok": False, "error": str(e)}
@@ -169,12 +171,17 @@ def api_setup_init(req: SetupInitRequest):
 
 @app.post('/api/setup/login')
 def api_setup_login(req: SetupLoginRequest):
-    return login_unlock(req.username, req.app_password)
+    result = login_unlock(req.username, req.app_password)
+    if result.get('ok'):
+        reset_upload_session()
+    return result
 
 
 @app.post('/api/setup/lock')
 def api_setup_lock():
-    return lock_runtime()
+    result = lock_runtime()
+    reset_upload_session()
+    return result
 
 
 @app.post('/api/setup/change-password')
@@ -184,7 +191,10 @@ def api_setup_change_password(req: SetupChangePasswordRequest):
 
 @app.post('/api/setup/update-tonies-credentials')
 def api_setup_update_tonies_credentials(req: SetupToniesCredentialsRequest):
-    return update_tonies_credentials(req.username, req.app_password, req.tonies_email, req.tonies_password)
+    result = update_tonies_credentials(req.username, req.app_password, req.tonies_email, req.tonies_password)
+    if result.get('ok'):
+        reset_upload_session()
+    return result
 
 
 @app.post('/api/setup/update-yt-dlp')
@@ -370,9 +380,9 @@ def tonies_content(req: ToniesContentRequest):
 @app.post('/api/tonies-content/delete')
 def tonies_content_delete(req: ToniesDeleteRequest):
     try:
-        return delete_tonies_chapter(req.target_url, req.index, req.chapter_title, req.chapter_occurrence, req.chapter_id, req.chapter_fingerprint, req.app_track_token)
+        return delete_tonies_chapter(req.target_url, req.index, req.chapter_title, req.chapter_id, req.chapter_fingerprint, req.app_track_token)
     except Exception as e:
-        logger.exception("tonies delete failed target_url=%s index=%s chapter_title=%s chapter_occurrence=%s chapter_id=%s chapter_fingerprint=%s app_track_token=%s", req.target_url, req.index, req.chapter_title, req.chapter_occurrence, req.chapter_id, req.chapter_fingerprint, req.app_track_token)
+        logger.exception("tonies delete failed target_url=%s index=%s chapter_title=%s chapter_id=%s chapter_fingerprint=%s app_track_token=%s", req.target_url, req.index, req.chapter_title, req.chapter_id, req.chapter_fingerprint, req.app_track_token)
         return {"error": str(e)}
 
 
@@ -388,7 +398,7 @@ def tonies_content_delete_all(req: ToniesContentRequest):
 @app.post('/api/tonies-content/reorder')
 def tonies_content_reorder(req: ToniesReorderRequest):
     try:
-        return reorder_tonies_chapter(req.target_url, req.from_index, req.to_index)
+        return reorder_tonies_chapter(req.target_url, req.from_index, req.to_index, chapter_id=req.chapter_id)
     except Exception as e:
         return {"error": str(e)}
 
@@ -396,7 +406,7 @@ def tonies_content_reorder(req: ToniesReorderRequest):
 @app.post('/api/tonies-content/rename')
 def tonies_content_rename(req: ToniesRenameRequest):
     try:
-        return rename_tonies_chapter(req.target_url, req.index, req.title)
+        return rename_tonies_chapter(req.target_url, req.index, req.title, chapter_id=req.chapter_id)
     except Exception as e:
         return {"error": str(e)}
 

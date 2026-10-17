@@ -824,34 +824,34 @@
       let toniesImagesLoading = false;
       let toniesContentCache = { chapters: [], free_minutes: null, total_minutes: 90, used_minutes: null };
       let toniesApplying = false;
+      let toniesMutationInFlight = false;
       let toniesReverseView = true;
       let toniesEditMode = false;
       let toniesNameDrafts = {};
       let toniesContentRequestSeq = 0;
-      let lastToniesContentUrl = '';
+      const toniesContentVersionByUrl = {};
       let toniesContentByUrlCache = {};
       const jobStatusById = {};
       let focusedUploadFilename = '';
       let highlightedJobId = '';
       let highlightJobTimer = null;
-      let recentUploadedChapterNorm = {};
+      let recentUploadedChapterIds = {};
+      const completedUploadJobIds = new Set();
+      const reconciledUploadReceiptJobIds = new Set();
+      const toniesUploadReconciliations = [];
+      let toniesUploadReconciliationRunning = false;
+      const uploadIntentsByJobId = new Map();
+      let toniesProcessingTimer = null;
+      let toniesProcessingPolls = 0;
       const localUploadToastShownJobIds = new Set();
       let toniesNewClearTimer = null;
-      let markNewFromNextSync = false;
       let pendingDeleteIndices = new Set();
       let pendingDeleteKeys = new Set();
-      let pendingDeleteConfirmKeys = new Set();
       let pendingDeleteQueue = [];
       let pendingDeleteQueueKeys = new Set();
-      let pendingDeleteNormMaxCount = new Map();
-      let pendingDeleteSyncAttempts = new Map();
       let deleteQueueRunning = false;
-      let deleteQueueNeedsFinalSync = false;
       let fileMenuFilename = '';
       let deletingAllToniesContent = false;
-      let deletePlaceholders = [];
-      let recentlyRemovedTitles = new Set();
-      let confirmedDeletedKeys = new Map();
       const TONIES_NEW_HIGHLIGHT_MS = 5000;
       let loadingFiles = false;
       let searchResultsCutoffMs = null;
@@ -867,13 +867,11 @@
       let toniesUploadSyncing = false;
       let loadingTonies = false;
       let toniesLoadError = '';
-      let toniesMenuIndex = null;
+      let toniesMenuChapterId = null;
       let lastToniesTapIndex = null;
       let lastToniesTapAt = 0;
       let pendingDropUploadIntent = null;
       let pendingToniesUpload = null;
-      let pendingToniesUploadPollTimer = null;
-      let optimisticUploadedChaptersByUrl = {};
       let queuedLocalUploads = [];
       let queuedLocalUploadNames = new Set();
       let localUploadQueuePumping = false;
@@ -881,16 +879,9 @@
       let activeUploadJobIds = new Set();
       let selectingCandidateJobIds = new Set();
       let selectedCandidateIndexByJob = {};
-      let queuedCandidateSelectionByJob = {};
       let syncingResultJobIds = new Set();
       let toniesStatsSyncing = new Set();
       let toniesStatsSyncBusy = false;
-      let toniesFallbackRetryByUrl = {};
-      let toniesErrorRetryByUrl = {};
-      let toniesContentRetryTimerByUrl = {};
-      let toniesRefreshSoftWatchdogByUrl = {};
-      let toniesRefreshHardWatchdogByUrl = {};
-      let lastMovedSourceIndex = null;
       let isBackendOnline = true;
       let queuedSearchMessage = '';
       let queuedSearchRetryTimer = null;
@@ -903,7 +894,9 @@
         return String(s ?? '')
           .replaceAll('&', '&amp;')
           .replaceAll('<', '&lt;')
-          .replaceAll('>', '&gt;');
+          .replaceAll('>', '&gt;')
+          .replaceAll('"', '&quot;')
+          .replaceAll("'", '&#39;');
       }
 
       function fmtDate(iso) {
@@ -998,16 +991,6 @@
         delete selectedCandidateIndexByJob[jobId];
       }
 
-      function queueCandidateSelection(jobId, index) {
-        queuedCandidateSelectionByJob[jobId] = Number(index);
-      }
-
-      function takeQueuedCandidateSelection(jobId) {
-        const idx = queuedCandidateSelectionByJob[jobId];
-        delete queuedCandidateSelectionByJob[jobId];
-        return Number(idx);
-      }
-
       function beginCandidateSelection(jobId) {
         selectingCandidateJobIds.add(jobId);
       }
@@ -1053,94 +1036,132 @@
       }
 
       function startPendingToniesUpload(filename, targetUrl) {
-        pendingToniesUpload = {
-          filename: String(filename || ''),
-          targetUrl: String(targetUrl || ''),
-          jobId: '',
-          stage: 'preparing',
-          finalizing: false,
-          startedAt: Date.now(),
-        };
-        if (pendingToniesUploadPollTimer) clearInterval(pendingToniesUploadPollTimer);
-        pendingToniesUploadPollTimer = setInterval(async () => {
-          if (!pendingToniesUpload || pendingToniesUpload.finalizing) return;
-          try { await refreshJobs({ background: true }); } catch {}
-        }, 1200);
-        const startedAt = pendingToniesUpload.startedAt;
-        setTimeout(() => {
-          if (pendingToniesUpload && pendingToniesUpload.startedAt === startedAt) {
-            toniesUploadSyncing = false;
-            setToniesStatus('Upload still processing on my.tonies.com. The list will refresh automatically when it completes.', false);
-            renderToniesContent();
-          }
-        }, 180000);
-        toniesUploadSyncing = true;
-        setToniesStatus('Preparing local file for Tonies…', true);
+        pendingToniesUpload = { filename, targetUrl, jobId: '', stage: 'preparing' };
+        if (targetUrl === selectedToniesUrl) {
+          toniesUploadSyncing = true;
+          setToniesStatus('Preparing local file for Tonies…', true);
+        }
         renderToniesContent();
       }
 
       function clearPendingToniesUpload() {
         pendingToniesUpload = null;
-        if (pendingToniesUploadPollTimer) {
-          clearInterval(pendingToniesUploadPollTimer);
-          pendingToniesUploadPollTimer = null;
+      }
+
+      async function drainToniesUploadReconciliations() {
+        if (toniesUploadReconciliationRunning || toniesMutationInFlight) return;
+        // One UI mutation lane: a receipt's read + optional positioning must stay together.
+        toniesUploadReconciliationRunning = true;
+        try {
+          while (toniesUploadReconciliations.length && !toniesMutationInFlight) {
+            await toniesUploadReconciliations.shift().run();
+          }
+        } finally {
+          toniesUploadReconciliationRunning = false;
         }
       }
 
-      async function refreshToniesContentWithFollowups(targetUrl, attempts = 3, initialDelayMs = 0, spacingMs = 1400) {
-        const url = String(targetUrl || '');
-        if (!url) return;
-        for (let i = 0; i < Math.max(1, Number(attempts) || 1); i += 1) {
-          if (initialDelayMs > 0 && i === 0) {
-            await new Promise((r) => setTimeout(r, initialDelayMs));
-          } else if (i > 0 && spacingMs > 0) {
-            await new Promise((r) => setTimeout(r, spacingMs));
-          }
-          if (getEffectiveSelectedToniesUrl() !== url) return;
-          try {
-            await refreshToniesContent({ clearList: false, preferCache: false, force: true });
-          } catch {}
-        }
+      function hasUploadAttachmentReceipt(job) {
+        return !!job?.uploaded_chapter_id && Array.isArray(job?.tonies_content?.chapters);
       }
 
       async function finalizePendingToniesUpload(job, succeeded) {
-        if (!pendingToniesUpload || pendingToniesUpload.finalizing) return;
-        pendingToniesUpload.finalizing = true;
-        const targetUrl = String(job?.target_url || pendingToniesUpload.targetUrl || '');
-        const completedFilename = String(pendingToniesUpload?.filename || '');
-
-        try {
-          if (succeeded) {
-            markNewFromNextSync = true;
-            addOptimisticUploadedChapter(completedFilename, targetUrl);
-            toniesUploadSyncing = false;
-            setToniesStatus('Saved to my.tonies.com. Confirming…', true);
+        if (!job?.id) return;
+        const firstCompletion = !completedUploadJobIds.has(job.id);
+        const newReceipt = hasUploadAttachmentReceipt(job) && !reconciledUploadReceiptJobIds.has(job.id);
+        if (!firstCompletion && !newReceipt) return;
+        // Lifecycle cleanup and attachment reconciliation have independent dedupe claims.
+        completedUploadJobIds.add(job.id);
+        if (newReceipt) reconciledUploadReceiptJobIds.add(job.id);
+        const pending = firstCompletion && pendingToniesUpload?.jobId === job.id ? pendingToniesUpload : null;
+        const intent = uploadIntentsByJobId.get(job.id)
+          || (pendingDropUploadIntent?.jobId === job.id ? pendingDropUploadIntent : null);
+        const url = String(job.target_url || intent?.targetUrl || pending?.targetUrl || '');
+        const saved = succeeded || newReceipt;
+        // A terminal status without an attachment receipt is not proof of rejection or identity.
+        // Keep its positioning intent until the exact-ID receipt arrives.
+        if (newReceipt) uploadIntentsByJobId.delete(job.id);
+        else if (intent) uploadIntentsByJobId.set(job.id, intent);
+        if (pendingDropUploadIntent?.jobId === job.id) pendingDropUploadIntent = null;
+        const finish = async () => {
+          try {
+            if (!saved) throw new Error(classifyError(job.error || ''));
+            // Job content is a historical attachment receipt, never the current inventory.
+            invalidateToniesContentRequests(url);
+            const version = toniesContentVersionByUrl[url];
+            let content = await api('/api/tonies-content', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ target_url: url })
+            }, 45000);
+            if (version === toniesContentVersionByUrl[url]) {
+              applyToniesContent(url, content);
+            } else {
+              // A newer canonical response won while this read was pending.
+              // Position only from that inventory, never from the superseded read.
+              content = getCachedToniesContent(url);
+              if (!Array.isArray(content?.chapters)) throw new Error('Library changed while loading. Refresh before positioning this upload.');
+            }
+            const chapterId = job.uploaded_chapter_id;
+            if (chapterId) {
+              recentUploadedChapterIds[chapterId] = Date.now();
+              if (toniesNewClearTimer) clearTimeout(toniesNewClearTimer);
+              toniesNewClearTimer = setTimeout(() => {
+                recentUploadedChapterIds = {};
+                renderToniesContent();
+              }, TONIES_NEW_HIGHLIGHT_MS);
+            }
+            if (intent) {
+              const from = content.chapters.findIndex(c => c.chapter_id === chapterId);
+              if (!chapterId || from < 0) throw new Error('Upload saved, but its cloud ID is missing. Refresh before positioning it.');
+              const to = intent.targetEdge === 'end' ? content.chapters.length - 1
+                : intent.targetEdge === 'start' ? 0
+                : Math.max(0, Math.min(content.chapters.length - 1, intent.targetIndex));
+              if (from !== to) {
+                content = await api('/api/tonies-content/reorder', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ target_url: url, from_index: from, to_index: to, chapter_id: chapterId })
+                }, 60000);
+                applyToniesContent(url, content);
+              }
+            }
+            if (url === selectedToniesUrl) setToniesStatus(toniesProcessingStatus(content), false);
+            showToast('Uploaded to Tonies', 'ok', 2800);
+          } catch (e) {
+            const message = saved ? `Upload saved; library update failed: ${e?.message || e}` : `Upload failed: ${e?.message || e}`;
+            if (url === selectedToniesUrl) setToniesStatus(message, false);
+            showToast(message, 'err', 5200);
+          } finally {
+            if (!toniesUploadReconciliations.some(entry => entry.jobId === job.id)) syncingResultJobIds.delete(job.id);
+            if (firstCompletion) {
+              activeUploadJobIds.delete(job.id);
+              localUploadToastShownJobIds.delete(job.id);
+              if (pending && pendingToniesUpload === pending) {
+                clearPendingToniesUpload();
+                resolveLocalUploadPlanned(pending.filename);
+              }
+            }
+            toniesUploadSyncing = hasInFlightTrackedUploadForSelectedTonies();
+            renderTonies();
             renderToniesContent();
-            void refreshToniesContentWithFollowups(targetUrl, 4, 200, 1400);
-            showToast('Uploaded — confirming with my.tonies.com', 'ok', 2800);
-            void refreshFiles();
-          } else {
-            toniesUploadSyncing = false;
-            setToniesStatus(`Upload failed: ${classifyError(job?.error || '')}`, false);
-            showToast(`Upload failed: ${classifyError(job?.error || '')}`, 'err', 3200);
+            renderJobs();
+            // Local files and search downloads share this one completion path.
+            if (firstCompletion && succeeded) void refreshFiles().catch(e => showToast(`Local library refresh failed: ${e?.message || e}`, 'err'));
+            void pumpLocalUploadQueue();
+            void processPendingToniesDeletes();
           }
-        } finally {
-          if (job?.id) {
-            syncingResultJobIds.delete(job.id);
-            activeUploadJobIds.delete(job.id);
-          }
-          clearPendingToniesUpload();
-          toniesUploadSyncing = false;
-          if (completedFilename) resolveLocalUploadPlanned(completedFilename);
-          renderTonies();
-          renderToniesContent();
-          renderJobs();
-          setTimeout(() => { pumpLocalUploadQueue(); }, 0);
-        }
+        };
+        if (!saved) return finish();
+        syncingResultJobIds.add(job.id);
+        return new Promise(resolve => {
+          toniesUploadReconciliations.push({ jobId: job.id, run: async () => { await finish(); resolve(); } });
+          void drainToniesUploadReconciliations();
+        });
       }
 
       function syncPendingToniesUploadFromJob(job) {
-        if (!pendingToniesUpload || !job) return;
+        if (!pendingToniesUpload?.jobId || pendingToniesUpload.jobId !== job?.id) return;
         const pendingTarget = String(pendingToniesUpload.targetUrl || '');
         const jobTarget = String(job.target_url || '');
         if (pendingToniesUpload.jobId && pendingToniesUpload.jobId !== job.id) return;
@@ -1156,12 +1177,12 @@
           if (status === 'queued_prepare' || status === 'preparing') setToniesStatus('Preparing local file for Tonies…', true);
           else if (status === 'queued_upload' || status === 'waiting_upload') setToniesStatus('Waiting for Tonies uploader slot…', true);
           else if (status === 'uploading') setToniesStatus('Uploading to my.tonies.com…', true);
-          else if (status === 'done') setToniesStatus('Upload complete. Syncing Tonies library…', true);
+          else if (status === 'done') setToniesStatus('Upload saved to Tonies.', false);
         }
 
         // Finalize regardless of current selection; otherwise pending upload state can get stuck
         // if the selected Tonie changes while job finishes in background.
-        if (status === 'done') { void finalizePendingToniesUpload(job, true); }
+        if (status === 'done' || hasUploadAttachmentReceipt(job)) { void finalizePendingToniesUpload(job, status === 'done'); }
         else if (status === 'failed') { void finalizePendingToniesUpload(job, false); }
       }
 
@@ -1553,12 +1574,6 @@
         ));
       }
 
-      function shouldKeepToniesUploadSyncing() {
-        // Keep skeleton only while an upload is actively in-flight for this Tonies.
-        // Do not keep it alive solely for post-upload sync bookkeeping.
-        return hasInFlightTrackedUploadForSelectedTonies();
-      }
-
       function canCancelJob(status) {
         return CANCELLABLE_JOB_STATUSES.has(getJobStatus(status));
       }
@@ -1581,7 +1596,7 @@
       }
 
       function hasToniesUploadBusy() {
-        if (selectingCandidateJobIds.size > 0) return true;
+        if (selectingCandidateJobIds.size > 0 || syncingResultJobIds.size > 0 || toniesUploadReconciliations.length > 0) return true;
         if (activeUploadJobIds.size === 0) return false;
 
         for (const id of activeUploadJobIds) {
@@ -1594,7 +1609,7 @@
       }
 
       function blockIfActionInProgress() {
-        if (toniesApplying) {
+        if (toniesApplying || toniesMutationInFlight || syncingResultJobIds.size > 0) {
           showToast('Please wait for the current Tonies update to finish.', 'warn', 5200);
           return true;
         }
@@ -1602,7 +1617,7 @@
       }
 
       function isToniesActionBusy() {
-        return !!(deletingAllToniesContent || toniesApplying || toniesUploadSyncing || syncingResultJobIds.size > 0 || activeUploadJobIds.size > 0 || hasInFlightTrackedUploadForSelectedTonies());
+        return !!(deletingAllToniesContent || toniesApplying || toniesMutationInFlight || toniesUploadSyncing || syncingResultJobIds.size > 0 || activeUploadJobIds.size > 0);
       }
 
       function getSearchUxState() {
@@ -1719,7 +1734,7 @@
       }
 
       function closeToniesMenu() {
-        toniesMenuIndex = null;
+        toniesMenuChapterId = null;
         if (!toniesMenuEl) return;
         toniesMenuEl.classList.remove('open');
         toniesMenuEl.setAttribute('aria-hidden', 'true');
@@ -1727,7 +1742,7 @@
 
       function openToniesMenu(index, x, y) {
         if (!toniesMenuEl) return;
-        toniesMenuIndex = index;
+        toniesMenuChapterId = toniesContentCache?.chapters?.[index]?.chapter_id || null;
         const vw = window.innerWidth;
         const vh = window.innerHeight;
         const width = 180;
@@ -1794,9 +1809,11 @@
       }
 
       async function moveToniesFromMenu(kind) {
-        if (toniesMenuIndex == null) return;
-        const count = (toniesContentCache?.chapters || []).length;
-        const from = toniesMenuIndex;
+        if (!toniesMenuChapterId) return;
+        const chapters = toniesContentCache?.chapters || [];
+        const count = chapters.length;
+        const from = chapters.findIndex(c => c.chapter_id === toniesMenuChapterId);
+        if (from < 0) { closeToniesMenu(); return; }
         let to = from;
 
         // Actions should follow the CURRENT VIEW order.
@@ -1907,7 +1924,6 @@
         queuedSearchMessage = '';
         selectingCandidateJobIds.clear();
         selectedCandidateIndexByJob = {};
-        queuedCandidateSelectionByJob = {};
         renderSearchUX();
         jobsCache = [];
         renderJobs();
@@ -1935,6 +1951,7 @@
 
       function applySelectionResponse(parentJobId, index, res) {
         const returnedJobId = res?.id || parentJobId;
+        if (returnedJobId !== parentJobId) activeUploadJobIds.delete(parentJobId);
         markUploadJobActive(returnedJobId);
         setSelectedCandidateIndex(returnedJobId, index);
         mergeReturnedSelectionJob(parentJobId, returnedJobId, res);
@@ -1970,14 +1987,14 @@
         if (selectedToniesUrl) {
           const chaptersLen = (toniesContentCache?.chapters || []).length;
           const desiredTopIndex = toniesReverseView ? Math.max(0, chaptersLen) : 0;
-          const parentJob = getJobById(jobId, jobsCache);
-          const picked = (Array.isArray(parentJob?.candidates) ? parentJob.candidates[index] : null) || {};
           pendingDropUploadIntent = {
-            filename: String(picked?.title || parentJob?.user_message || 'youtube-upload'),
+            jobId,
             targetIndex: desiredTopIndex,
+            targetEdge: toniesReverseView ? 'end' : 'start',
             targetUrl: selectedToniesUrl,
             createdAt: Date.now(),
           };
+          uploadIntentsByJobId.set(jobId, pendingDropUploadIntent);
         }
 
         try {
@@ -1986,10 +2003,19 @@
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(getCandidateSelectionPayload(index))
           }, 180000);
+          const returnedJobId = res?.id || jobId;
+          const intent = uploadIntentsByJobId.get(jobId);
+          if (intent && returnedJobId !== jobId) {
+            uploadIntentsByJobId.delete(jobId);
+            intent.jobId = returnedJobId;
+            uploadIntentsByJobId.set(returnedJobId, intent);
+          }
           applySelectionResponse(jobId, index, res);
           await refreshJobs();
         } catch (e) {
-          pendingDropUploadIntent = null;
+          uploadIntentsByJobId.delete(jobId);
+          if (pendingDropUploadIntent?.jobId === jobId) pendingDropUploadIntent = null;
+          activeUploadJobIds.delete(jobId);
           rollbackOptimisticCandidateSelection(jobId);
           renderJobs();
           showToast(`Selection failed: ${e?.message || e}`, 'err', 2200);
@@ -2027,13 +2053,14 @@
 
       async function startSingleLocalUpload(filename, options = {}) {
         const { scrollToResults = false, skipQueuedToast = true, suppressInitialToast = false, targetIndex = null } = options;
-        const targetUrl = await ensureUploadTargetUrl();
+        const targetUrl = options.targetUrl || await ensureUploadTargetUrl();
         if (!targetUrl) {
           showToast('Select a Creative Tonie before uploading.', 'err', 3600);
           return false;
         }
 
-        const chaptersLen = (toniesContentCache?.chapters || []).length;
+        const targetContent = targetUrl === selectedToniesUrl ? toniesContentCache : getCachedToniesContent(targetUrl);
+        const chaptersLen = (targetContent?.chapters || []).length;
         const maxFinalIndexAfterInsert = Math.max(0, chaptersLen);
         const effectiveTargetIndex = (targetIndex == null)
           ? (toniesReverseView ? maxFinalIndexAfterInsert : 0)
@@ -2042,6 +2069,7 @@
         pendingDropUploadIntent = {
           filename,
           targetIndex: effectiveTargetIndex,
+          targetEdge: options.targetEdge,
           targetUrl,
           createdAt: Date.now(),
         };
@@ -2059,6 +2087,8 @@
             activeUploadJobIds.add(res.job_id);
             localUploadToastShownJobIds.add(res.job_id);
             if (pendingToniesUpload) pendingToniesUpload.jobId = res.job_id;
+            pendingDropUploadIntent.jobId = res.job_id;
+            uploadIntentsByJobId.set(res.job_id, pendingDropUploadIntent);
           }
           if (!skipQueuedToast) showToast('Upload queued', 'warn', 3000);
           if (skipQueuedToast && !suppressInitialToast) showToast('Preparing local file…', 'warn', 3000);
@@ -2074,6 +2104,7 @@
           if (scrollToResults && jobsCard) jobsCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
           return true;
         } catch (e) {
+          pendingDropUploadIntent = null;
           clearPendingToniesUpload();
           toniesUploadSyncing = false;
           setToniesStatus(`Upload failed: ${e?.message || e}`, false);
@@ -2088,7 +2119,7 @@
         localUploadQueuePumping = true;
         try {
           while (queuedLocalUploads.length) {
-            if (hasToniesUploadBusy() || toniesApplying) break;
+            if (hasToniesUploadBusy() || toniesApplying || toniesMutationInFlight) break;
             const next = queuedLocalUploads.shift();
             queuedLocalUploadNames.delete(String(next?.filename || ''));
             renderFiles();
@@ -2103,12 +2134,19 @@
 
       async function uploadExisting(filename, options = {}) {
         const { targetIndex = null } = options;
+        const targetUrl = options.targetUrl || await ensureUploadTargetUrl();
+        if (!targetUrl) { showToast('Select a Creative Tonie before uploading.', 'err'); return; }
+        const content = targetUrl === selectedToniesUrl ? toniesContentCache : getCachedToniesContent(targetUrl);
+        const count = (content?.chapters || []).length;
+        const targetEdge = options.targetEdge ?? (targetIndex == null ? (toniesReverseView ? 'end' : 'start')
+          : targetIndex === 0 ? 'start' : targetIndex >= count ? 'end' : null);
+        options = { ...options, targetUrl, targetEdge };
         if (deletingAllToniesContent) {
           showToast('Please wait for delete-all to finish.', 'warn', 2600);
           return;
         }
 
-        if (hasToniesUploadBusy() || toniesApplying) {
+        if (hasToniesUploadBusy() || toniesApplying || toniesMutationInFlight) {
           const key = String(filename || '');
           if (!queuedLocalUploadNames.has(key)) {
             queuedLocalUploadNames.add(key);
@@ -2350,37 +2388,9 @@
         return item.data;
       }
 
-      function hasUsableToniesChapters(data) {
-        return !!(data && Array.isArray(data.chapters) && data.chapters.length);
-      }
-
-      function getDeleteSettlingDisplayContent(url, fallback = null) {
-        const key = String(url || selectedToniesUrl || '');
-        const source = hasUsableToniesChapters(fallback) ? fallback : getCachedToniesContent(key);
-        if (!hasUsableToniesChapters(source)) return null;
-        return {
-          ...source,
-          chapters: filterConfirmedDeletedChapters(source.chapters || [])
-        };
-      }
-
-      function shouldPersistToniesContent(url, data, existing = null) {
-        const key = String(url || selectedToniesUrl || '');
-        if (!key || !data) return false;
-        const incomingHasChapters = hasUsableToniesChapters(data);
-        const existingData = existing || getCachedToniesContent(key);
-        const existingHasChapters = hasUsableToniesChapters(existingData);
-        const deleteSettlingSelected = selectedToniesUrl === key && (pendingDeleteConfirmKeys.size > 0 || pendingDeleteKeys.size > 0);
-
-        if (deleteSettlingSelected && !incomingHasChapters && existingHasChapters) return false;
-        if (!incomingHasChapters && existingHasChapters) return false;
-        return true;
-      }
-
       function setCachedToniesContent(url, data) {
-        if (!url || !data) return;
-        const existing = getCachedToniesContent(url);
-        if (!shouldPersistToniesContent(url, data, existing)) return;
+        if (!url || !data || !Array.isArray(data.chapters)) return;
+        // An empty canonical list is valid, including deletion of the last track.
         toniesContentByUrlCache[url] = { ts: Date.now(), data };
         saveToniesContentByUrlCache();
       }
@@ -2392,67 +2402,18 @@
         return (Date.now() - ts) <= Math.max(1000, Number(maxAgeMs) || 0);
       }
 
-      function toniesContentLooksComplete(data) {
-        if (!data || !Array.isArray(data.chapters)) return false;
-        if (data.free_minutes == null && data.used_minutes == null) return false;
-        return true;
-      }
-
-      function toniesHasCompleteCachedStats(url) {
-        const data = toniesContentByUrlCache?.[url]?.data;
-        if (!data || !Array.isArray(data.chapters)) return false;
-        if (data.free_minutes == null && data.used_minutes == null) return false;
-        return true;
-      }
-
-      function shouldSyncCreativeToniesStats(force = false) {
-        if (force) return true;
-        if (!toniesCache.length) return false;
-        return toniesCache.some((t) => !toniesHasCompleteCachedStats(t.edit_url));
-      }
-
       async function syncCreativeToniesStats(options = {}) {
         const { force = false } = options;
-        if (toniesStatsSyncBusy || !toniesCache.length) return;
-        if (!shouldSyncCreativeToniesStats(force)) return;
+        if (toniesStatsSyncBusy) return;
         toniesStatsSyncBusy = true;
         try {
-          const now = Date.now();
           for (const t of toniesCache) {
             const url = t.edit_url;
-            if (!url) continue;
-
-            const cached = toniesContentByUrlCache?.[url];
-            const ageMs = cached?.ts ? (now - cached.ts) : Number.POSITIVE_INFINITY;
-            if (!force && ageMs < 120000) continue; // fresh enough
-
+            if (!url || (!force && hasRecentToniesSync(url, 120000))) continue;
             toniesStatsSyncing.add(url);
             renderTonies();
-
-            try {
-              const data = await api('/api/tonies-content', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ target_url: url })
-              }, 45000);
-              if (!data?.error) {
-                const existing = getCachedToniesContent(url);
-                const incomingEmpty = !Array.isArray(data?.chapters) || (data.chapters || []).length === 0;
-                const existingUsable = !!(existing && Array.isArray(existing.chapters) && existing.chapters.length > 0);
-
-                if (!(incomingEmpty && existingUsable) && shouldPersistToniesContent(url, data, existing)) {
-                  setCachedToniesContent(url, data);
-                  const deleteSettlingSelected = selectedToniesUrl === url && (pendingDeleteConfirmKeys.size > 0 || pendingDeleteKeys.size > 0);
-                  if (selectedToniesUrl === url && !toniesApplying && !deleteSettlingSelected) {
-                    toniesContentCache = data;
-                    renderToniesContent();
-                  }
-                }
-              }
-            } catch {}
-
+            await refreshToniesContent({ targetUrl: url, force: true });
             toniesStatsSyncing.delete(url);
-            renderTonies();
           }
         } finally {
           toniesStatsSyncBusy = false;
@@ -2465,9 +2426,6 @@
         const { force = false } = options;
         if (!force && toniesCache.length) {
           renderTonies();
-          if (shouldSyncCreativeToniesStats(false)) {
-            syncCreativeToniesStats({ force: false });
-          }
           return;
         }
 
@@ -2476,21 +2434,11 @@
         renderTonies();
 
         try {
-          const prevSelected = selectedToniesUrl;
-          let data;
-          try {
-            data = await api('/api/creative-tonies', {}, 30000);
-          } catch (e) {
-            const msg = String(e?.message || e || '').toLowerCase();
-            const transient = msg.includes('aborted') || msg.includes('failed to fetch') || msg.includes('network');
-            if (!transient) throw e;
-            // One quick retry for first-load timing races.
-            await new Promise((r) => setTimeout(r, 350));
-            data = await api('/api/creative-tonies', {}, 30000);
-          }
+          const data = await api('/api/creative-tonies', {}, 30000);
           toniesCache = Array.isArray(data) ? data : [];
           if (!Array.isArray(data) && data?.error) {
             toniesLoadError = String(data.error || 'Failed to load Creative Tonies');
+            setToniesStatus(toniesLoadError, false);
             return;
           }
           if (!selectedToniesUrl && toniesCache.length) selectedToniesUrl = toniesCache[0].edit_url;
@@ -2503,21 +2451,15 @@
           saveToniesCache();
           hydrateImageCacheForTonies();
 
-          if (selectedToniesUrl && selectedToniesUrl !== prevSelected) {
-            await refreshToniesContent({ clearList: true, preferCache: true });
-          }
-          syncCreativeToniesStats({ force: true });
+          // One content response per Tonie supplies both card statistics and the library.
+          await syncCreativeToniesStats({ force: true });
         } catch (e) {
           toniesLoadError = `Failed to load Creative Tonies: ${e?.message || e}`;
+          setToniesStatus(toniesLoadError, false);
         } finally {
           loadingTonies = false;
           renderTonies();
         }
-      }
-
-      function extractToniesAppToken(s) {
-        const m = String(s || '').trim().match(/\s\[(?:oc:)?([a-f0-9]{4,12})\]$/i);
-        return m ? String(m[1] || '').toLowerCase() : '';
       }
 
       function stripToniesAppToken(s) {
@@ -2525,84 +2467,8 @@
         return raw.replace(/\s\[(?:oc:)?[a-f0-9]{4,12}\]$/i, '').trim() || raw;
       }
 
-      function normalizeToniesTitle(s) {
-        return stripToniesAppToken(String(s || '')).toLowerCase().replace(/\.[a-z0-9]{2,5}$/i, '').replace(/[^a-z0-9]+/g, ' ').trim();
-      }
-
       function toniesDisplayTitle(s) {
         return stripToniesAppToken(s);
-      }
-
-      function toniesDeleteKey(chapters, index, forcedNorm = '') {
-        const list = Array.isArray(chapters) ? chapters : [];
-        const i = Math.max(0, Number(index) || 0);
-        const norm = forcedNorm || normalizeToniesTitle(list[i]?.title || `chapter ${i + 1}`);
-        let occ = 0;
-        for (let x = 0; x <= i && x < list.length; x++) {
-          const n = normalizeToniesTitle(list[x]?.title || '');
-          if (n === norm) occ += 1;
-        }
-        return `${norm}#${occ}`;
-      }
-
-      function isPendingDeleteStillPresent(deleteKey, chapters = []) {
-        const list = Array.isArray(chapters) ? chapters : [];
-        if (!deleteKey) return false;
-        return list.some((c, i) => getToniesIdentityKey(c, i) === deleteKey);
-      }
-
-      function chapterListHasPendingDeleteSignals(chapters = []) {
-        if (!pendingDeleteKeys.size && !pendingDeleteConfirmKeys.size) return false;
-        const keysToCheck = new Set([...pendingDeleteKeys, ...pendingDeleteConfirmKeys]);
-        if (!keysToCheck.size) return false;
-
-        const list = Array.isArray(chapters) ? chapters : [];
-        for (const k of keysToCheck) {
-          if (!k) continue;
-          if (isPendingDeleteStillPresent(k, list)) return true;
-        }
-        return false;
-      }
-
-      function pruneConfirmedDeletedKeys() {
-        const now = Date.now();
-        confirmedDeletedKeys = new Map([...confirmedDeletedKeys.entries()].filter(([, meta]) => {
-          const expiresAt = Number(meta?.expiresAt || 0);
-          const remainingChecks = Number(meta?.remainingChecks || 0);
-          return expiresAt > now && remainingChecks > 0;
-        }));
-      }
-
-      function markConfirmedDeletedKey(deleteKey, options = {}) {
-        if (!deleteKey) return;
-        const ttlMs = Number(options.ttlMs || 9000);
-        const remainingChecks = Number(options.remainingChecks || 3);
-        confirmedDeletedKeys.set(deleteKey, {
-          expiresAt: Date.now() + Math.max(1000, ttlMs),
-          remainingChecks: Math.max(1, remainingChecks),
-        });
-      }
-
-      function noteConfirmedDeleteRefreshPass(chapters = []) {
-        pruneConfirmedDeletedKeys();
-        if (!confirmedDeletedKeys.size) return;
-        const list = Array.isArray(chapters) ? chapters : [];
-        for (const [key, meta] of [...confirmedDeletedKeys.entries()]) {
-          if (isPendingDeleteStillPresent(key, list)) {
-            confirmedDeletedKeys.delete(key);
-            continue;
-          }
-          const nextChecks = Number(meta?.remainingChecks || 0) - 1;
-          if (nextChecks > 0) confirmedDeletedKeys.set(key, { ...meta, remainingChecks: nextChecks });
-          else confirmedDeletedKeys.delete(key);
-        }
-      }
-
-      function filterConfirmedDeletedChapters(chapters = []) {
-        pruneConfirmedDeletedKeys();
-        if (!confirmedDeletedKeys.size) return Array.isArray(chapters) ? chapters : [];
-        const list = Array.isArray(chapters) ? chapters : [];
-        return list.filter((c, i) => !confirmedDeletedKeys.has(getToniesIdentityKey(c, i)));
       }
 
       function setToniesStatus(text, loading = false) {
@@ -2655,7 +2521,7 @@
         }
         toniesNameDrafts = {};
         chapters.forEach((c, i) => {
-          toniesNameDrafts[i] = toniesDisplayTitle(uiText(c?.title || `Chapter ${i + 1}`));
+          toniesNameDrafts[getToniesIdentityKey(c)] = toniesDisplayTitle(uiText(c?.title || `Chapter ${i + 1}`));
         });
         toniesEditMode = true;
         closeToniesMenu();
@@ -2671,183 +2537,105 @@
       }
 
       async function deleteAllToniesContent() {
-        if (!toniesEditMode || !selectedToniesUrl) return;
+        if (!toniesEditMode || !selectedToniesUrl || isToniesActionBusy()) return;
+        const url = selectedToniesUrl;
         const ok = await askConfirm({
           title: 'Delete all content?',
           message: 'This will permanently delete all tracks from the selected Creative Tonie.\n\nThis cannot be undone.',
           confirmText: 'Delete all content'
         });
-        if (!ok) return;
-
-        const prev = toniesContentCache || { chapters: [] };
+        if (!ok || url !== selectedToniesUrl || isToniesActionBusy()) return;
         deletingAllToniesContent = true;
-        toniesApplying = true;
-        // Exit edit mode immediately so edit action buttons disappear during/after delete-all.
-        toniesEditMode = false;
-        toniesNameDrafts = {};
-        // Invalidate any in-flight Tonies content responses so stale data can't repopulate rows.
-        toniesContentRequestSeq += 1;
-        // Optimistic visual clear now; authoritative state will come from backend response.
-        toniesContentCache = { ...prev, chapters: [] };
-        setCachedToniesContent(selectedToniesUrl, toniesContentCache);
-        renderToniesEditUI();
-        renderToniesContent();
-
+        toniesMutationInFlight = true;
+        invalidateToniesContentRequests(url);
         setToniesStatus('Deleting all content on Creative Tonie…', true);
         try {
           const data = await api('/api/tonies-content/delete-all', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ target_url: selectedToniesUrl })
+            body: JSON.stringify({ target_url: url })
           }, 120000);
-
-          if (data?.error) {
-            toniesContentCache = prev;
-            setToniesStatus(`Delete all failed: ${data.error}`, false);
-            showToast(`Delete all failed: ${data.error}`, 'err', 5000);
-            renderToniesContent();
-            return;
+          applyToniesContent(url, data);
+          if (url === selectedToniesUrl) {
+            toniesEditMode = false;
+            toniesNameDrafts = {};
+            setToniesStatus('All content deleted from Tonie.', false);
           }
-
-          toniesContentCache = { ...data, chapters: filterConfirmedDeletedChapters(data?.chapters || []) };
-          setCachedToniesContent(selectedToniesUrl, toniesContentCache);
-          pendingDeleteIndices = new Set();
-          pendingDeleteKeys = new Set();
-          pendingDeleteConfirmKeys = new Set();
-          pendingDeleteNormMaxCount = new Map();
-          pendingDeleteSyncAttempts = new Map();
-          deletePlaceholders = [];
-
-          setToniesStatus('All content deleted from Tonie.', false);
           showToast('Deleted all content', 'ok', 2800);
-          renderToniesContent();
         } catch (e) {
-          toniesContentCache = prev;
-          renderToniesContent();
-          setToniesStatus(`Delete all failed: ${e?.message || e}`, false);
+          if (url === selectedToniesUrl) setToniesStatus(`Delete all failed: ${e?.message || e}`, false);
           showToast(`Delete all failed: ${e?.message || e}`, 'err', 5000);
         } finally {
           deletingAllToniesContent = false;
+          toniesMutationInFlight = false;
           toniesApplying = false;
-          loadingToniesContent = false;
-          if (loadingToniesContentUrl === selectedToniesUrl) loadingToniesContentUrl = '';
-          toniesUploadSyncing = false;
+          void drainToniesUploadReconciliations();
           renderToniesEditUI();
           renderToniesContent();
           renderTonies();
+          void processPendingToniesDeletes();
+          void pumpLocalUploadQueue();
         }
       }
 
-      async function saveToniesNameEdits(retrying = false, retryPayload = null) {
-        if (!toniesEditMode || !selectedToniesUrl) return;
-        const chapters = toniesContentCache?.chapters || [];
-        const changes = retryPayload || [];
-        if (!retryPayload) {
-          for (let i = 0; i < chapters.length; i++) {
-            const currentRaw = uiText(chapters[i]?.title || `Chapter ${i + 1}`);
-            const currentDisplay = toniesDisplayTitle(currentRaw);
-            const next = String(toniesNameDrafts[i] ?? currentDisplay).trim();
-            if (next && next !== currentDisplay) {
-              changes.push({
-                index: i,
-                title: next,
-                beforeTitle: currentRaw,
-                beforeDisplayTitle: currentDisplay,
-                beforeNorm: normalizeToniesTitle(currentRaw),
-              });
-            }
-          }
-        }
-
-        if (!changes.length) {
-          cancelToniesEditMode();
-          return;
-        }
-
+      async function saveToniesNameEdits() {
+        if (!toniesEditMode || !selectedToniesUrl || isToniesActionBusy()) return;
+        const url = selectedToniesUrl;
+        const drafts = toniesNameDrafts;
+        const submittedDrafts = { ...drafts };
+        let content = toniesContentCache;
+        const changes = (toniesContentCache?.chapters || []).flatMap((c, i) => {
+          const key = getToniesIdentityKey(c);
+          const current = toniesDisplayTitle(uiText(c.title || `Chapter ${i + 1}`));
+          const title = String(drafts[key] ?? current).trim();
+          return title && title !== current ? [{ chapter_id: c.chapter_id, title }] : [];
+        });
+        if (!changes.length) { cancelToniesEditMode(); return; }
+        toniesMutationInFlight = true;
+        invalidateToniesContentRequests(url);
         setToniesStatus('Saving renamed tracks…', true);
         try {
-          const prev = toniesContentCache || { chapters: [] };
-          const optimisticChapters = [...(prev.chapters || [])];
           for (const change of changes) {
-            if (optimisticChapters[change.index]) {
-              optimisticChapters[change.index] = { ...optimisticChapters[change.index], title: change.title };
-            }
-          }
-
-          // Keep UI stable immediately while backend applies edits.
-          toniesContentCache = { ...prev, chapters: optimisticChapters };
-          setCachedToniesContent(selectedToniesUrl, toniesContentCache);
-          renderToniesContent();
-
-          let data = null;
-          for (const change of changes) {
-            let resolvedIndex = change.index;
-            if (retrying) {
-              const liveChapters = toniesContentCache?.chapters || [];
-              const beforeNorm = normalizeToniesTitle(change.beforeTitle || '');
-              const nextNorm = normalizeToniesTitle(change.title || '');
-
-              let liveIndex = liveChapters.findIndex((c) => normalizeToniesTitle(c?.title || '') === change.beforeNorm);
-              if (liveIndex < 0 && beforeNorm) {
-                liveIndex = liveChapters.findIndex((c) => {
-                  const n = normalizeToniesTitle(c?.title || '');
-                  return n.includes(beforeNorm) || beforeNorm.includes(n);
-                });
-              }
-              // If title already changed in optimistic/UI or server side, fall back to original index.
-              if (liveIndex < 0 && Number.isInteger(change.index) && change.index >= 0 && change.index < liveChapters.length) {
-                liveIndex = change.index;
-              }
-              // Last fallback: if unique match on target/new title exists, use it.
-              if (liveIndex < 0 && nextNorm) {
-                const matches = liveChapters
-                  .map((c, i) => ({ i, n: normalizeToniesTitle(c?.title || '') }))
-                  .filter((x) => x.n === nextNorm || x.n.includes(nextNorm) || nextNorm.includes(x.n));
-                if (matches.length === 1) liveIndex = matches[0].i;
-              }
-
-              if (liveIndex < 0) throw new Error(`Could not find original track to rename: ${change.beforeTitle || change.title}`);
-              resolvedIndex = liveIndex;
-            }
-
-            data = await api('/api/tonies-content/rename', {
+            const index = content.chapters.findIndex(c => c.chapter_id === change.chapter_id);
+            if (!change.chapter_id || index < 0) throw new Error('Track no longer exists. Refresh before renaming.');
+            const data = await api('/api/tonies-content/rename', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ target_url: selectedToniesUrl, index: resolvedIndex, title: change.title })
+              body: JSON.stringify({ target_url: url, index, chapter_id: change.chapter_id, title: change.title })
             }, 60000);
-            if (data?.error) throw new Error(data.error);
+            applyToniesContent(url, data);
+            content = data;
           }
-
-          // Some Tonies responses are transient/incomplete; prefer stable local state then force sync.
-          if (data && toniesContentLooksComplete(data) && Array.isArray(data.chapters) && data.chapters.length) {
-            toniesContentCache = data;
-            setCachedToniesContent(selectedToniesUrl, data);
+          if (url === selectedToniesUrl && drafts === toniesNameDrafts) {
+            const hasNewerEdits = Object.keys(drafts).some(key => drafts[key] !== submittedDrafts[key]);
+            if (!hasNewerEdits) {
+              toniesEditMode = false;
+              toniesNameDrafts = {};
+            }
+            setToniesStatus(hasNewerEdits ? 'Names updated. Unsaved edits remain.' : 'Names updated.', false);
           }
-
-          toniesEditMode = false;
-          toniesNameDrafts = {};
-          renderToniesEditUI();
-          renderToniesContent();
-          setToniesStatus('Names updated. Syncing…', true);
-          await refreshToniesContent({ clearList: false, preferCache: false, force: true });
-          setToniesStatus('', false);
-          renderToniesEditUI();
           showToast('Names updated', 'ok', 1500);
         } catch (e) {
-          await refreshToniesContent({ clearList: false, preferCache: false, force: true });
-          setToniesStatus('', false);
+          if (url === selectedToniesUrl && drafts === toniesNameDrafts) setToniesStatus(`Rename failed: ${e?.message || e}`, false);
+          showToast(`Rename failed: ${e?.message || e}`, 'err', 5200);
+        } finally {
+          toniesMutationInFlight = false;
+          toniesApplying = false;
+          void drainToniesUploadReconciliations();
           renderToniesEditUI();
-          showToast(`Rename failed. Library resynced; please try again. (${e.message || e})`, 'err', 5200);
+          renderToniesContent();
+          renderTonies();
+          void processPendingToniesDeletes();
+          void pumpLocalUploadQueue();
         }
       }
 
       function renderToniesContent() {
         const chapters = toniesContentCache?.chapters || [];
-        const deleteSettling = !!selectedToniesUrl && (pendingDeleteConfirmKeys.size > 0 || pendingDeleteKeys.size > 0);
         const freeRaw = toniesContentCache?.free_minutes;
         const freeNum = Number(freeRaw);
-        const hasFree = Number.isFinite(freeNum);
-        const total = Number(toniesContentCache?.total_minutes || 90);
+        const hasFree = freeRaw != null && Number.isFinite(freeNum);
+        const total = Number(toniesContentCache?.total_minutes ?? 90);
         const used = hasFree
           ? Math.max(0, total - freeNum)
           : (toniesContentCache?.used_minutes == null ? null : Number(toniesContentCache.used_minutes));
@@ -2871,22 +2659,7 @@
             || loadingTonies
           );
 
-          const fallbackCached = selectedToniesUrl ? getCachedToniesContent(selectedToniesUrl) : null;
-          if (!deletingAllToniesContent && hasUsableToniesChapters(fallbackCached)) {
-            if (deleteSettling) {
-              const displayData = getDeleteSettlingDisplayContent(selectedToniesUrl, fallbackCached);
-              if (displayData) {
-                toniesContentCache = displayData;
-                return renderToniesContent();
-              }
-            }
-            if (syncing) {
-              toniesContentCache = fallbackCached;
-              return renderToniesContent();
-            }
-          }
-
-          const showInlineSync = (syncing || deleteSettling) && !toniesApplying;
+          const showInlineSync = syncing;
           toniesContentEl.innerHTML = showInlineSync
             ? '<div class="tonies-sync-skeleton" title="Syncing with my.tonies.com…"></div>'
             : '<div class="tiny muted">No tracks on this Tonies yet. Upload from local files or YouTube above.</div>';
@@ -2896,8 +2669,8 @@
         const nowTs = Date.now();
         const busy = isToniesActionBusy();
         // Drop stale NEW markers aggressively so highlights always clear quickly.
-        recentUploadedChapterNorm = Object.fromEntries(
-          Object.entries(recentUploadedChapterNorm).filter(([, ts]) => (nowTs - Number(ts || 0)) < TONIES_NEW_HIGHLIGHT_MS)
+        recentUploadedChapterIds = Object.fromEntries(
+          Object.entries(recentUploadedChapterIds).filter(([, ts]) => (nowTs - Number(ts || 0)) < TONIES_NEW_HIGHLIGHT_MS)
         );
 
         const viewItems = chapters.map((c, i) => ({ c, sourceIndex: i }));
@@ -2919,39 +2692,25 @@
           : -1;
         const inlineDropSkeleton = '<div class="tonies-sync-skeleton" title="Uploading to this position…"></div>';
 
-        const placeholderHtml = (ph, slotIndex) => `
-          <div class="tonies-item removing" draggable="false" data-placeholder-key="${esc(ph.key || '')}">
-            <div class="drag-handle" style="opacity:0.25;">⋮⋮</div>
-            <div>
-              <div class="truncate"><strong>${esc(ph.title || 'Removing…')}</strong></div>
-              <div class="tiny" style="color:#9eb1dc;"><span class="loading-dot"></span>Removing…</div>
-            </div>
-            <div class="row" style="justify-content:flex-end;gap:6px;">
-              <div class="tiny mono">#${slotIndex + 1}</div>
-            </div>
-          </div>
-        `;
-
         const rowHtmlByIndex = new Map(viewItems.map(({ c, sourceIndex }) => {
           const rawTitle = uiText(c.title || `Chapter ${sourceIndex + 1}`);
           const title = toniesDisplayTitle(rawTitle);
           const displayNumber = sourceIndex + 1;
-          const draftTitle = String(toniesNameDrafts[sourceIndex] ?? title);
-          const norm = normalizeToniesTitle(title);
-          const ts = recentUploadedChapterNorm[norm] || 0;
+          const identityKey = getToniesIdentityKey(c);
+          const draftTitle = String(toniesNameDrafts[identityKey] ?? title);
+          const ts = recentUploadedChapterIds[c.chapter_id] || 0;
           const isNew = ts && (nowTs - ts) < TONIES_NEW_HIGHLIGHT_MS;
-          const deleteKey = getToniesIdentityKey(c, sourceIndex) || toniesDeleteKey(chapters, sourceIndex, norm);
+          const deleteKey = identityKey;
           const isDeleting = pendingDeleteKeys.has(deleteKey);
           const isQueuedDelete = pendingDeleteQueueKeys.has(deleteKey);
-          const isRemoving = recentlyRemovedTitles.has(norm) || confirmedDeletedKeys.has(deleteKey);
           const html = `
-          <div class="tonies-item ${isNew ? 'new-upload' : ''} ${(isDeleting || isQueuedDelete) ? 'deleting' : ''} ${isRemoving ? 'removing' : ''}" draggable="${(toniesEditMode || busy) ? 'false' : 'true'}" data-source-index="${sourceIndex}" style="${isRemoving ? 'display:none;' : ''}">
+          <div class="tonies-item ${isNew ? 'new-upload' : ''} ${(isDeleting || isQueuedDelete) ? 'deleting' : ''} " draggable="${(toniesEditMode || busy) ? 'false' : 'true'}" data-source-index="${sourceIndex}">
             <div class="drag-handle" style="opacity:${(toniesEditMode || busy) ? '0.35' : '1'};">⋮⋮</div>
             <div>
               ${toniesEditMode
                 ? `<input class="tonies-title-edit" data-source-index="${sourceIndex}" value="${esc(draftTitle)}" style="width:100%;border:1px solid #385082;border-radius:8px;background:#0a1328;padding:6px 8px;color:#e9efff;" />`
                 : `<div class="truncate"><strong>${esc(title)}</strong>${isNew ? ' <span class="tiny" style="color:#7df6cf;">NEW</span>' : ''}</div>`}
-              <div class="tiny">${esc(fmtChapterDuration(c.duration || ''))}</div>
+              <div class="tiny">${c.processing === true ? '<span class="loading-dot"></span>Processing audio…' : esc(fmtChapterDuration(c.duration || ''))}</div>
             </div>
             <div class="row" style="justify-content:flex-end;gap:6px;">
               <div class="tiny mono">#${displayNumber}</div>
@@ -2962,13 +2721,6 @@
           return [sourceIndex, html];
         }));
 
-        const placeholderMap = new Map();
-        for (const ph of deletePlaceholders) {
-          const idx = Math.max(0, Number(ph?.originalIndex) || 0);
-          if (!placeholderMap.has(idx)) placeholderMap.set(idx, []);
-          placeholderMap.get(idx).push(ph);
-        }
-
         const combined = [];
         const displayOrderIndices = viewItems.map(({ sourceIndex }) => sourceIndex);
         let injectedDropSkeleton = false;
@@ -2977,14 +2729,8 @@
             combined.push(inlineDropSkeleton);
             injectedDropSkeleton = true;
           }
-          const placeholders = placeholderMap.get(i) || [];
-          for (const ph of placeholders) combined.push(placeholderHtml(ph, i));
           combined.push(rowHtmlByIndex.get(i) || '');
-          placeholderMap.delete(i);
         });
-        for (const [idx, placeholders] of placeholderMap.entries()) {
-          for (const ph of placeholders) combined.push(placeholderHtml(ph, idx));
-        }
         if (dropIntentActive && !injectedDropSkeleton) combined.push(inlineDropSkeleton);
         const rowsHtml = combined.join('');
 
@@ -2995,7 +2741,7 @@
         toniesContentEl.querySelectorAll('.tonies-title-edit').forEach((inp) => {
           inp.addEventListener('input', () => {
             const idx = Number(inp.getAttribute('data-source-index'));
-            if (!Number.isNaN(idx)) toniesNameDrafts[idx] = inp.value;
+            if (!Number.isNaN(idx)) toniesNameDrafts[getToniesIdentityKey(chapters[idx])] = inp.value;
           });
         });
 
@@ -3249,581 +2995,128 @@
         });
       }
 
-      function clearToniesRefreshWatchdogs(url) {
-        const key = String(url || selectedToniesUrl || '');
-        if (!key) return;
-        if (toniesRefreshSoftWatchdogByUrl[key]) {
-          clearTimeout(toniesRefreshSoftWatchdogByUrl[key]);
-          toniesRefreshSoftWatchdogByUrl[key] = null;
-        }
-        if (toniesRefreshHardWatchdogByUrl[key]) {
-          clearTimeout(toniesRefreshHardWatchdogByUrl[key]);
-          toniesRefreshHardWatchdogByUrl[key] = null;
-        }
+      function toniesIsProcessing(data) {
+        return data?.processing === true || (data?.chapters || []).some(c => c.processing === true);
       }
 
-      function shouldAutoRetryToniesContent(url) {
-        const key = String(url || selectedToniesUrl || '');
-        if (!key) return false;
-        if (pendingToniesUpload) return true;
-        if (toniesUploadSyncing) return true;
-        if (pendingDropUploadIntent && pendingDropUploadIntent.targetUrl === key) return true;
-        if (pendingDeleteKeys.size || pendingDeleteConfirmKeys.size) return true;
-        return false;
+      function toniesProcessingStatus(data) {
+        return toniesIsProcessing(data)
+          ? (toniesProcessingPolls >= 30 ? 'Audio is still processing. Tap Refresh to check again.' : 'Saved to Tonies. Processing audio…')
+          : 'Synced with my.tonies.com';
       }
 
-      function reconcileToniesStatusIfIdle(url) {
-        const key = String(url || selectedToniesUrl || '');
-        const statusText = String(toniesStatusEl?.textContent || '').trim().toLowerCase();
-        const hasRetryTimer = !!(key && toniesContentRetryTimerByUrl[key]);
-        const busy = !!(
-          loadingToniesContent
-          || toniesUploadSyncing
-          || pendingToniesUpload
-          || syncingResultJobIds.size > 0
-          || pendingDeleteKeys.size > 0
-          || pendingDeleteConfirmKeys.size > 0
-          || hasRetryTimer
-        );
-        if (busy) return;
-        if (statusText.includes('syncing tonies library') || statusText.includes('loading tonies library')) {
-          setToniesStatus('Synced with my.tonies.com', false);
-        }
-      }
-
-      function scheduleToniesContentRetry(url, delayMs = 900, options = { clearList: false, preferCache: false, force: true }) {
-        const key = String(url || selectedToniesUrl || '');
-        if (!key) return;
-        if (!shouldAutoRetryToniesContent(key)) return;
-        if (toniesContentRetryTimerByUrl[key]) return;
-        toniesContentRetryTimerByUrl[key] = setTimeout(() => {
-          toniesContentRetryTimerByUrl[key] = null;
-          if (selectedToniesUrl === key) refreshToniesContent(options);
-        }, Math.max(250, Number(delayMs) || 900));
-      }
-
-      function uploadDisplayTitle(filename) {
-        return String(filename || '').replace(/\.[^.]+$/, '').replaceAll('_', ' ').trim() || 'Uploaded track';
-      }
-
-      function addOptimisticUploadedChapter(filename, targetUrl) {
-        const url = String(targetUrl || selectedToniesUrl || '');
-        const title = uploadDisplayTitle(filename);
-        if (!url || !title) return;
-        const norm = normalizeToniesTitle(title);
-        optimisticUploadedChaptersByUrl[url] = [
-          ...(optimisticUploadedChaptersByUrl[url] || []).filter(c => normalizeToniesTitle(c.title || '') !== norm),
-          { title, display_title: title, duration: '', pending_upload: true },
-        ];
+      function invalidateToniesContentRequests(url) {
+        toniesContentVersionByUrl[url] = (toniesContentVersionByUrl[url] || 0) + 1;
         if (url === selectedToniesUrl) {
-          toniesContentCache = { ...(toniesContentCache || {}), chapters: [...(toniesContentCache?.chapters || []), ...optimisticUploadedChaptersByUrl[url]] };
+          toniesContentRequestSeq += 1;
+          loadingToniesContent = false;
+          loadingToniesContentUrl = '';
+          if (toniesProcessingTimer) clearTimeout(toniesProcessingTimer);
+          toniesProcessingTimer = null;
         }
       }
 
-      function mergeOptimisticUploadedChapters(url, data) {
-        if (!Array.isArray(data?.chapters)) return data;
-        const pending = optimisticUploadedChaptersByUrl[url] || [];
-        if (!pending.length) return data;
-        const remoteTitles = new Set(data.chapters.map(c => normalizeToniesTitle(c?.title || '')));
-        const stillPending = pending.filter(c => !remoteTitles.has(normalizeToniesTitle(c.title || '')));
-        if (stillPending.length) optimisticUploadedChaptersByUrl[url] = stillPending;
-        else delete optimisticUploadedChaptersByUrl[url];
-        return stillPending.length ? { ...data, chapters: [...data.chapters, ...stillPending] } : data;
+      function scheduleToniesProcessingPoll(url, data, reset = false) {
+        if (url !== selectedToniesUrl) return;
+        if (toniesProcessingTimer) clearTimeout(toniesProcessingTimer);
+        toniesProcessingTimer = null;
+        if (reset) toniesProcessingPolls = 0;
+        if (!toniesIsProcessing(data) || toniesProcessingPolls >= 30) return;
+        toniesProcessingTimer = setTimeout(async () => {
+          toniesProcessingTimer = null;
+          if (url !== selectedToniesUrl || !toniesIsProcessing(toniesContentCache)) return;
+          toniesProcessingPolls += 1;
+          await refreshToniesContent({ targetUrl: url, force: true, processingPoll: true });
+        }, 2000);
+      }
+
+      function applyToniesContent(url, data, options = {}) {
+        if (data?.error) throw new Error(data.error);
+        if (!Array.isArray(data?.chapters)) throw new Error('Invalid Tonies content response. Tap Refresh to retry.');
+        invalidateToniesContentRequests(url);
+        setCachedToniesContent(url, data);
+        if (url === selectedToniesUrl) {
+          toniesContentCache = data;
+          scheduleToniesProcessingPoll(url, data, !options.processingPoll);
+          renderToniesContent();
+        }
+        renderTonies();
       }
 
       async function refreshToniesContent(options = {}) {
-        const { clearList = false, preferCache = false, force = false, targetUrl = '' } = options;
+        const { clearList = false, preferCache = false, force = false, targetUrl = '', processingPoll = false } = options;
         const url = targetUrl || selectedToniesUrl;
-        if (!url) return;
-        if (deletingAllToniesContent) {
-          // Preserve optimistic empty state during bulk delete-all.
-          return;
-        }
-        if (!shouldAutoRetryToniesContent(url) && toniesContentRetryTimerByUrl[url]) {
-          clearTimeout(toniesContentRetryTimerByUrl[url]);
-          toniesContentRetryTimerByUrl[url] = null;
-        }
-        const reqId = ++toniesContentRequestSeq;
-        const prevContent = toniesContentCache;
-
-        loadingToniesContent = true;
-        loadingToniesContentUrl = url;
-
-        if (preferCache) {
-          const cached = getCachedToniesContent(url);
-          if (cached) {
-            toniesContentCache = cached;
-            renderToniesContent();
-            if (!force && toniesContentLooksComplete(cached)) {
-              loadingToniesContent = false;
-              if (loadingToniesContentUrl === url) loadingToniesContentUrl = '';
-              setToniesStatus('', false);
-              return;
-            }
-          } else if (clearList) {
-            toniesContentCache = { chapters: [], free_minutes: null, total_minutes: 90, used_minutes: null };
-            renderToniesContent();
+        if (!url || deletingAllToniesContent) return;
+        const selected = url === selectedToniesUrl;
+        const cached = getCachedToniesContent(url);
+        if (selected && preferCache && cached) {
+          toniesContentCache = cached;
+          renderToniesContent();
+          if (!force) {
+            scheduleToniesProcessingPoll(url, cached, true);
+            setToniesStatus(toniesProcessingStatus(cached), false);
+            return;
           }
-        } else if (clearList) {
-          toniesContentCache = { chapters: [], free_minutes: null, total_minutes: 90, used_minutes: null };
+        } else if (selected && clearList) {
+          toniesContentCache = { chapters: [], free_minutes: null, total_minutes: 90 };
+        }
+        const reqId = selected ? ++toniesContentRequestSeq : null;
+        const version = toniesContentVersionByUrl[url] || 0;
+        if (selected) {
+          loadingToniesContent = true;
+          loadingToniesContentUrl = url;
+          if (!processingPoll) setToniesStatus('Loading Tonies library…', false);
           renderToniesContent();
         }
-
-        setToniesStatus('Loading Tonies library…', true);
-        clearToniesRefreshWatchdogs(url);
-        toniesRefreshSoftWatchdogByUrl[url] = setTimeout(() => {
-          if (loadingToniesContent && loadingToniesContentUrl === url && selectedToniesUrl === url) {
-            setToniesStatus('Syncing Tonies library…', true);
-          }
-        }, 4500);
-        // MyTonies' editor can legitimately take slightly over 30s after an SSO retry.
-        // Do not call an in-flight request "stalled" moments before its authoritative
-        // result arrives; the API timeout remains the real failure boundary.
-        toniesRefreshHardWatchdogByUrl[url] = setTimeout(() => {
-          if (loadingToniesContent && loadingToniesContentUrl === url && selectedToniesUrl === url) {
-            setToniesStatus('Still syncing with my.tonies.com…', true);
-          }
-        }, 30000);
-
         try {
-          let data = await api('/api/tonies-content', {
+          const data = await api('/api/tonies-content', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ target_url: url })
           }, 45000);
-
-          // Ignore stale responses from older requests.
-          if (reqId !== toniesContentRequestSeq || url !== selectedToniesUrl) {
-            return;
-          }
-
-          if (data?.error) {
-            if (prevContent && Array.isArray(prevContent.chapters) && prevContent.chapters.length) {
-              toniesContentCache = prevContent;
-            }
-            toniesUploadSyncing = shouldKeepToniesUploadSyncing();
-            setToniesStatus(`Error: ${data.error}`, false);
-            renderToniesContent();
-            return;
-          }
-          if (Array.isArray(data?.chapters)) {
-            noteConfirmedDeleteRefreshPass(data.chapters);
-            data = { ...data, chapters: filterConfirmedDeletedChapters(data.chapters) };
-            data = mergeOptimisticUploadedChapters(url, data);
-          }
-          const prevTitles = new Set((toniesContentCache?.chapters || []).map(c => normalizeToniesTitle(c?.title || '')));
-          const nextTitles = (data?.chapters || []).map(c => normalizeToniesTitle(c?.title || ''));
-          const newlyAdded = nextTitles.filter(t => t && !prevTitles.has(t));
-
-        const deletePendingBeforeRefresh = pendingDeleteConfirmKeys.size > 0 || pendingDeleteKeys.size > 0;
-
-        const incomingHasChapters = hasUsableToniesChapters(data);
-
-        // Clear pending delete markers once the targeted identity no longer exists,
-        // but only after Tonies has returned a non-empty settled list again.
-        const removedNow = [];
-        if (incomingHasChapters) {
-          for (const k of [...pendingDeleteKeys]) {
-            if (!isPendingDeleteStillPresent(k, data?.chapters || [])) {
-              removedNow.push(k);
-            }
-          }
-        }
-
-        if (removedNow.length) {
-          console.debug('[tonies-delete] removedNow on refresh', { removedNow: [...removedNow] });
-          removedNow.forEach(k => {
-            const norm = String(k || '').split('#')[0];
-            if (norm) recentlyRemovedTitles.add(norm);
-          });
-        }
-
-        // If a "delete applied, syncing" candidate still exists after follow-up sync,
-        // retry forced refresh a few times before failing.
-        const stillPresentAfterConfirm = [...pendingDeleteConfirmKeys].filter(k => (
-          isPendingDeleteStillPresent(k, data?.chapters || [])
-        ));
-        let shouldScheduleForcedDeleteSync = false;
-        if (stillPresentAfterConfirm.length) {
-          for (const k of stillPresentAfterConfirm) {
-            const tries = Number(pendingDeleteSyncAttempts.get(k) || 0) + 1;
-            pendingDeleteSyncAttempts.set(k, tries);
-            if (tries >= 3) {
-              pendingDeleteKeys.delete(k);
-              pendingDeleteConfirmKeys.delete(k);
-              pendingDeleteNormMaxCount.delete(k);
-              pendingDeleteSyncAttempts.delete(k);
-              showToast('Delete did not apply. Please try again.', 'err', 3200);
-            } else {
-              shouldScheduleForcedDeleteSync = true;
-            }
-          }
-        }
-
-        if (incomingHasChapters) {
-          pendingDeleteKeys = new Set([...pendingDeleteKeys].filter(k => isPendingDeleteStillPresent(k, data?.chapters || [])));
-          if (!pendingDeleteKeys.size) {
-            pendingDeleteIndices = new Set();
-            pendingDeleteNormMaxCount = new Map();
-            pendingDeleteSyncAttempts = new Map();
-          }
-        }
-
-        if (shouldScheduleForcedDeleteSync && selectedToniesUrl === url && pendingDeleteConfirmKeys.size) {
-          scheduleToniesContentRetry(url, 700, { clearList: false, preferCache: false, force: true });
-        }
-        if (markNewFromNextSync) {
-          recentUploadedChapterNorm = {};
-          for (const t of newlyAdded) recentUploadedChapterNorm[t] = Date.now();
-          if (toniesNewClearTimer) clearTimeout(toniesNewClearTimer);
-          toniesNewClearTimer = setTimeout(() => {
-            recentUploadedChapterNorm = {};
-            renderToniesContent();
-          }, TONIES_NEW_HIGHLIGHT_MS);
-        }
-
-        // Guard against transient empty/incomplete responses during upload sync.
-        if ((data?.chapters || []).length === 0) {
-          const fallbackCached = getCachedToniesContent(url);
-          const fallback = (prevContent && (prevContent.chapters || []).length) ? prevContent : fallbackCached;
-          const retryCount = Number(toniesFallbackRetryByUrl[url] || 0);
-          const hasPendingDeleteConfirmation = deletePendingBeforeRefresh;
-
-          if (hasPendingDeleteConfirmation) {
-            const displayData = getDeleteSettlingDisplayContent(url, fallback);
-            if (displayData) {
-              toniesContentCache = displayData;
-            }
-            toniesUploadSyncing = shouldKeepToniesUploadSyncing();
-            setToniesStatus('Delete applied. Waiting for my.tonies.com library to settle…', true);
-            renderTonies();
-            renderToniesContent();
-            if (retryCount < 6) {
-              toniesFallbackRetryByUrl[url] = retryCount + 1;
-              scheduleToniesContentRetry(url, 1200, { clearList: false, preferCache: false, force: true });
-            } else {
-              toniesFallbackRetryByUrl[url] = 0;
-              setToniesStatus('Delete applied, but Tonies is still returning an empty library. Refresh again in a moment.', false);
-              showToast('Tonies is temporarily returning an empty library. Waiting for it to repopulate…', 'warn', 4200);
-            }
-            return;
-          }
-
-          if (!fallback && retryCount < 3) {
-            toniesUploadSyncing = shouldKeepToniesUploadSyncing();
-            setToniesStatus('Syncing Tonies library…', true);
-            renderTonies();
-            renderToniesContent();
-            toniesFallbackRetryByUrl[url] = retryCount + 1;
-            scheduleToniesContentRetry(url, 1200, { clearList: false, preferCache: false, force: true });
-            return;
-          }
-
-          if (!fallback) {
-            toniesFallbackRetryByUrl[url] = 0;
-            toniesUploadSyncing = shouldKeepToniesUploadSyncing();
-            setToniesStatus('No content loaded yet. Tap Refresh to try again.', false);
-            renderTonies();
-            renderToniesContent();
-            return;
-          }
-
-          if (fallback && (fallback.chapters || []).length) {
-            const fallbackHasPendingDeleteRows = chapterListHasPendingDeleteSignals(fallback.chapters || []);
-            toniesContentCache = fallback;
-            setCachedToniesContent(url, fallback);
-            toniesUploadSyncing = shouldKeepToniesUploadSyncing();
-            setToniesStatus('Syncing Tonies library…', true);
-            renderToniesContent();
-
-            // Bound fallback retry loops to avoid infinite resync churn.
-            if (retryCount < 3) {
-              toniesFallbackRetryByUrl[url] = retryCount + 1;
-              scheduleToniesContentRetry(url, 1200, { clearList: false, preferCache: false, force: true });
-            } else {
-              toniesFallbackRetryByUrl[url] = 0;
-              setToniesStatus('Sync stalled. Tap Refresh to try again.', false);
-              if (fallbackHasPendingDeleteRows) {
-                showToast('Tonies sync still returning stale data. Try refresh in a moment.', 'warn', 3600);
-              } else {
-                showToast('Tonies sync stalled. Tap Refresh to retry.', 'warn', 3200);
-              }
-            }
-            return;
-          }
-        }
-
-        if (removedNow.length) {
-          removedNow.forEach(k => {
-            pendingDeleteKeys.delete(k);
-            pendingDeleteConfirmKeys.delete(k);
-            pendingDeleteNormMaxCount.delete(k);
-            pendingDeleteSyncAttempts.delete(k);
-          });
-          // Render old list with dissolve effect briefly before applying new list.
-          renderToniesContent();
-          await new Promise(r => setTimeout(r, 300));
-          removedNow.forEach(k => {
-            const norm = String(k || '').split('#')[0];
-            if (norm) recentlyRemovedTitles.delete(norm);
-          });
-        }
-
-        toniesFallbackRetryByUrl[url] = 0;
-        toniesErrorRetryByUrl[url] = 0;
-
-        let finalData = data;
-        let hadDropPositionIntent = false;
-        let needsDropPositionVerifyRefresh = false;
-
-        if (pendingDropUploadIntent && pendingDropUploadIntent.targetUrl === url) {
-          hadDropPositionIntent = true;
-          const intent = pendingDropUploadIntent;
-          const dataChapters = data.chapters || [];
-          // `targetIndex` stores the intended FINAL native index of the uploaded item
-          // after the upload has landed in the chapter list.
-          const desired = Math.max(0, Math.min(Math.max(0, dataChapters.length - 1), Number(intent.targetIndex) || 0));
-          const filenameNorm = normalizeToniesTitle(intent.filename || '');
-          const prevCount = (prevContent?.chapters || []).length;
-          const nextCount = dataChapters.length;
-          let newIdx = -1;
-
-          // Detect added chapter by identity-count diff (works whether Tonies inserts at start or end).
-          if (nextCount > prevCount) {
-            const prevCounts = new Map();
-            (prevContent?.chapters || []).forEach((ch, i) => {
-              const k = getToniesIdentityKey(ch, i);
-              prevCounts.set(k, Number(prevCounts.get(k) || 0) + 1);
-            });
-            const seenCounts = new Map();
-            newIdx = (dataChapters || []).findIndex((ch, i) => {
-              const k = getToniesIdentityKey(ch, i);
-              const seen = Number(seenCounts.get(k) || 0) + 1;
-              seenCounts.set(k, seen);
-              const prevSeen = Number(prevCounts.get(k) || 0);
-              return seen > prevSeen;
-            });
-          }
-
-          if (newIdx < 0 && newlyAdded.length) {
-            const addedSet = new Set(newlyAdded);
-            newIdx = dataChapters.findIndex(c => addedSet.has(normalizeToniesTitle(c?.title || '')));
-          }
-          if (newIdx < 0 && filenameNorm) {
-            newIdx = dataChapters.findIndex(c => {
-              const t = normalizeToniesTitle(c?.title || '');
-              return t.includes(filenameNorm) || filenameNorm.includes(t);
-            });
-          }
-          if (newIdx < 0) {
-            // A stale list must never move a guessed "newest" row. Keep the drop
-            // intent until the uploaded row can be identified from remote state.
-            needsDropPositionVerifyRefresh = true;
-            scheduleToniesContentRetry(url, 900, { clearList: false, preferCache: false, force: true });
-            return;
-          }
-
-          if (newIdx >= 0 && desired >= 0 && newIdx !== desired) {
-            // Always apply optimistic reorder locally first to avoid intermediate jumpy ordering.
-            const optimistic = [...(dataChapters || [])];
-            if (newIdx < optimistic.length && desired < optimistic.length) {
-              const [movedItem] = optimistic.splice(newIdx, 1);
-              optimistic.splice(desired, 0, movedItem);
-              finalData = { ...(data || {}), chapters: optimistic };
-            }
-
-            setToniesStatus('Upload synced. Positioning in list…', true);
-            const moved = await api('/api/tonies-content/reorder', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ target_url: selectedToniesUrl, from_index: newIdx, to_index: desired })
-            });
-            if (!moved?.error) {
-              const movedEmpty = !Array.isArray(moved?.chapters) || (moved.chapters || []).length === 0;
-              const movedNorm = normalizeToniesTitle(dataChapters[newIdx]?.title || '');
-              const postNorm = normalizeToniesTitle((moved?.chapters || [])[desired]?.title || '');
-              const movedLooksCorrect = !movedEmpty && (!movedNorm || !postNorm || movedNorm === postNorm);
-
-              if (movedLooksCorrect) {
-                finalData = moved;
-              } else {
-                // Keep optimistic list and verify once in background.
-                needsDropPositionVerifyRefresh = true;
-              }
-            }
-          }
-          pendingDropUploadIntent = null;
-        }
-
-          if (deletePendingBeforeRefresh && !hasUsableToniesChapters(finalData)) {
-            const displayData = getDeleteSettlingDisplayContent(url, prevContent);
-            if (displayData) {
-              toniesContentCache = displayData;
-              lastToniesContentUrl = url;
-              toniesUploadSyncing = shouldKeepToniesUploadSyncing();
-              renderTonies();
-              renderToniesContent();
-              setToniesStatus('Delete applied. Waiting for my.tonies.com library to settle…', true);
-              scheduleToniesContentRetry(url, 900, { clearList: false, preferCache: false, force: true });
-              return;
-            }
-          }
-
-          const persistFinalData = shouldPersistToniesContent(url, finalData, prevContent);
-          toniesContentCache = persistFinalData ? finalData : (getDeleteSettlingDisplayContent(url, prevContent) || prevContent || finalData);
-          lastToniesContentUrl = url;
-          if (persistFinalData) setCachedToniesContent(url, finalData);
-          toniesUploadSyncing = shouldKeepToniesUploadSyncing();
-          renderTonies();
-          renderToniesContent();
-          if (lastMovedSourceIndex != null) {
-            pulseToniesRow(lastMovedSourceIndex);
-            lastMovedSourceIndex = null;
-          }
-
-          // Keep list position stable; do not auto-scroll after sync/upload.
-          markNewFromNextSync = false;
-          setToniesStatus('Synced with my.tonies.com', false);
-          if (hadDropPositionIntent && needsDropPositionVerifyRefresh) {
-            scheduleToniesContentRetry(url, 900, { clearList: false, preferCache: false, force: true });
-          }
+          if (version !== (toniesContentVersionByUrl[url] || 0)) return;
+          if (selected && (reqId !== toniesContentRequestSeq || url !== selectedToniesUrl)) return;
+          applyToniesContent(url, data, { processingPoll });
+          if (url === selectedToniesUrl) setToniesStatus(toniesProcessingStatus(data), false);
         } catch (e) {
-          const msg = String(e?.message || e || '').toLowerCase();
-          const transientPlaywright = msg.includes('playwright sync api inside the asyncio loop')
-            || msg.includes('cannot switch to a different thread');
-
-          toniesUploadSyncing = shouldKeepToniesUploadSyncing();
-          if (transientPlaywright) {
-            const retryCount = Number(toniesErrorRetryByUrl[url] || 0) + 1;
-            toniesErrorRetryByUrl[url] = retryCount;
-            setToniesStatus('Syncing Tonies library…', true);
-            renderToniesContent();
-            if (retryCount <= 4 && shouldAutoRetryToniesContent(url)) {
-              scheduleToniesContentRetry(url, 900, { clearList: false, preferCache: false, force: true });
-            } else {
-              toniesErrorRetryByUrl[url] = 0;
-              setToniesStatus('Sync error. Tap Refresh to try again.', false);
-              showToast('Tonies sync retry stopped. Tap Refresh to retry.', 'warn', 4200);
-            }
-          } else {
+          if (version !== (toniesContentVersionByUrl[url] || 0)) return;
+          if (selected && reqId === toniesContentRequestSeq && url === selectedToniesUrl) {
             setToniesStatus(`Error: ${e?.message || e}`, false);
-            renderToniesContent();
           }
         } finally {
-          clearToniesRefreshWatchdogs(url);
-          if (url === selectedToniesUrl) {
+          if (selected && reqId === toniesContentRequestSeq) {
             loadingToniesContent = false;
+            loadingToniesContentUrl = '';
           }
-          if (loadingToniesContentUrl === url) loadingToniesContentUrl = '';
-          reconcileToniesStatusIfIdle(url);
-
+          renderTonies();
+          renderToniesContent();
         }
       }
 
-      function getToniesIdentityKey(chapter, index = 0) {
-        const token = String(chapter?.app_track_token || extractToniesAppToken(chapter?.title || '')).trim().toLowerCase();
-        if (token) return `token:${token}`;
-        const chapterId = String(chapter?.chapter_id || chapter?.content_id || chapter?.id || '').trim();
-        if (chapterId && chapterId !== 'chapter-list-item') return `id:${chapterId}`;
-        const titleNorm = normalizeToniesTitle(chapter?.title || `chapter ${index + 1}`);
-        const durNorm = String(chapter?.duration || '').trim();
-        return `fp:${titleNorm}|${durNorm}`;
+      function getToniesIdentityKey(chapter) {
+        // Cloud chapter IDs, not DOM IDs, title tokens, names or row positions.
+        return chapter?.chapter_id ? `id:${chapter.chapter_id}` : '';
       }
 
-      function chapterFingerprint(chapter, index = 0) {
-        const titleNorm = normalizeToniesTitle(chapter?.title || `chapter ${index + 1}`);
-        const durNorm = String(chapter?.duration || '').trim();
-        return `${titleNorm}|${durNorm}`;
-      }
-
-      function findToniesIndexByDeleteKey(deleteEntry) {
-        const chapters = toniesContentCache?.chapters || [];
-        const rawKey = typeof deleteEntry === 'string' ? String(deleteEntry) : String(deleteEntry?.key || '');
-        const targetNorm = typeof deleteEntry === 'string'
-          ? String(deleteEntry).split('#')[0]
-          : String(deleteEntry?.norm || '');
-        const chapterId = String(deleteEntry?.chapterId || '').trim();
-        const chapterFp = String(deleteEntry?.chapterFp || '').trim();
-        const chapterToken = String(deleteEntry?.appTrackToken || '').trim().toLowerCase();
-        const preferredIndex = Number(deleteEntry?.originalIndex);
-        const keyOcc = Number(String(rawKey || '').split('#')[1] || '0');
-
-        if (chapterToken) {
-          const byTokenIndex = chapters.findIndex((c) => String(c?.app_track_token || extractToniesAppToken(c?.title || '')).trim().toLowerCase() === chapterToken);
-          if (byTokenIndex >= 0) return byTokenIndex;
-        }
-
-        if (chapterId && chapterId !== 'chapter-list-item') {
-          const byIdIndex = chapters.findIndex((c) => String(c?.chapter_id || c?.content_id || c?.id || '').trim() === chapterId);
-          if (byIdIndex >= 0) return byIdIndex;
-        }
-
-        if (chapterFp) {
-          const byFp = [];
-          for (let i = 0; i < chapters.length; i++) {
-            if (chapterFingerprint(chapters[i], i) === chapterFp) byFp.push(i);
-          }
-          if (byFp.length === 1) return byFp[0];
-          if (byFp.length > 1 && !Number.isNaN(preferredIndex)) {
-            byFp.sort((a, b) => Math.abs(a - preferredIndex) - Math.abs(b - preferredIndex));
-            return byFp[0];
-          }
-        }
-
-        const matches = [];
-        for (let i = 0; i < chapters.length; i++) {
-          const norm = normalizeToniesTitle(chapters[i]?.title || '');
-          if (norm === targetNorm) matches.push(i);
-        }
-        if (!matches.length) return -1;
-
-        // Primary: honor delete-key occurrence (same normalized title occurrence order).
-        if (Number.isFinite(keyOcc) && keyOcc > 0 && keyOcc <= matches.length) {
-          return matches[keyOcc - 1];
-        }
-
-        // Secondary: nearest original position.
-        if (!Number.isNaN(preferredIndex)) {
-          matches.sort((a, b) => Math.abs(a - preferredIndex) - Math.abs(b - preferredIndex));
-        }
-        return matches[0];
+      function findToniesIndexByDeleteKey(entry) {
+        const content = entry.targetUrl === selectedToniesUrl ? toniesContentCache : getCachedToniesContent(entry.targetUrl);
+        return (content?.chapters || []).findIndex(c => c.chapter_id === entry.chapterId);
       }
 
       async function processPendingToniesDeletes() {
-        if (deleteQueueRunning) return;
+        if (deleteQueueRunning || toniesApplying || toniesMutationInFlight || hasToniesUploadBusy()) return;
         deleteQueueRunning = true;
         try {
-          while (pendingDeleteQueue.length) {
-            if (hasToniesUploadBusy()) {
-              // Pause queue until uploads finish (without noisy toast spam).
-              setTimeout(() => { processPendingToniesDeletes(); }, 350);
-              break;
-            }
-            const deleteEntry = pendingDeleteQueue[0];
-            pendingDeleteQueue.shift();
-            pendingDeleteQueueKeys.delete(deleteEntry?.key || deleteEntry);
-            const idx = findToniesIndexByDeleteKey(deleteEntry);
-            if (idx < 0) continue; // already removed after prior delete/sync
-            await deleteToniesChapter(idx, false, true, true);
+          while (pendingDeleteQueue.length && !hasToniesUploadBusy()) {
+            const entry = pendingDeleteQueue.shift();
+            pendingDeleteQueueKeys.delete(entry.key);
+            const index = findToniesIndexByDeleteKey(entry);
+            if (index < 0) continue;
+            await deleteToniesChapter(index, true, true, entry.targetUrl, entry.chapterId);
           }
         } finally {
           deleteQueueRunning = false;
-          if (!pendingDeleteQueue.length && pendingDeleteIndices.size === 0) {
-            const needsFinalSync = deleteQueueNeedsFinalSync || pendingDeleteConfirmKeys.size > 0;
-            if (needsFinalSync && selectedToniesUrl) {
-              deleteQueueNeedsFinalSync = false;
-              setToniesStatus('Finalizing queued deletes with Tonies…', true);
-              try {
-                await refreshToniesContent({ clearList: false, preferCache: false, force: true });
-              } catch {}
-            }
-            setTimeout(() => {
-              if (!pendingDeleteQueue.length && pendingDeleteIndices.size === 0) {
-                deletePlaceholders = [];
-                renderToniesContent();
-              }
-            }, 350);
-          }
+          renderToniesContent();
         }
       }
 
@@ -3833,243 +3126,101 @@
           showToast('Please wait for the current Tonies upload to finish.', 'warn', 5200);
           return;
         }
-        const chapters = toniesContentCache?.chapters || [];
-        const chapter = chapters[index];
-        const chapterRawName = uiText(chapter?.title || `Chapter #${Number(index) + 1}`);
-        const chapterName = toniesDisplayTitle(chapterRawName);
-        const chapterNorm = normalizeToniesTitle(chapterRawName);
-        const chapterId = String(chapter?.chapter_id || chapter?.content_id || chapter?.id || '').trim();
-        const appTrackToken = String(chapter?.app_track_token || extractToniesAppToken(chapter?.title || '')).trim().toLowerCase();
-        const chapterFp = chapterFingerprint(chapter, index);
-        const deleteKey = getToniesIdentityKey(chapter, index) || toniesDeleteKey(chapters, index, chapterNorm);
-        if (pendingDeleteKeys.has(deleteKey) || pendingDeleteQueueKeys.has(deleteKey)) return;
-
+        const targetUrl = selectedToniesUrl;
+        const chapter = toniesContentCache?.chapters?.[index];
+        const key = getToniesIdentityKey(chapter);
+        if (!key) { showToast('Track ID is missing. Refresh before deleting.', 'err'); return; }
+        if (pendingDeleteKeys.has(key) || pendingDeleteQueueKeys.has(key)) return;
+        const chapterName = toniesDisplayTitle(uiText(chapter.title || `Chapter #${index + 1}`));
         const ok = await askConfirm({
           title: 'Remove from Tonies?',
           message: `${chapterName}\n\nThis will update the Tonies library.`,
           confirmText: 'Remove'
         });
-        if (!ok) return;
-
-        pendingDeleteQueue.push({ key: deleteKey, norm: chapterNorm, chapterId, appTrackToken, chapterFp, originalIndex: index, title: chapterName });
-        pendingDeleteQueueKeys.add(deleteKey);
+        if (!ok || targetUrl !== selectedToniesUrl || pendingDeleteKeys.has(key) || pendingDeleteQueueKeys.has(key)) return;
+        pendingDeleteQueue.push({ key, chapterId: chapter.chapter_id, targetUrl });
+        pendingDeleteQueueKeys.add(key);
         renderToniesContent();
-
-        const hasActiveDelete = pendingDeleteIndices.size > 0 || toniesApplying || deleteQueueRunning;
-        if (hasActiveDelete || pendingDeleteQueue.length > 1) {
-          showToast('Queued for delete', 'ok', 1400);
-        }
-
-        processPendingToniesDeletes();
+        if (deleteQueueRunning || toniesApplying) showToast('Queued for delete', 'ok', 1400);
+        void processPendingToniesDeletes();
       }
 
-      async function deleteToniesChapter(index, retrying = false, assumeConfirmed = false, fromQueue = false) {
-        if (!selectedToniesUrl) return;
-        if (pendingDeleteIndices.has(index)) return;
-        if (!retrying && !fromQueue && blockIfActionInProgress()) return;
-
-        const chapters = toniesContentCache?.chapters || [];
-        const chapter = chapters[index];
-        const chapterRawName = uiText(chapter?.title || `Chapter #${Number(index) + 1}`);
-        const chapterName = toniesDisplayTitle(chapterRawName);
-        const chapterNorm = normalizeToniesTitle(chapterRawName);
-        const chapterId = String(chapter?.chapter_id || chapter?.content_id || chapter?.id || '').trim();
-        const appTrackToken = String(chapter?.app_track_token || extractToniesAppToken(chapter?.title || '')).trim().toLowerCase();
-        const chapterFp = chapterFingerprint(chapter, index);
-        const deleteKey = getToniesIdentityKey(chapter, index) || toniesDeleteKey(chapters, index, chapterNorm);
-        const occurrenceKey = toniesDeleteKey(chapters, index, chapterNorm);
-        const deleteOccurrence = Number(String(occurrenceKey).split('#')[1] || '1');
-        if (pendingDeleteKeys.has(deleteKey)) return;
-        let ok = true;
-        if (!retrying && !assumeConfirmed) {
-          ok = await askConfirm({
-            title: 'Remove from Tonies?',
-            message: `${chapterName}\n\nThis will update the Tonies library.`,
-            confirmText: 'Remove'
-          });
+      async function deleteToniesChapter(index, assumeConfirmed = false, fromQueue = false, targetUrl = selectedToniesUrl, expectedChapterId = null) {
+        if (!targetUrl || (!fromQueue && blockIfActionInProgress())) return;
+        const content = targetUrl === selectedToniesUrl ? toniesContentCache : getCachedToniesContent(targetUrl);
+        const chapter = content?.chapters?.[index];
+        const chapterId = chapter?.chapter_id;
+        const key = getToniesIdentityKey(chapter);
+        if (!key || (expectedChapterId && chapterId !== expectedChapterId) || pendingDeleteKeys.has(key)) return;
+        if (!assumeConfirmed) {
+          // All human deletes enter the identity-bound confirmation queue.
+          await enqueueToniesDelete(index);
+          return;
         }
-        if (!ok) return;
-
         pendingDeleteIndices.add(index);
-        pendingDeleteKeys.add(deleteKey);
+        pendingDeleteKeys.add(key);
+        toniesMutationInFlight = true;
+        invalidateToniesContentRequests(targetUrl);
+        if (targetUrl === selectedToniesUrl) setToniesStatus('Applying delete…', true);
         renderToniesContent();
-
-        const prev = toniesContentCache;
-        markNewFromNextSync = false;
-        setToniesStatus('Applying delete…', true);
-
         try {
           const data = await api('/api/tonies-content/delete', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ target_url: selectedToniesUrl, index, chapter_title: chapterRawName, chapter_occurrence: Number.isFinite(deleteOccurrence) ? deleteOccurrence : 1, chapter_id: chapterId, chapter_fingerprint: chapterFp, app_track_token: appTrackToken })
-          }, 90000);
-
-          if (data?.error) {
-            pendingDeleteIndices.delete(index);
-            pendingDeleteKeys.delete(deleteKey);
-            pendingDeleteConfirmKeys.delete(deleteKey);
-            pendingDeleteNormMaxCount.delete(deleteKey);
-            pendingDeleteSyncAttempts.delete(deleteKey);
-
-            await refreshToniesContent({ clearList: false, preferCache: false, force: true });
-            setToniesStatus(`Delete failed: ${data.error}`, false);
-            showToast('Delete failed. Library resynced; please try again.', 'err', 5200);
-            renderToniesContent();
-            return;
-          }
-
-          const incomingCount = (data?.chapters || []).length;
-          const prevCount = (prev?.chapters || []).length;
-          const deleteStillPresent = isPendingDeleteStillPresent(deleteKey, data?.chapters || []);
-          console.debug('[tonies-delete] api result', {
-            deleteKey,
-            incomingCount,
-            prevCount,
-            deleteStillPresent,
-            chapters: (data?.chapters || []).map((c, i) => ({ i, key: getToniesIdentityKey(c, i), title: c?.title || '', duration: c?.duration || '' })).slice(0, 30)
-          });
-
-          // Guard against transient/indeterminate responses from Tonies UI automation.
-          // Do not blindly restore the previous cache just because the backend returned 0 chapters,
-          // since a real post-delete Tonies fetch can transiently come back empty during reprocessing.
-          if (deleteStillPresent) {
-            toniesContentCache = prev;
-            pendingDeleteIndices.delete(index);
-            pendingDeleteConfirmKeys.add(deleteKey);
-            pendingDeleteSyncAttempts.set(deleteKey, 0);
-            // Keep keyed pending marker until a sync confirms removal.
-            setToniesStatus('Delete applied. Syncing my.tonies.com library…', true);
-            renderToniesContent();
-            if (fromQueue) {
-              deleteQueueNeedsFinalSync = true;
-            } else {
-              refreshToniesContent({ clearList: false, preferCache: false, force: true });
-            }
-            return;
-          }
-
-          if (incomingCount === 0 && prevCount > 0) {
-            toniesContentCache = prev;
-            pendingDeleteIndices.delete(index);
-            pendingDeleteConfirmKeys.add(deleteKey);
-            pendingDeleteSyncAttempts.set(deleteKey, 0);
-            setToniesStatus('Delete applied. Waiting for my.tonies.com library to settle…', true);
-            renderToniesContent();
-            if (fromQueue) {
-              deleteQueueNeedsFinalSync = true;
-            } else {
-              refreshToniesContent({ clearList: false, preferCache: false, force: true });
-            }
-            return;
-          }
-
-          markConfirmedDeletedKey(deleteKey, { ttlMs: 10000, remainingChecks: 3 });
-          toniesContentCache = { ...data, chapters: filterConfirmedDeletedChapters(data?.chapters || []) };
-          setCachedToniesContent(selectedToniesUrl, toniesContentCache);
-          pendingDeleteIndices.delete(index);
-          pendingDeleteKeys.delete(deleteKey);
-          pendingDeleteConfirmKeys.delete(deleteKey);
-          pendingDeleteNormMaxCount.delete(deleteKey);
-          pendingDeleteSyncAttempts.delete(deleteKey);
-          if (!deletePlaceholders.some((ph) => ph.key === deleteKey)) {
-            deletePlaceholders.push({ key: deleteKey, title: chapterName, originalIndex: index, norm: chapterNorm });
-          }
-          setToniesStatus('Delete applied and saved to Tonies.', false);
+            body: JSON.stringify({ target_url: targetUrl, index, chapter_id: chapterId })
+          }, 60000);
+          applyToniesContent(targetUrl, data);
+          if (targetUrl === selectedToniesUrl) setToniesStatus(toniesProcessingStatus(data), false);
           showToast('Removed from Tonies', 'ok');
-          renderToniesContent();
         } catch (e) {
-          pendingDeleteIndices.delete(index);
-          pendingDeleteKeys.delete(deleteKey);
-          pendingDeleteConfirmKeys.delete(deleteKey);
-          pendingDeleteNormMaxCount.delete(deleteKey);
-          pendingDeleteSyncAttempts.delete(deleteKey);
-
-          await refreshToniesContent({ clearList: false, preferCache: false, force: true });
-          setToniesStatus(`Delete failed: ${e?.message || e}`, false);
-          showToast('Delete failed. Library resynced; please try again.', 'err', 5200);
-          renderToniesContent();
+          if (targetUrl === selectedToniesUrl) setToniesStatus(`Delete failed: ${e?.message || e}`, false);
+          showToast(`Delete failed: ${e?.message || e}`, 'err', 5200);
         } finally {
-          // Run any queued deletes one-at-a-time after this attempt finishes.
-          setTimeout(() => { processPendingToniesDeletes(); }, 0);
+          pendingDeleteIndices.delete(index);
+          pendingDeleteKeys.delete(key);
+          toniesMutationInFlight = false;
+          toniesApplying = false;
+          void drainToniesUploadReconciliations();
+          renderToniesContent();
+          renderTonies();
+          if (!fromQueue) void processPendingToniesDeletes();
+          void pumpLocalUploadQueue();
         }
       }
 
-      async function reorderToniesChapter(fromIndex, toIndex, retrying = false) {
-        if (!selectedToniesUrl) return;
-        if (!retrying && blockIfActionInProgress()) return;
-        markNewFromNextSync = false;
-
-        const prev = toniesContentCache;
-        const prevChapters = [...(prev?.chapters || [])];
-        const movedBefore = prevChapters[fromIndex] || null;
-        const movedBeforeNorm = normalizeToniesTitle(movedBefore?.title || '');
-        if (fromIndex >= 0 && toIndex >= 0 && fromIndex < prevChapters.length && toIndex < prevChapters.length) {
-          const [moved] = prevChapters.splice(fromIndex, 1);
-          prevChapters.splice(toIndex, 0, moved);
-          toniesContentCache = { ...prev, chapters: prevChapters };
-          renderToniesContent();
-        }
-
-        let requestFromIndex = fromIndex;
-        let requestToIndex = toIndex;
-        if (retrying) {
-          const liveChapters = toniesContentCache?.chapters || [];
-          const liveFromIndex = liveChapters.findIndex((c) => normalizeToniesTitle(c?.title || '') === movedBeforeNorm);
-          if (liveFromIndex < 0) {
-            toniesContentCache = prev;
-            setToniesStatus(`Reorder failed: could not find original item to move`, false);
-            showToast('Reorder failed after resync. Please try again.', 'err', 5200);
-            renderToniesContent();
-            return;
-          }
-          requestFromIndex = liveFromIndex;
-          requestToIndex = Math.max(0, Math.min(liveChapters.length - 1, toIndex));
-        }
-
+      async function reorderToniesChapter(fromIndex, toIndex) {
+        if (!selectedToniesUrl || blockIfActionInProgress()) return;
+        const url = selectedToniesUrl;
+        const chapters = toniesContentCache?.chapters || [];
+        const chapterId = chapters[fromIndex]?.chapter_id;
+        if (!chapterId || toIndex < 0 || toIndex >= chapters.length || fromIndex === toIndex) return;
+        toniesMutationInFlight = true;
+        invalidateToniesContentRequests(url);
         setToniesStatus('Applying reorder…', true);
-        let data = null;
         try {
-          data = await api('/api/tonies-content/reorder', {
+          const data = await api('/api/tonies-content/reorder', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ target_url: selectedToniesUrl, from_index: requestFromIndex, to_index: requestToIndex })
+            body: JSON.stringify({ target_url: url, from_index: fromIndex, to_index: toIndex, chapter_id: chapterId })
           }, 60000);
+          applyToniesContent(url, data);
+          if (url === selectedToniesUrl) {
+            setToniesStatus(toniesProcessingStatus(data), false);
+            pulseToniesRow(toIndex);
+          }
+          showToast('Order updated', 'ok', 1800);
         } catch (e) {
-          toniesContentCache = prev;
-          await refreshToniesContent({ clearList: false, preferCache: false, force: true });
-          setToniesStatus(`Reorder failed: ${e?.message || e}`, false);
-          showToast('Reorder failed. Library resynced; please try again.', 'err', 5200);
+          if (url === selectedToniesUrl) setToniesStatus(`Reorder failed: ${e?.message || e}`, false);
+          showToast(`Reorder failed: ${e?.message || e}`, 'err', 5200);
+        } finally {
+          toniesMutationInFlight = false;
+          toniesApplying = false;
+          void drainToniesUploadReconciliations();
+          renderTonies();
           renderToniesContent();
-          return;
+          void processPendingToniesDeletes();
+          void pumpLocalUploadQueue();
         }
-
-        if (data?.error) {
-          toniesContentCache = prev;
-          await refreshToniesContent({ clearList: false, preferCache: false, force: true });
-          setToniesStatus(`Reorder failed: ${data.error}`, false);
-          showToast('Reorder failed. Library resynced; please try again.', 'err', 5200);
-          renderToniesContent();
-          return;
-        }
-
-        const incomingCount = (data?.chapters || []).length;
-        const prevCount = (prev?.chapters || []).length;
-        // Guard against transient empty responses from Tonies UI automation.
-        if (incomingCount === 0 && prevCount > 0) {
-          setToniesStatus('Reorder applied. Syncing my.tonies.com library…', true);
-          renderToniesContent();
-          refreshToniesContent({ clearList: false, preferCache: false });
-          return;
-        }
-
-        toniesContentCache = shouldPersistToniesContent(selectedToniesUrl, data, prev) ? data : (prev || data);
-        setCachedToniesContent(selectedToniesUrl, data);
-        setToniesStatus('Reorder applied and saved to Tonies.', false);
-        showToast('Order updated', 'ok', 1800);
-        lastMovedSourceIndex = toIndex;
-        renderToniesContent();
-        pulseToniesRow(lastMovedSourceIndex);
       }
 
       async function deleteFile(filename) {
@@ -4264,17 +3415,6 @@
         return job.target_url === selectedUrl;
       }
 
-      function isPendingLocalUploadJob(job) {
-        if (!pendingToniesUpload || !job) return false;
-        const pendingJobId = String(pendingToniesUpload.jobId || '');
-        const pendingTarget = String(pendingToniesUpload.targetUrl || '');
-        const jobId = String(job.id || '');
-        const jobTarget = String(job.target_url || '');
-        if (pendingJobId && jobId) return pendingJobId === jobId;
-        if (pendingTarget && jobTarget) return pendingTarget === jobTarget && !job.selected_candidate;
-        return false;
-      }
-
       function handleTrackedInFlightTransitions(job, transitions, isTracked) {
         if (transitions.justDownloading && isTracked) {
           showToast('Downloading from YouTube…', 'warn', 3000);
@@ -4294,77 +3434,25 @@
 
       function handleTrackedDoneTransition(job, transitions, isTracked) {
         if (!transitions.justDone || !isTracked) return;
-        const isUploadExistingJob = String(job?.user_message || '').toLowerCase().startsWith('upload existing:');
-        if (isUploadExistingJob) {
-          // Local uploads are finalized by pending-upload lifecycle; still ensure stale tracking
-          // sets don't keep the UI stuck in Busy state if a transition leaks through.
-          activeUploadJobIds.delete(job.id);
-          syncingResultJobIds.delete(job.id);
-          if (!pendingToniesUpload) toniesUploadSyncing = false;
-          renderTonies();
-          renderToniesContent();
-          renderJobs();
-          return;
-        }
-        if (isPendingLocalUploadJob(job)) return;
-        localUploadToastShownJobIds.delete(job.id);
-        clearPendingToniesUpload();
-        // Keep card in syncing state until Tonies library refresh completes.
-        markNewFromNextSync = true;
-        toniesUploadSyncing = true;
-        syncingResultJobIds.add(job.id);
-        setToniesStatus('Syncing Tonies library…', true);
-        renderToniesContent();
-        renderJobs();
-        showToast('Syncing with my.tonies.com…', 'warn', 3200);
-
-        setTimeout(async () => {
-          try {
-            if (selectedToniesUrl === job.target_url) {
-              await refreshToniesContent({ clearList: false, preferCache: false, force: true, targetUrl: job.target_url });
-            }
-            // YouTube flows produce a local MP3 artifact; keep Local library in sync.
-            await refreshFiles();
-          } finally {
-            syncingResultJobIds.delete(job.id);
-            activeUploadJobIds.delete(job.id);
-            toniesUploadSyncing = false;
-            setToniesStatus('Synced with my.tonies.com', false);
-            renderTonies();
-            renderToniesContent();
-            renderJobs();
-            showToast('Completed', 'ok', 2800);
-            setTimeout(() => { pumpLocalUploadQueue(); }, 0);
-          }
-        }, 1200);
+        void finalizePendingToniesUpload(job, true);
       }
 
       function handleTrackedFailedTransition(job, transitions, isTracked) {
         if (!transitions.justFailed || !isTracked) return;
-        if (isPendingLocalUploadJob(job)) return;
-        localUploadToastShownJobIds.delete(job.id);
-        clearPendingToniesUpload();
-        activeUploadJobIds.delete(job.id);
-        syncingResultJobIds.delete(job.id);
-        toniesUploadSyncing = false;
-        setToniesStatus(`Upload failed: ${classifyError(job.error || '')}`, false);
-        renderTonies();
-        renderToniesContent();
-        renderJobs();
-        showToast(`Upload failed: ${classifyError(job.error || '')}`, 'err', 3200);
-        setTimeout(() => { pumpLocalUploadQueue(); }, 0);
+        void finalizePendingToniesUpload(job, false);
       }
 
       function handleTrackedJobTransitions(job, prevStatus) {
         jobStatusById[job.id] = job.status;
-        if (!isTrackedJobForSelectedTonie(job)) return;
-
         const isTracked = activeUploadJobIds.has(job.id);
         const transitions = getJobTransitionFlags(prevStatus, job.status);
 
-        handleTrackedInFlightTransitions(job, transitions, isTracked);
+        handleTrackedInFlightTransitions(job, transitions, isTracked && isTrackedJobForSelectedTonie(job));
         handleTrackedDoneTransition(job, transitions, isTracked);
         handleTrackedFailedTransition(job, transitions, isTracked);
+        if (hasUploadAttachmentReceipt(job) && (isTracked || completedUploadJobIds.has(job.id))) {
+          void finalizePendingToniesUpload(job, job.status === 'done');
+        }
       }
 
       function reconcileJobsSnapshot(sourceJobs = jobsCache) {
@@ -4374,7 +3462,8 @@
       }
 
       function processTrackedJobTransitions(sourceJobs = jobsCache) {
-        for (const job of sourceJobs) {
+        // Backend snapshots are newest-created first; apply pending positioning intents oldest first.
+        for (const job of [...sourceJobs].reverse()) {
           const prev = jobStatusById[job.id];
           handleTrackedJobTransitions(job, prev);
         }
@@ -4382,34 +3471,10 @@
 
       function syncPendingToniesUploadState(sourceJobs = jobsCache) {
         if (!pendingToniesUpload) return;
-        const targetUrl = String(pendingToniesUpload.targetUrl || '');
         const pendingJobId = String(pendingToniesUpload.jobId || '');
-        const pendingFilename = String(pendingToniesUpload.filename || '').trim().toLowerCase();
-
-        // 1) Strongest match: explicit job id tracked by the frontend.
-        if (pendingJobId) {
-          const byId = sourceJobs.find((job) => String(job.id || '') === pendingJobId);
-          if (byId) {
-            syncPendingToniesUploadFromJob(byId);
-            return;
-          }
-        }
-
-        // 2) Fallback: recover from stale/missed job-id by matching target + upload-existing filename.
-        const isUploadStatus = (s) => ['queued_prepare', 'preparing', 'queued_upload', 'waiting_upload', 'uploading', 'done', 'failed'].includes(String(s || ''));
-        const matches = sourceJobs.filter((job) => {
-          if (targetUrl && String(job.target_url || '') !== targetUrl) return false;
-          if (!isUploadStatus(job.status)) return false;
-          if (!pendingFilename) return true;
-          const msg = String(job.user_message || '').toLowerCase();
-          return msg.includes('upload existing:') && msg.includes(pendingFilename);
-        });
-
-        if (!matches.length) return;
-
-        // Prefer newest matching job so stale completed rows don't hijack state.
-        matches.sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')));
-        syncPendingToniesUploadFromJob(matches[0]);
+        if (!pendingJobId) return;
+        const job = sourceJobs.find(job => job.id === pendingJobId);
+        if (job) syncPendingToniesUploadFromJob(job);
       }
 
       async function refreshJobs(options = {}) {
@@ -4437,7 +3502,6 @@
         loadingJobs = false;
         hasLoadedJobsOnce = true;
         renderJobs();
-        reconcileToniesStatusIfIdle(selectedToniesUrl);
         pumpLocalUploadQueue();
       }
 
@@ -4483,33 +3547,18 @@
         toniesEditMode = false;
         toniesNameDrafts = {};
         renderToniesEditUI();
-        recentUploadedChapterNorm = {};
-        pendingDeleteIndices = new Set();
-        pendingDeleteKeys = new Set();
-        pendingDeleteConfirmKeys = new Set();
-        pendingDeleteQueue = [];
-        pendingDeleteQueueKeys = new Set();
-        pendingDeleteNormMaxCount = new Map();
-        pendingDeleteSyncAttempts = new Map();
-        deleteQueueRunning = false;
-        deleteQueueNeedsFinalSync = false;
-        deletePlaceholders = [];
-        recentlyRemovedTitles = new Set();
-        confirmedDeletedKeys = new Map();
-        markNewFromNextSync = false;
-        toniesUploadSyncing = false;
-        toniesFallbackRetryByUrl = {};
-        toniesErrorRetryByUrl = {};
-        toniesContentRetryTimerByUrl = {};
-        toniesRefreshSoftWatchdogByUrl = {};
-        toniesRefreshHardWatchdogByUrl = {};
+        recentUploadedChapterIds = {};
+        toniesContentRequestSeq += 1;
+        loadingToniesContent = false;
+        loadingToniesContentUrl = '';
+        if (toniesProcessingTimer) clearTimeout(toniesProcessingTimer);
+        toniesProcessingTimer = null;
+        toniesProcessingPolls = 0;
+        toniesUploadSyncing = hasInFlightTrackedUploadForSelectedTonies();
         renderTonies();
         saveToniesCache();
         const recentSync = hasRecentToniesSync(selectedToniesUrl, 7 * 60 * 1000);
         refreshToniesContent({ clearList: true, preferCache: true, force: !recentSync });
-        if (shouldSyncCreativeToniesStats(false)) {
-          syncCreativeToniesStats({ force: false });
-        }
       }
 
       // expose for inline handlers
@@ -4548,23 +3597,16 @@
         if (blockIfActionInProgress() || manualToniesRefreshInFlight) return;
         manualToniesRefreshInFlight = true;
         setToniesStatus('Loading Tonies library…', true);
-        const url = String(selectedToniesUrl || '');
-        if (url && toniesContentRetryTimerByUrl[url]) {
-          clearTimeout(toniesContentRetryTimerByUrl[url]);
-          toniesContentRetryTimerByUrl[url] = null;
-        }
-        if (url) {
-          toniesFallbackRetryByUrl[url] = 0;
-          toniesErrorRetryByUrl[url] = 0;
-        }
         try {
           await refreshTonies({ force: true });
-          await refreshToniesContent({ clearList: false, preferCache: false, force: true });
         } catch (e) {
           setToniesStatus(`Error: ${e?.message || e}`, false);
           renderToniesContent();
         } finally {
           manualToniesRefreshInFlight = false;
+          toniesApplying = false;
+          renderTonies();
+          renderToniesEditUI();
         }
       };
 
@@ -4643,29 +3685,21 @@
       loadImageCache();
       loadToniesContentByUrlCache();
       loadToniesViewPrefs();
-      const hasToniesCache = loadToniesCache();
-      if (hasToniesCache) {
-        renderTonies();
-        hydrateImageCacheForTonies();
-        // Cache-first paint, then forced real sync on load.
-        refreshToniesContent({ clearList: false, preferCache: true, force: true });
-        if (shouldSyncCreativeToniesStats(false)) {
-          syncCreativeToniesStats({ force: false });
-        }
-      } else {
-        refreshTonies({ force: true }).then(() => {
-          if (selectedToniesUrl && selectedToniesUrl !== lastToniesContentUrl) {
-            refreshToniesContent({ clearList: !((toniesContentCache?.chapters || []).length), preferCache: true, force: true });
-          }
-        });
+      loadToniesCache();
+      renderTonies();
+      const cachedContent = getCachedToniesContent(selectedToniesUrl);
+      if (cachedContent) {
+        toniesContentCache = cachedContent;
+        renderToniesContent();
       }
+      void refreshTonies({ force: true });
       Promise.all([refreshFiles(), refreshJobs()]);
 
       window.addEventListener('resize', () => syncToniesProgressWidth());
 
       function hasActiveJobFlow() {
         if (searchUiActive || selectingCandidateJobIds.size > 0) return true;
-        return jobsCache.some((j) => ['parsing', 'searching', 'awaiting_selection', 'downloading', 'uploading'].includes(String(j.status || '')));
+        return !!pendingToniesUpload || activeUploadJobIds.size > 0 || jobsCache.some(isJobActive);
       }
 
       const REALTIME_MODE = 'sse'; // switch to 'poll' for immediate fallback

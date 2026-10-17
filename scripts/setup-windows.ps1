@@ -25,7 +25,7 @@ Write-Host "  1) Ensure Git, FFmpeg, and Deno are installed (via winget if missi
 Write-Host "  2) Detect a usable Python 3.12 interpreter automatically" -ForegroundColor White
 Write-Host "  3) Clone/update repo at: $RepoDir" -ForegroundColor White
 Write-Host "  4) Create/recreate .venv (this deletes existing .venv)" -ForegroundColor White
-Write-Host "  5) Install Python deps, yt-dlp, Playwright Chromium" -ForegroundColor White
+Write-Host "  5) Install Python deps and yt-dlp (HTTP API; no browser required)" -ForegroundColor White
 Write-Host "  6) Print verification summary and run command" -ForegroundColor White
 Write-Host "" 
 $confirm = Read-Host "Continue? (Y/N)"
@@ -246,8 +246,7 @@ Step "Install Python dependencies"
 & $VenvPy -m pip install --upgrade cryptography
 & $VenvPy -m pip install -r requirements.txt
 & $VenvPy -m pip install --upgrade yt-dlp
-& $VenvPy -m playwright install chromium
-Ok "Python dependencies + Playwright installed"
+Ok "Python dependencies installed (HTTP API; no browser runtime)"
 
 Step "Verification"
 $summary = [ordered]@{}

@@ -10,6 +10,9 @@ def setup_logging() -> None:
 
     root = logging.getLogger()
     root.setLevel(level)
+    # Transport debug/info output can include presigned storage URLs.
+    for name in ('httpx', 'httpcore'):
+        logging.getLogger(name).setLevel(logging.WARNING)
 
     # Avoid duplicate handlers when app reloads.
     for h in list(root.handlers):
