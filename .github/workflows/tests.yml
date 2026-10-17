@@ -1,0 +1,50 @@
+name: tests
+
+on:
+  push:
+    branches: [main, "release/**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements*.txt
+      - name: Install ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+      - name: Run tests
+        run: |
+          export DATA_DIR="$RUNNER_TEMP/data"
+          python -m pytest -q
+
+  docker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image
+        run: docker build -t tonies-yt:ci .
+      - name: Start and check health
+        run: |
+          docker run -d --name tonies-yt-ci -p 8090:8080 -e DATA_DIR=/app/data tonies-yt:ci
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8090/api/health; then break; fi
+            sleep 2
+          done
+          curl -fsS http://127.0.0.1:8090/api/health
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8090/api/jobs)" = 401
+          docker inspect --format '{{.State.Health.Status}}' tonies-yt-ci
+      - name: Logs on failure
+        if: failure()
+        run: docker logs tonies-yt-ci || true

@@ -6,7 +6,6 @@ import hmac
 import json
 import os
 from pathlib import Path
-from typing import Optional
 
 from cryptography.fernet import Fernet
 
@@ -101,17 +100,20 @@ def get_credentials() -> dict:
     return {"email": "", "password": "", "source": "none"}
 
 
-def setup_status() -> dict:
-    if (settings.tonies_email or "").strip() and (settings.tonies_password or "").strip():
-        return {"configured": True, "unlocked": True, "source": "env", "username": "env"}
+def env_credentials_set() -> bool:
+    return bool((settings.tonies_email or "").strip() and (settings.tonies_password or "").strip())
 
-    meta = _read_json(_vault_meta_file())
+
+def setup_status() -> dict:
+    """Vault state. The app login always comes from the vault; TONIES_EMAIL/TONIES_PASSWORD
+    only replace the Tonies account it unlocks."""
     configured = vault_configured()
+    meta = _read_json(_vault_meta_file()) if configured else {}
     return {
         "configured": configured,
         "unlocked": vault_unlocked(),
-        "source": "vault" if configured else "none",
-        "username": meta.get("username", "") if configured else "",
+        "source": "env" if env_credentials_set() else ("vault" if configured else "none"),
+        "username": meta.get("username", ""),
     }
 
 
@@ -121,8 +123,12 @@ def initialize_vault(username: str, app_password: str, tonies_email: str, tonies
     tonies_email = (tonies_email or "").strip()
     tonies_password = (tonies_password or "").strip()
 
-    if not username or not app_password or not tonies_email or not tonies_password:
-        raise ValueError("Username, app password, Tonies email and Tonies password are required")
+    if vault_configured():
+        raise ValueError("The app is already set up; sign in instead")
+    if not username or not app_password:
+        raise ValueError("Username and app password are required")
+    if not (tonies_email and tonies_password) and not env_credentials_set():
+        raise ValueError("Tonies email and Tonies password are required")
 
     vault_key = Fernet.generate_key()  # key used to encrypt Tonies credentials blob
 
@@ -188,7 +194,7 @@ def login_unlock(username: str, app_password: str) -> dict:
         payload = json.loads(decrypted.decode("utf-8"))
         tonies_email = str(payload.get("tonies_email", "")).strip()
         tonies_password = str(payload.get("tonies_password", "")).strip()
-        if not tonies_email or not tonies_password:
+        if not (tonies_email and tonies_password) and not env_credentials_set():
             return {"ok": False, "error": "Stored credentials are invalid"}
         _set_runtime_unlocked(username, tonies_email, tonies_password)
         return {"ok": True}

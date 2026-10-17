@@ -8,6 +8,9 @@ import urllib.request
 import uuid
 from datetime import datetime, timezone
 
+# Keeps the session cookie from /api/setup/login for every later call.
+_opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor())
+
 
 def api(base: str, path: str, method: str = 'GET', data=None, timeout: int = 60):
     body = None
@@ -16,7 +19,7 @@ def api(base: str, path: str, method: str = 'GET', data=None, timeout: int = 60)
         body = json.dumps(data).encode('utf-8')
         headers['Content-Type'] = 'application/json'
     req = urllib.request.Request(base.rstrip('/') + path, data=body, headers=headers, method=method)
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
+    with _opener.open(req, timeout=timeout) as resp:
         txt = resp.read().decode('utf-8', errors='replace')
         return json.loads(txt) if txt else {}
 

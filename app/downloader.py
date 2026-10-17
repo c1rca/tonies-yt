@@ -6,7 +6,6 @@ import json
 import time
 import logging
 from threading import Lock
-from .config import settings
 
 
 # No artificial yt-dlp throttling; run as fast as possible.
@@ -45,8 +44,6 @@ def sanitize_filename(name: str) -> str:
 
 def search_youtube(youtube_query: str, limit: int = 3) -> list[dict]:
     t0 = time.time()
-    key = " ".join((youtube_query or "").lower().split())
-    now = time.time()
 
     raw_limit = max(1, min(limit, 20))
     cmd = [
@@ -119,7 +116,7 @@ def download_mp3(youtube_query_or_url: str, out_dir: Path, preferred_title: str 
         out = (e.stdout or "") + "\n" + (e.stderr or "")
         raise RuntimeError(
             f"yt-dlp failed for URL/query: {youtube_query_or_url}. Command: {' '.join(cmd)}. Error: exit={e.returncode}; yt-dlp output: {out[-900:]}"
-        )
+        ) from e
 
     matches = [
         p for p in out_dir.glob(f"{base}*.mp3")

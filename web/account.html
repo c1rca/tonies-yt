@@ -66,6 +66,7 @@
         <h2>Tooling</h2>
         <div class="desc">Runtime versions and updater controls.</div>
         <div class="grid">
+          <div class="kv"><span class="k">Tonies-YT</span><span id="ver-app" class="v">loading…</span></div>
           <div class="kv"><span class="k">yt-dlp installed</span><span id="ver-ytdlp" class="v">loading…</span></div>
           <div class="kv"><span class="k">Deno runtime</span><span id="ver-deno" class="v">loading…</span></div>
           <div class="row" id="ytdlp-update-row" style="display:none;justify-content:space-between;margin-top:2px;">
@@ -122,6 +123,7 @@
         <div id="status-tonies" class="status"></div>
       </div>
     </div>
+    <script src="/static/assets/session.js?v=1"></script>
     <script>
       const SEARCH_LIMIT_KEY = 'tonies-auto.search-limit.v1';
       const statusEl = document.getElementById('status');
@@ -156,6 +158,7 @@
         }
         const installed = String(d?.versions?.yt_dlp || 'unknown');
         const latest = String(d?.versions?.yt_dlp_latest || 'unknown');
+        document.getElementById('ver-app').textContent = String(d?.app_version || 'unknown');
         document.getElementById('ver-ytdlp').textContent = installed;
         document.getElementById('ver-deno').textContent = String(d?.versions?.deno || 'unknown').split('\n')[0];
         const showUpdate = installed !== 'unknown' && latest !== 'unknown' && installed !== latest;

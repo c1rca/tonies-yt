@@ -11,7 +11,7 @@ class Settings:
     data_dir: Path = Path(os.getenv("DATA_DIR", "./data"))
     app_port: int = int(os.getenv("APP_PORT", "8080"))
 
-    log_level: str = os.getenv("LOG_LEVEL", "DEBUG")
+    log_level: str = os.getenv("LOG_LEVEL", "INFO")
     log_file: Path = Path(os.getenv("LOG_FILE", str(Path(os.getenv("DATA_DIR", "./data")) / "logs" / "tonies-auto.log")))
 
 

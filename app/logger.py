@@ -5,8 +5,8 @@ from .config import settings
 
 
 def setup_logging() -> None:
-    level_name = str(settings.log_level or "DEBUG").upper()
-    level = getattr(logging, level_name, logging.DEBUG)
+    level_name = str(settings.log_level or "INFO").upper()
+    level = getattr(logging, level_name, logging.INFO)
 
     root = logging.getLogger()
     root.setLevel(level)

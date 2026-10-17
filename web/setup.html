@@ -60,10 +60,18 @@
       const statusEl = document.getElementById('status');
       const sourceChip = document.getElementById('source-chip');
 
+      let toniesFromEnv = false;
+
       async function refreshStatus() {
         const r = await fetch('/api/setup/status');
         const d = await r.json();
         sourceChip.textContent = `source: ${d.source || 'none'}`;
+        toniesFromEnv = d.source === 'env';
+        if (toniesFromEnv) {
+          for (const id of ['tonies-email', 'tonies-password']) {
+            document.getElementById(id).placeholder = 'set by TONIES_EMAIL / TONIES_PASSWORD (optional here)';
+          }
+        }
         if (d.configured) {
           statusEl.className = 'status';
           statusEl.textContent = d.unlocked
@@ -78,7 +86,7 @@
         const tonies_email = (document.getElementById('tonies-email').value || '').trim();
         const tonies_password = (document.getElementById('tonies-password').value || '').trim();
 
-        if (!username || !app_password || !tonies_email || !tonies_password) {
+        if (!username || !app_password || (!toniesFromEnv && (!tonies_email || !tonies_password))) {
           statusEl.className = 'status err';
           statusEl.textContent = 'All fields are required.';
           return;

@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>YT-Manager Login</title>
+    <title>Tonies-YT Sign in</title>
     <style>
       :root { color-scheme: dark; }
       body { margin:0; font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial; background:#0b1220; color:#e9efff; }
@@ -50,7 +50,7 @@
         const params = new URLSearchParams(window.location.search || '');
         if (params.get('locked') === '1') {
           statusEl.className = 'status';
-          statusEl.textContent = 'Session locked. Please sign in again.';
+          statusEl.textContent = 'Signed out. Please sign in again.';
         }
 
         const r = await fetch('/api/setup/status');
@@ -59,7 +59,6 @@
           window.location.href = '/setup';
           return;
         }
-        if (d.username) document.getElementById('username').value = d.username;
       }
 
       async function waitForUnlocked() {

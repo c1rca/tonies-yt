@@ -51,7 +51,44 @@ The app does not log tokens, passwords or presigned upload URLs (`httpx`/`httpco
 - `LOG_LEVEL` controls logging verbosity.
 - `LOG_FILE=/app/data/logs/toni-auto.log` is the supplied example path.
 - The container listens on 8080, mapped to host 8090. `APP_PORT` alone does not change the Dockerfile's command.
-- `TONIES_EMAIL` / `TONIES_PASSWORD`, when both are set, override the vault and the app needs no unlock.
+- `TONIES_EMAIL` / `TONIES_PASSWORD`, when both are set, choose the Tonies account instead of the vault's. The app login still comes from the vault.
+
+## App sign-in and sessions
+
+Each browser signs in at `/login` with the app username and password and receives a session cookie (`tonies_yt_session`, HttpOnly, SameSite=Strict, Secure when the request arrived over HTTPS). Sessions are kept in memory for up to 30 days.
+
+- Without a session, API calls get `401` and pages redirect to `/login` (or `/setup` before first run). Only `/api/health`, `/api/setup/status`, `/api/setup/login`, `/api/setup/init`, `/login`, `/setup`, `/static/*` and `/favicon.ico` are open, and `/api/setup/status` then reports only whether setup or sign-in comes next.
+- **Lock** signs every browser out and locks the vault. Changing the app password signs every other browser out. A restart ends all sessions.
+- After 5 failed sign-ins from one address within 5 minutes, further attempts get `429` with a `Retry-After` header until the window passes.
+- State-changing requests whose `Origin` doesn't match the host (or that the browser marks `Sec-Fetch-Site: cross-site`) get `403`.
+- `/api/setup/init` refuses once a vault exists, so setup can't be re-run over an existing login.
+
+Scripts must sign in first and keep the cookie:
+```bash
+curl -c jar -H 'Content-Type: application/json' \
+  -d '{"username":"me","app_password":"..."}' http://localhost:8090/api/setup/login
+curl -b jar http://localhost:8090/api/jobs
+```
+
+## Running behind a reverse proxy
+
+Tonies-YT serves plain HTTP. To reach it from outside your home network, put it behind an HTTPS reverse proxy and keep port 8090 closed to the internet. The proxy must:
+- pass the browser's host on, either unchanged in `Host` or in `X-Forwarded-Host` (otherwise writes fail the cross-site check with `403`);
+- send `X-Forwarded-Proto: https`, so the session cookie is marked Secure;
+- not buffer `/api/events` (server-sent events).
+
+nginx example:
+```nginx
+location / {
+    proxy_pass http://127.0.0.1:8090;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_buffering off;
+    client_max_body_size 200m;
+}
+```
+
+Sign-in throttling counts the address the app sees, which behind a proxy is the proxy itself, so failed attempts from anywhere share one limit.
 
 ## Tonies sign-in and tokens
 
@@ -92,11 +129,15 @@ The image is `python:3.12-slim` with ffmpeg, curl, unzip and CA certificates. De
 
 ## Backup / restore
 
-Back up `.env` and the whole `data/` directory, including `secrets/`. Stop the app first if you need a consistent copy. Restore to the same `./data` mount (or native `DATA_DIR`) and start the app; sign in with the app password. No tokens or browser sessions need restoring.
+Back up `.env` and the whole `data/` directory, including `secrets/`. Stop the app first if you need a consistent copy. Restore to the same `./data` mount (or native `DATA_DIR`) and start the app; sign in with the app password. No tokens or sessions need restoring.
 
-## Upgrading from the browser-automation version
+## Upgrading from 1.x
 
-- Keep `data/`; vault, job history and library carry over unchanged.
+See [`CHANGELOG.md`](../CHANGELOG.md) for the full list.
+
+- Keep `data/`; vault, job history and library carry over unchanged, and the existing app login keeps working.
+- If you ran with `TONIES_EMAIL` / `TONIES_PASSWORD` and no vault, the first visit asks you to create an app login; the Tonies fields can stay empty.
+- Scripts and integrations that call the API must now sign in and send the session cookie (see above).
 - Remove `TONIES_STORAGE_STATE_FILE`, `TONIES_APP_URL`, `TONIES_LOGIN_URL` and the `TONIES_*_SELECTOR` lines from `.env`; they are ignored.
 - `data/tonies-storage-state.json` (old browser session cookies) is no longer read. Delete it or keep it private.
 - `data/staging/` and `data/debug/` were browser-era working folders and can be removed once the upgrade is confirmed.
@@ -104,15 +145,19 @@ Back up `.env` and the whole `data/` directory, including `secrets/`. Stop the a
 ## Tests
 
 ```bash
+.venv/bin/pip install -r requirements-dev.txt
 DATA_DIR=$(mktemp -d) .venv/bin/python -m pytest -q
 ```
 
-The suite is offline: the Tonies cloud is a fake (`tests/tonies_fake.py`) that follows the observed OAuth, GraphQL, REST and S3 contracts. It covers token renewal, exact-ID writes, stale and ambiguous writes, no-retry on unknown outcomes, upload placement, processing readback, log privacy and the container dependency contract. It does not build an image or talk to Tonies.
+GitHub Actions runs the same suite, plus a Docker build and health check, on every push to `main` and every pull request.
+
+The suite is offline: the Tonies cloud is a fake (`tests/tonies_fake.py`) that follows the observed OAuth, GraphQL, REST and S3 contracts. It covers sign-in and sessions (every API route is checked for `401` without one), token renewal, exact-ID writes, stale and ambiguous writes, no-retry on unknown outcomes, upload placement, processing readback, job-state saves, log privacy and the container dependency contract. It does not build an image or talk to Tonies.
 
 Before a release, check by hand:
 - search → download → upload → processing finishes → library shows the track
 - Browse import, button upload and drag/drop upload
 - rename / reorder / delete, with other tracks and order unchanged
-- Settings: app password change, Tonies credential change, lock and unlock
+- Settings: app password change, Tonies credential change, lock and sign in again
+- a second browser or phone needs its own sign-in
 
 **Delete all:** the feature has a confirmation step and passes the offline tests, but it has not been run live against a populated Tonie. Test it only on a spare or empty Tonie.

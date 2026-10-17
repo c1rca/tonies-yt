@@ -16,7 +16,7 @@ Linux:
 cp .env.example .env
 ```
 
-No Tonies credentials go in `.env` for normal setup; the app keeps them in its encrypted vault. Setting `TONIES_EMAIL` and `TONIES_PASSWORD` instead is supported and overrides the vault.
+No Tonies credentials go in `.env` for normal setup; the app keeps them in its encrypted vault. Setting `TONIES_EMAIL` and `TONIES_PASSWORD` instead is supported: they replace the vault's Tonies account, but you still create an app login.
 
 ## 2) Start with Docker Compose (recommended)
 
@@ -32,11 +32,11 @@ Compose maps host port 8090 to container port 8080 and mounts `./data` at `/app/
 
 ## 3) First use
 1. Open the app.
-2. First run: choose an app username and password, then enter your Tonies email and password. Save the app password somewhere safe; it cannot be recovered.
+2. First run: choose an app username and password, then enter your Tonies email and password. Do this right away: until setup is done, whoever opens the app first creates the login. Save the app password somewhere safe; it cannot be recovered.
 3. Select a Creative Tonie.
 4. Search YouTube, drag a Local MP3 Library file onto a Tonie, or use **Browse** to import local audio first.
 
-After a restart the app is locked again: sign in with the app username and password. Tonies sign-in then happens automatically on the next action.
+Every browser or phone signs in with the app username and password. After a restart, or after **Lock**, everyone signs in again. Tonies sign-in then happens automatically on the next action.
 
 `./data` contains downloads, logs, job history, the encrypted vault and app settings. Keep it private, back it up and do not commit it.
 

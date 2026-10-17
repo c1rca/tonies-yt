@@ -1,4 +1,7 @@
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+from fastapi.responses import JSONResponse
 from fastapi.responses import FileResponse, PlainTextResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -14,13 +17,22 @@ from .models import ChatRequest
 from .config import settings
 from .uploader import list_creative_tonies, get_tonies_content, delete_tonies_chapter, delete_all_tonies_content, reorder_tonies_chapter, rename_tonies_chapter, reset_upload_session
 from .logger import setup_logging
-from .credentials import setup_status, initialize_vault, login_unlock, lock_runtime, get_credentials, change_app_password, update_tonies_credentials
+from .credentials import setup_status, initialize_vault, login_unlock, lock_runtime, get_credentials, change_app_password, update_tonies_credentials, vault_configured
+from . import __version__, auth
 from .downloader import sanitize_filename, clear_search_cache
 
 setup_logging()
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="tonies-auto")
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    logger.info("Starting Tonies-YT %s | log_file=%s | log_level=%s", __version__, settings.log_file, settings.log_level)
+    start_worker()
+    yield
+
+
+app = FastAPI(title="Tonies-YT", version=__version__, lifespan=lifespan)
+app.add_middleware(auth.SessionGuard, is_configured=vault_configured)
 
 app.mount("/static", StaticFiles(directory="web"), name="static")
 
@@ -88,8 +100,8 @@ class ToniesRenameRequest(BaseModel):
 class SetupInitRequest(BaseModel):
     username: str
     app_password: str
-    tonies_email: str
-    tonies_password: str
+    tonies_email: str = ""  # optional when TONIES_EMAIL/TONIES_PASSWORD are set
+    tonies_password: str = ""
 
 
 class SetupLoginRequest(BaseModel):
@@ -111,10 +123,6 @@ class SetupToniesCredentialsRequest(BaseModel):
     tonies_password: str = ""
 
 
-@app.on_event("startup")
-def on_startup():
-    logger.info("Starting tonies-auto | log_file=%s | log_level=%s", settings.log_file, settings.log_level)
-    start_worker()
 
 
 @app.get("/api/health", response_model=Health)
@@ -148,12 +156,17 @@ def _yt_dlp_latest_version() -> str:
 
 
 @app.get('/api/setup/status')
-def api_setup_status():
+def api_setup_status(request: Request):
     s = setup_status()
+    if not auth.request_session(request):
+        # Before sign-in, only say whether setup or sign-in comes next.
+        return {"configured": s["configured"], "unlocked": False, "signed_in": False, "source": s["source"]}
     c = get_credentials()
     email = (c.get("email") or "").strip()
     return {
         **s,
+        "signed_in": True,
+        "app_version": __version__,
         "email_hint": (email[:2] + "***") if email else "",
         "tonies_email": email if s.get("unlocked") else "",
         "versions": {
@@ -164,34 +177,55 @@ def api_setup_status():
     }
 
 
+def _signed_in_response(request: Request, body: dict) -> JSONResponse:
+    response = JSONResponse(body)
+    auth.set_session_cookie(response, request, auth.create_session())
+    return response
+
+
 @app.post('/api/setup/init')
-def api_setup_init(req: SetupInitRequest):
+def api_setup_init(req: SetupInitRequest, request: Request):
     try:
         out = initialize_vault(req.username, req.app_password, req.tonies_email, req.tonies_password)
-        reset_upload_session()
-        return {"ok": True, **out}
     except Exception as e:
         return {"ok": False, "error": str(e)}
+    reset_upload_session()
+    return _signed_in_response(request, {"ok": True, **out})
 
 
 @app.post('/api/setup/login')
-def api_setup_login(req: SetupLoginRequest):
+def api_setup_login(req: SetupLoginRequest, request: Request):
+    client = request.client.host if request.client else "unknown"
+    wait = auth.login_retry_after(client)
+    if wait:
+        return JSONResponse({"ok": False, "error": f"Too many failed sign-ins; try again in {wait} s"},
+                            status_code=429, headers={"Retry-After": str(wait)})
     result = login_unlock(req.username, req.app_password)
-    if result.get('ok'):
-        reset_upload_session()
-    return result
+    if not result.get('ok'):
+        auth.record_login_failure(client)
+        return result
+    auth.clear_login_failures(client)
+    reset_upload_session()
+    return _signed_in_response(request, result)
 
 
 @app.post('/api/setup/lock')
 def api_setup_lock():
+    """Lock the vault and sign every browser out."""
     result = lock_runtime()
+    auth.revoke_all_sessions()
     reset_upload_session()
-    return result
+    response = JSONResponse(result)
+    auth.clear_session_cookie(response)
+    return response
 
 
 @app.post('/api/setup/change-password')
-def api_setup_change_password(req: SetupChangePasswordRequest):
-    return change_app_password(req.username, req.current_password, req.new_password)
+def api_setup_change_password(req: SetupChangePasswordRequest, request: Request):
+    result = change_app_password(req.username, req.current_password, req.new_password)
+    if result.get('ok'):
+        auth.revoke_all_sessions(keep=auth.request_session(request))
+    return result
 
 
 @app.post('/api/setup/update-tonies-credentials')
@@ -235,8 +269,9 @@ def jobs():
 
 
 @app.get('/api/events')
-def events(lastEventId: int = 0):
+def events(request: Request, lastEventId: int = 0):
     last_id = int(lastEventId or 0)
+    session = auth.request_session(request)
     _sse_stats["total_connections"] += 1
     _sse_stats["active_connections"] += 1
     logger.info("sse connect active=%s total=%s lastEventId=%s", _sse_stats["active_connections"], _sse_stats["total_connections"], last_id)
@@ -244,7 +279,7 @@ def events(lastEventId: int = 0):
     def gen():
         nonlocal last_id
         try:
-            while True:
+            while auth.session_valid(session):
                 events_batch = get_events_since(last_id, timeout_sec=15.0)
                 if not events_batch:
                     yield ": keepalive\n\n"
@@ -487,7 +522,7 @@ def api_logs_export(lines: int = 2000):
         content = "".join(tail)
 
     headers = {
-        "Content-Disposition": 'attachment; filename="tonies-auto-logs.txt"'
+        "Content-Disposition": 'attachment; filename="tonies-yt-logs.txt"'
     }
     return PlainTextResponse(content=content, headers=headers)
 
@@ -498,21 +533,17 @@ def logs_page():
 
 
 @app.get('/setup')
-def setup_page():
-    s = setup_status()
-    if s.get('configured') and s.get('unlocked'):
-        return RedirectResponse(url='/', status_code=302)
-    if s.get('configured') and not s.get('unlocked'):
-        return RedirectResponse(url='/login', status_code=302)
+def setup_page(request: Request):
+    if vault_configured():
+        return RedirectResponse(url='/' if auth.request_session(request) else '/login', status_code=302)
     return _nocache_file('web/setup.html')
 
 
 @app.get('/login')
-def login_page():
-    s = setup_status()
-    if not s.get('configured'):
+def login_page(request: Request):
+    if not vault_configured():
         return RedirectResponse(url='/setup', status_code=302)
-    if s.get('unlocked'):
+    if auth.request_session(request) and setup_status().get('unlocked'):
         return RedirectResponse(url='/', status_code=302)
     return _nocache_file('web/login.html')
 
@@ -529,9 +560,7 @@ def account_page_redirect():
 
 @app.get("/")
 def index():
-    s = setup_status()
-    if not s.get('configured'):
-        return _nocache_file('web/setup.html')
-    if not s.get('unlocked'):
-        return _nocache_file('web/login.html')
+    # SessionGuard has already sent visitors without a session to /setup or /login.
+    if not setup_status().get('unlocked'):
+        return RedirectResponse(url='/login', status_code=302)
     return _nocache_file("web/index.html")

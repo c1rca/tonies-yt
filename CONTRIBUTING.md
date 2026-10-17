@@ -16,10 +16,9 @@ Thanks for your interest in improving Tonies-YT.
 ## Local Setup
 
 ```bash
-git clone <repo>
-cd toni-auto
+git clone https://github.com/c1rca/tonies-yt.git
+cd tonies-yt
 cp .env.example .env
-# fill required env values
 
 docker compose up --build
 ```
@@ -27,8 +26,14 @@ docker compose up --build
 Run tests:
 
 ```bash
-pip install -r requirements.txt
-pytest -q
+python3.12 -m venv .venv
+.venv/bin/pip install -r requirements-dev.txt
+DATA_DIR=$(mktemp -d) .venv/bin/python -m pytest -q
+```
+
+The suite is offline (the Tonies cloud is faked in `tests/tonies_fake.py`) and needs `ffmpeg` on PATH. CI runs it on every push and pull request.
+
+Never point tests or dev scripts at someone else's Tonies account, and never commit real account data, tokens or presigned URLs in fixtures.
 ```
 
 ---

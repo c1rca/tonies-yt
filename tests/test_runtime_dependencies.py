@@ -114,3 +114,16 @@ assert not any(name == "playwright" or name.startswith("playwright.") for name i
 '''
     result = subprocess.run([sys.executable, "-c", probe], cwd=ROOT, env=env, capture_output=True, text=True, timeout=20)
     assert result.returncode == 0, result.stderr
+
+
+def test_release_version_is_consistent():
+    from app import __version__
+    assert re.fullmatch(r"\d+\.\d+\.\d+", __version__)
+    assert f'org.opencontainers.image.version="{__version__}"' in (ROOT / "Dockerfile").read_text(encoding="utf-8")
+    assert f"## [{__version__}]" in (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+
+
+def test_runtime_requirements_exclude_test_and_unused_packages():
+    requirements = _requirements()
+    assert not {"pytest", "keyring", "python-dotenv"} & requirements.keys()
+    assert "pytest" in (ROOT / "requirements-dev.txt").read_text(encoding="utf-8")

@@ -51,12 +51,15 @@ flowchart LR
 - **Writes:** re-read, check the expected chapter ID, PATCH the full chapter list over REST, read back until it matches. Unknown outcomes are never retried.
 - **Uploads:** allocate a file ID, stream the file to the presigned S3 form (no bearer token), add the chapter at the requested position, then confirm it by its server-assigned ID.
 
+`app/auth.py` guards everything else: per-browser session cookies, sign-in throttling and cross-site write checks (see [Operations](OPERATIONS.md#app-sign-in-and-sessions)).
+
 `app/uploader.py` is the thin app-facing layer: it keeps one client per account and resets it when the vault locks or credentials change.
 
 ## Code map
 
 ### Backend
 - `app/main.py`: routes and API
+- `app/auth.py`: sign-in sessions and request guard
 - `app/jobs.py`: search/download/upload job queue (one upload at a time)
 - `app/tonies_api.py`: Tonies OAuth/HTTP client
 - `app/uploader.py`: app-facing Tonies operations
@@ -70,6 +73,7 @@ flowchart LR
 - `web/setup.html`: setup page
 - `web/account.html`: settings page
 - `web/logs.html`: logs page
+- `web/assets/session.js`: sends the browser to sign-in when its session ends
 
 ## Important data
 
@@ -80,6 +84,7 @@ Stored under `DATA_DIR` (`./data` natively, `/app/data` in Compose):
 - `secrets/vault-meta.json`, `secrets/vault-credentials.enc`: app login and encrypted Tonies credentials
 
 Kept in memory only:
+- sign-in sessions
 - the unlocked Tonies credentials
 - OAuth access and refresh tokens
 - the live job queue and event stream
@@ -107,6 +112,9 @@ Rename, reorder and delete take the `chapter_id` the UI is acting on. Delete fol
 - `POST /api/upload-existing`
 
 ### Setup/auth
+
+Every endpoint except health and the first four below needs a signed-in session.
+
 - `GET /api/setup/status`
 - `POST /api/setup/init`
 - `POST /api/setup/login`

@@ -15,6 +15,10 @@ KNOWN_BAD = [
 ]
 
 
+# Keeps the session cookie from /api/setup/login for every later call.
+_opener = request.build_opener(request.HTTPCookieProcessor())
+
+
 def api(base: str, path: str, method: str = "GET", data: dict | None = None, timeout: int = 30):
     url = base.rstrip("/") + path
     body = None
@@ -24,7 +28,7 @@ def api(base: str, path: str, method: str = "GET", data: dict | None = None, tim
         headers["Content-Type"] = "application/json"
     req = request.Request(url, data=body, headers=headers, method=method)
     try:
-        with request.urlopen(req, timeout=timeout) as r:
+        with _opener.open(req, timeout=timeout) as r:
             txt = r.read().decode("utf-8", errors="replace")
             if not txt:
                 return {}
@@ -98,12 +102,16 @@ def main():
     if h.get("status") != "ok":
         raise RuntimeError(f"health not ok: {h}")
 
-    print("[2/8] setup status")
+    print("[2/8] sign in")
     st = api(base, "/api/setup/status")
     if not st.get("configured"):
         raise RuntimeError("app not configured yet")
-    if not st.get("unlocked"):
-        raise RuntimeError("app is locked; unlock in UI first, then rerun")
+    username, password = os.environ.get("TONIES_YT_USERNAME", ""), os.environ.get("TONIES_YT_PASSWORD", "")
+    if not username or not password:
+        raise RuntimeError("set TONIES_YT_USERNAME and TONIES_YT_PASSWORD to the app login")
+    login = api(base, "/api/setup/login", "POST", {"username": username, "app_password": password})
+    if not login.get("ok"):
+        raise RuntimeError(f"sign-in failed: {login.get('error')}")
 
     print("[3/8] fetch Creative Tonies")
     tonies = api(base, "/api/creative-tonies")
