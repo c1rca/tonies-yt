@@ -287,8 +287,8 @@ def events(request: Request, lastEventId: int = 0):
 
                 for evt in events_batch:
                     last_id = max(last_id, int(evt.get("id", 0)))
+                    # Unnamed events reach EventSource.onmessage in every app page.
                     yield f"id: {last_id}\n"
-                    yield "event: job\n"
                     yield f"data: {json.dumps(evt)}\n\n"
         except GeneratorExit:
             pass
