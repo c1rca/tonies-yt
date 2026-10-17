@@ -1,24 +1,26 @@
 import json
 import logging
-import re
-import subprocess
 from collections import deque
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
 
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from . import __version__, auth
 from .config import settings
-from .credentials import setup_status, initialize_vault, login_unlock, lock_runtime, get_credentials, change_app_password, update_tonies_credentials, vault_configured
-from .downloader import sanitize_filename, clear_search_cache
+from .credentials import setup_status, initialize_vault, login_unlock, lock_runtime, get_credentials, change_app_password, update_tonies_credentials, vault_configured, VaultError
+from .media_files import library_file, library_files, store_upload
+from .downloader import clear_search_cache
 from .jobs import create_job, get_job, list_jobs, start_worker, select_candidate_and_continue, create_upload_only_job, get_events_since, get_event_stats, get_queue_stats, cancel_job
 from .logger import setup_logging
 from .models import ChatRequest
+from .subprocess_runner import run_bounded
+from .web_pages import page_response
 from .tonies_api import parse_target_url
 from .tonies_batch import clean_position
 from .uploader import action_queue, list_creative_tonies, get_tonies_content, delete_tonies_chapter, delete_all_tonies_content, reorder_tonies_chapter, rename_tonies_chapter, reset_upload_session
@@ -39,6 +41,12 @@ app.add_middleware(auth.SessionGuard, is_configured=vault_configured)
 
 app.mount("/static", StaticFiles(directory="web"), name="static")
 
+
+@app.exception_handler(RequestValidationError)
+async def invalid_request(_request: Request, _error: RequestValidationError):
+    # Default errors echo request values, including passwords and signed URLs.
+    return JSONResponse({"detail": "Invalid request fields or JSON body"}, status_code=422)
+
 _sse_stats = {
     "active_connections": 0,
     "total_connections": 0,
@@ -47,11 +55,7 @@ _sse_stats = {
 
 
 def _nocache_file(path: str):
-    return FileResponse(path, headers={
-        "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
-        "Pragma": "no-cache",
-        "Expires": "0",
-    })
+    return page_response(path, version=__version__)
 
 
 @app.get('/favicon.ico', include_in_schema=False)
@@ -108,29 +112,29 @@ class ToniesRenameRequest(BaseModel):
 
 
 class SetupInitRequest(BaseModel):
-    username: str
-    app_password: str
-    tonies_email: str = ""  # optional when TONIES_EMAIL/TONIES_PASSWORD are set
-    tonies_password: str = ""
+    username: str = Field(max_length=256)
+    app_password: str = Field(max_length=1024)
+    tonies_email: str = Field(default="", max_length=320)
+    tonies_password: str = Field(default="", max_length=1024)
 
 
 class SetupLoginRequest(BaseModel):
-    username: str
-    app_password: str
+    username: str = Field(max_length=256)
+    app_password: str  # Legacy passwords are admitted within the total account-body cap.
 
 
 class SetupChangePasswordRequest(BaseModel):
-    username: str
+    username: str = Field(max_length=256)
     current_password: str
-    new_password: str
-    creative_upload_url: str = ""
+    new_password: str = Field(max_length=1024)
+    creative_upload_url: str = Field(default="", max_length=2048)
 
 
 class SetupToniesCredentialsRequest(BaseModel):
-    username: str
+    username: str = Field(max_length=256)
     app_password: str
-    tonies_email: str = ""
-    tonies_password: str = ""
+    tonies_email: str = Field(default="", max_length=320)
+    tonies_password: str = Field(default="", max_length=1024)
 
 
 
@@ -140,29 +144,19 @@ def health():
     return Health(status="ok")
 
 
+VERSION_PROBE_TIMEOUT_SEC = 12
+VERSION_PROBE_OUTPUT_BYTES = 4096
+
+
 def _cmd_version(cmd: list[str]) -> str:
+    """First stdout line of a tool's --version; stderr is never read or shown."""
     try:
-        out = subprocess.run(cmd, capture_output=True, text=True, timeout=12)
-        txt = (out.stdout or out.stderr or "").strip().splitlines()
-        return txt[0].strip() if txt else "unknown"
-    except Exception:
+        output = run_bounded(cmd, operation="Version probe", timeout=VERSION_PROBE_TIMEOUT_SEC,
+                             max_output_bytes=VERSION_PROBE_OUTPUT_BYTES)
+    except RuntimeError:
         return "unknown"
-
-
-def _yt_dlp_latest_version() -> str:
-    """Best-effort latest stable version probe without changing install state."""
-    try:
-        out = subprocess.run(["yt-dlp", "-U"], capture_output=True, text=True, timeout=25)
-        blob = ((out.stdout or "") + "\n" + (out.stderr or "")).strip()
-        m = re.search(r"Latest version:\s*stable@([0-9]{4}\.[0-9]{2}\.[0-9]{2})", blob)
-        if m:
-            return m.group(1)
-        m2 = re.search(r"stable@([0-9]{4}\.[0-9]{2}\.[0-9]{2})", blob)
-        if m2:
-            return m2.group(1)
-        return "unknown"
-    except Exception:
-        return "unknown"
+    lines = output.decode("utf-8", "replace").strip().splitlines()
+    return lines[0].strip()[:80] if lines else "unknown"
 
 
 @app.get('/api/setup/status')
@@ -181,26 +175,48 @@ def api_setup_status(request: Request):
         "tonies_email": email if s.get("unlocked") else "",
         "versions": {
             "yt_dlp": _cmd_version(["yt-dlp", "--version"]),
-            "yt_dlp_latest": _yt_dlp_latest_version(),
             "deno": _cmd_version(["deno", "--version"]),
         },
     }
 
 
-def _signed_in_response(request: Request, body: dict) -> JSONResponse:
+def _signed_in_response(request: Request, body: dict, *, generation: int) -> JSONResponse:
+    token = auth.create_session(expected_generation=generation)
+    if token is None:
+        return JSONResponse({"ok": False, "error": "Account state changed during sign-in; please sign in again"},
+                            status_code=409)
     response = JSONResponse(body)
-    auth.set_session_cookie(response, request, auth.create_session())
+    auth.set_session_cookie(response, request, token)
     return response
+
+
+def _account_result(operation, *args) -> dict:
+    """Only deliberately authored vault errors cross the HTTP boundary."""
+    try:
+        return operation(*args)
+    except VaultError as error:
+        return {"ok": False, "error": str(error)}
+    except Exception:
+        return {"ok": False, "error": "Vault storage is unavailable; check permissions or restore a known-good backup"}
+
+
+def _password_busy() -> JSONResponse:
+    return JSONResponse({"ok": False, "error": "Another sign-in or setup is in progress; try again shortly"},
+                        status_code=429, headers={"Retry-After": "1"})
 
 
 @app.post('/api/setup/init')
 def api_setup_init(req: SetupInitRequest, request: Request):
-    try:
-        out = initialize_vault(req.username, req.app_password, req.tonies_email, req.tonies_password)
-    except Exception as e:
-        return {"ok": False, "error": str(e)}
+    with auth.password_attempt() as allowed:
+        if not allowed:
+            return _password_busy()
+        with auth.account_transition():
+            generation = auth.session_generation()
+            out = _account_result(initialize_vault, req.username, req.app_password, req.tonies_email, req.tonies_password)
+    if not out.get("ok"):
+        return out
     reset_upload_session()
-    return _signed_in_response(request, {"ok": True, **out})
+    return _signed_in_response(request, {"ok": True, **out}, generation=generation)
 
 
 @app.post('/api/setup/login')
@@ -210,20 +226,26 @@ def api_setup_login(req: SetupLoginRequest, request: Request):
     if wait:
         return JSONResponse({"ok": False, "error": f"Too many failed sign-ins; try again in {wait} s"},
                             status_code=429, headers={"Retry-After": str(wait)})
-    result = login_unlock(req.username, req.app_password)
+    with auth.password_attempt() as allowed:
+        if not allowed:
+            return _password_busy()
+        with auth.account_transition():
+            generation = auth.session_generation()
+            result = _account_result(login_unlock, req.username, req.app_password)
     if not result.get('ok'):
         auth.record_login_failure(client)
         return result
     auth.clear_login_failures(client)
     reset_upload_session()
-    return _signed_in_response(request, result)
+    return _signed_in_response(request, result, generation=generation)
 
 
 @app.post('/api/setup/lock')
 def api_setup_lock():
     """Lock the vault and sign every browser out."""
-    result = lock_runtime()
-    auth.revoke_all_sessions()
+    with auth.account_transition():
+        result = lock_runtime()
+        auth.revoke_all_sessions()
     reset_upload_session()
     response = JSONResponse(result)
     auth.clear_session_cookie(response)
@@ -232,15 +254,21 @@ def api_setup_lock():
 
 @app.post('/api/setup/change-password')
 def api_setup_change_password(req: SetupChangePasswordRequest, request: Request):
-    result = change_app_password(req.username, req.current_password, req.new_password)
+    with auth.account_transition():
+        result = _account_result(change_app_password, req.username, req.current_password, req.new_password)
+        if result.get('ok'):
+            auth.revoke_all_sessions(keep=auth.request_session(request))
     if result.get('ok'):
-        auth.revoke_all_sessions(keep=auth.request_session(request))
+        reset_upload_session()
     return result
 
 
 @app.post('/api/setup/update-tonies-credentials')
-def api_setup_update_tonies_credentials(req: SetupToniesCredentialsRequest):
-    result = update_tonies_credentials(req.username, req.app_password, req.tonies_email, req.tonies_password)
+def api_setup_update_tonies_credentials(req: SetupToniesCredentialsRequest, request: Request):
+    with auth.account_transition():
+        result = _account_result(update_tonies_credentials, req.username, req.app_password, req.tonies_email, req.tonies_password)
+        if result.get('ok'):
+            auth.revoke_all_sessions(keep=auth.request_session(request))
     if result.get('ok'):
         reset_upload_session()
     return result
@@ -248,20 +276,9 @@ def api_setup_update_tonies_credentials(req: SetupToniesCredentialsRequest):
 
 @app.post('/api/setup/update-yt-dlp')
 def api_setup_update_ytdlp():
-    try:
-        before = _cmd_version(["yt-dlp", "--version"])
-        cmd = ["python", "-m", "pip", "install", "--no-cache-dir", "--upgrade", "yt-dlp"]
-        out = subprocess.run(cmd, capture_output=True, text=True, timeout=240)
-        after = _cmd_version(["yt-dlp", "--version"])
-        ok = out.returncode == 0
-        return {
-            "ok": ok,
-            "before": before,
-            "after": after,
-            "output": ((out.stdout or "") + "\n" + (out.stderr or "")).strip()[-2000:],
-        }
-    except Exception as e:
-        return {"ok": False, "error": str(e)}
+    # Kept so 2.0 pages still open in a browser get a clear answer instead of a 404.
+    return {"ok": False, "update_supported": False,
+            "error": "Runtime updates are disabled. Rebuild or pull an updated container image to update yt-dlp"}
 
 
 @app.post("/api/chat")
@@ -328,47 +345,20 @@ def events_stats():
 def creative_tonies():
     try:
         return list_creative_tonies()
-    except Exception as e:
-        return {"error": str(e)}
+    except Exception:
+        return {"error": "Could not load Tonies; check the account connection and retry"}
 
 
 @app.get('/api/files')
 def files():
-    def probe_duration_sec(path: str) -> float:
-        try:
-            cmd = [
-                'ffprobe', '-v', 'error',
-                '-show_entries', 'format=duration',
-                '-of', 'json',
-                path,
-            ]
-            out = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=10)
-            data = json.loads(out.stdout or '{}')
-            dur = data.get('format', {}).get('duration')
-            return float(dur) if dur is not None else None
-        except Exception:
-            return None
-
-    downloads = settings.data_dir / 'downloads'
-    items = []
-    for p in sorted(downloads.glob('*.mp3'), key=lambda x: x.stat().st_mtime, reverse=True):
-        items.append({
-            'name': p.name,
-            'path': str(p),
-            'size_bytes': p.stat().st_size,
-            'duration_sec': probe_duration_sec(str(p)),
-            'modified': p.stat().st_mtime,
-        })
-    return items
+    return library_files()
 
 
 @app.post('/api/upload-existing')
 def upload_existing(req: UploadExistingRequest):
     if Path(req.filename).name != req.filename or Path(req.filename).suffix.lower() != '.mp3':
         raise HTTPException(status_code=400, detail='Invalid library filename')
-    p = settings.data_dir / 'downloads' / req.filename
-    if not p.is_file():
-        raise HTTPException(status_code=404, detail='Library file not found')
+    p = library_file(req.filename)
     try:
         position = clean_position(req.position)
     except ValueError as e:
@@ -387,9 +377,25 @@ def submit_tonies_actions(req: ToniesActionsRequest):
         if not 1 <= len(req.actions) <= 200:
             raise ValueError("Send between 1 and 200 actions")
         actions = action_queue.submit(req.target_url, req.actions)
-    except (ValueError, RuntimeError) as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
+    except (ValueError, RuntimeError):
+        raise HTTPException(status_code=400, detail="Action request refused; refresh the Tonie and check the selected actions") from None
     return {'actions': [a.public() for a in actions]}
+
+
+@app.post('/api/tonies-actions/{action_id}/undo')
+def undo_tonies_actions(action_id: str):
+    """Undo one server-owned submission, or cancel its still-pending deletion."""
+    try:
+        actions = action_queue.undo(action_id)
+    except (ValueError, RuntimeError):
+        return JSONResponse({
+            "detail": "Undo unavailable or outcome unconfirmed; refresh the Tonie before another action",
+            "needs_refresh": True,
+        }, status_code=409)
+    result: dict = {'actions': [action.public() for action in actions]}
+    if actions and actions[0].content is not None:
+        result['content'] = actions[0].content
+    return result
 
 
 @app.get('/api/tonies-actions')
@@ -405,99 +411,64 @@ def api_clear_search_cache():
 
 @app.post('/api/files/upload')
 async def upload_file_to_library(file: UploadFile = File(...)):
-    uploads_dir = settings.data_dir / 'uploads'
-    downloads_dir = settings.data_dir / 'downloads'
-    uploads_dir.mkdir(parents=True, exist_ok=True)
-    downloads_dir.mkdir(parents=True, exist_ok=True)
-
-    raw_name = Path(file.filename or 'upload').stem
-    safe_base = sanitize_filename(raw_name)
-    suffix = Path(file.filename or '').suffix or '.bin'
-    temp_path = uploads_dir / f"{safe_base}{suffix}"
-
-    blob = await file.read()
-    temp_path.write_bytes(blob)
-
-    out_path = downloads_dir / f"{safe_base}.mp3"
-    if out_path.exists():
-        out_path = downloads_dir / f"{safe_base}_{abs(hash(blob)) % 100000}.mp3"
-
-    cmd = [
-        'ffmpeg', '-y',
-        '-i', str(temp_path),
-        '-vn',
-        '-ar', '44100',
-        '-ac', '2',
-        '-codec:a', 'libmp3lame',
-        '-b:a', '128k',
-        str(out_path),
-    ]
-    try:
-        subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=240)
-    finally:
-        try:
-            temp_path.unlink(missing_ok=True)
-        except Exception:
-            pass
-
-    return {'ok': True, 'filename': out_path.name}
+    return await store_upload(file)
 
 
 @app.post('/api/tonies-content')
 def tonies_content(req: ToniesContentRequest):
     try:
         return get_tonies_content(req.target_url)
-    except Exception as e:
-        return {"error": str(e)}
+    except Exception:
+        return {"error": "Could not load Tonie content; check the account connection and refresh"}
 
 
 @app.post('/api/tonies-content/delete')
 def tonies_content_delete(req: ToniesDeleteRequest):
     try:
         return delete_tonies_chapter(req.target_url, req.index, req.chapter_title, req.chapter_id, req.chapter_fingerprint, req.app_track_token)
-    except Exception as e:
-        logger.exception("tonies delete failed target_url=%s index=%s chapter_title=%s chapter_id=%s chapter_fingerprint=%s app_track_token=%s", req.target_url, req.index, req.chapter_title, req.chapter_id, req.chapter_fingerprint, req.app_track_token)
-        return {"error": str(e)}
+    except Exception:
+        logger.warning("Tonies delete failed; outcome unconfirmed; refresh before another action")
+        return {"error": "Delete outcome unconfirmed; refresh before another action"}
 
 
 @app.post('/api/tonies-content/delete-all')
 def tonies_content_delete_all(req: ToniesContentRequest):
     try:
         return delete_all_tonies_content(req.target_url)
-    except Exception as e:
-        logger.exception("tonies delete-all failed target_url=%s", req.target_url)
-        return {"error": str(e)}
+    except Exception:
+        logger.warning("Tonies delete-all failed; outcome unconfirmed; refresh before another action")
+        return {"error": "Delete outcome unconfirmed; refresh before another action"}
 
 
 @app.post('/api/tonies-content/reorder')
 def tonies_content_reorder(req: ToniesReorderRequest):
     try:
         return reorder_tonies_chapter(req.target_url, req.from_index, req.to_index, chapter_id=req.chapter_id)
-    except Exception as e:
-        return {"error": str(e)}
+    except Exception:
+        return {"error": "Reorder outcome unconfirmed; refresh before another action"}
 
 
 @app.post('/api/tonies-content/rename')
 def tonies_content_rename(req: ToniesRenameRequest):
     try:
         return rename_tonies_chapter(req.target_url, req.index, req.title, chapter_id=req.chapter_id)
-    except Exception as e:
-        return {"error": str(e)}
+    except Exception:
+        return {"error": "Rename outcome unconfirmed; refresh before another action"}
 
 
 @app.get('/api/files/{filename}')
-def download_file(filename: str):
-    p = settings.data_dir / 'downloads' / filename
-    if not p.exists() or not p.is_file():
-        raise HTTPException(status_code=404, detail='not_found')
-    return FileResponse(str(p), filename=p.name, media_type='audio/mpeg')
+def download_file(filename: str, inline: bool = False):
+    p = library_file(filename)
+    return FileResponse(
+        str(p), filename=p.name, media_type='audio/mpeg',
+        content_disposition_type='inline' if inline else 'attachment',
+        headers={'Cache-Control': 'no-store'} if inline else None,
+    )
 
 
 @app.delete('/api/files/{filename}')
 def delete_file(filename: str):
-    p = settings.data_dir / 'downloads' / filename
-    if not p.exists() or not p.is_file():
-        raise HTTPException(status_code=404, detail='not_found')
+    p = library_file(filename)
     p.unlink()
     return {'ok': True, 'deleted': filename}
 
@@ -508,8 +479,8 @@ def select_candidate(job_id: str, req: SelectionRequest):
         selected_job_id = select_candidate_and_continue(job_id, req.index, req.target_url, clean_position(req.position))
         j = get_job(selected_job_id)
         return j.model_dump() if j else {"error": "not_found"}
-    except Exception as e:
-        return {"error": str(e)}
+    except Exception:
+        return {"error": "Could not select this candidate; refresh and check the selection"}
 
 
 @app.post("/api/jobs/{job_id}/cancel")
@@ -517,8 +488,8 @@ def cancel_job_api(job_id: str):
     try:
         j = cancel_job(job_id)
         return j.model_dump() if j else {"error": "not_found"}
-    except Exception as e:
-        return {"error": str(e)}
+    except Exception:
+        return {"error": "Could not cancel this job; refresh to check its current status"}
 
 
 @app.get("/api/jobs/{job_id}")

@@ -28,3 +28,6 @@ docker-compose.*-branch.yml
 
 # Internal/one-off maintainer scripts
 scripts/dev/
+
+# Private cumulative work tracker (requirements, progress, evidence pointers)
+/WORK_STATUS.local.md

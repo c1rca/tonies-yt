@@ -4,727 +4,69 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Tonies-YT</title>
-    <style>
-      :root {
-        --bg: #090f1f;
-        --panel: #101a33;
-        --panel-2: #0d172d;
-        --border: #2b3f68;
-        --text: #ebf1ff;
-        --muted: #9eb1dc;
-        --accent: #34c7ff;
-        --accent2: #7b8fff;
-        --ok: #2cd39e;
-        --warn: #f3be53;
-        --err: #ff7f9a;
-        --shadow: 0 16px 38px rgba(0, 0, 0, .32);
-        --motion-fast: .14s;
-        --motion-mid: .2s;
-      }
-
-      * { box-sizing: border-box; }
-      html, body { height: 100%; }
-      html { background: var(--bg); }
-      body {
-        margin: 0;
-        min-height: 100vh;
-        color: var(--text);
-        font: 500 14px/1.4 Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
-        background:
-          radial-gradient(1200px 520px at 12% -12%, #1b2f5f55 0%, transparent 60%),
-          radial-gradient(1000px 480px at 88% -16%, #0da6df33 0%, transparent 58%),
-          linear-gradient(180deg, #0a1123 0%, #090f1f 65%, #090f1f 100%);
-      }
-
-      .wrap {
-        max-width: 1320px;
-        margin: 0 auto;
-        padding: 18px;
-      }
-
-      .top {
-        display: grid;
-        grid-template-columns: 1fr auto;
-        gap: 12px;
-        align-items: center;
-        margin-bottom: 14px;
-      }
-
-      .brand { display: flex; align-items: center; gap: 12px; }
-      .logo {
-        width: 42px;
-        height: 42px;
-        filter: drop-shadow(0 8px 22px #18b0ff59);
-      }
-      h1 {
-        margin: 0;
-        font-size: 1.24rem;
-        letter-spacing: .2px;
-        background: linear-gradient(180deg, #f4f8ff, #c7dbff);
-        -webkit-background-clip: text;
-        background-clip: text;
-        color: transparent;
-      }
-      .sub { color: var(--muted); font-size: .86rem; letter-spacing: .2px; }
-
-      .chips { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-      .chip {
-        border: 1px solid #425789;
-        background: #12213f;
-        color: #c7d7ff;
-        border-radius: 999px;
-        padding: 4px 10px;
-        font-size: .74rem;
-      }
-      .chip.ok { border-color: #2f8a71; color: #bcf5e1; }
-      .chip.warn { border-color: #a97c2f; color: #ffe4ad; }
-      .chip.err { border-color: #9e3f5a; color: #ffc9d6; }
-      html.hide-search-results #jobs { display: none !important; }
-
-      button, input {
-        font: inherit;
-        color: var(--text);
-      }
-      button {
-        border: 1px solid #2f78a8;
-        background: linear-gradient(180deg, #15496a, #123f5d);
-        color: #e9f8ff;
-        border-radius: 10px;
-        padding: 8px 11px;
-        font-size: .82rem;
-        font-weight: 650;
-        cursor: pointer;
-        box-shadow: 0 6px 18px rgba(5, 10, 26, .28);
-        transition: filter var(--motion-fast) ease, transform .05s ease, box-shadow var(--motion-mid) ease;
-      }
-      button:hover { filter: brightness(1.08); box-shadow: 0 10px 22px rgba(5, 10, 26, .34); }
-      button:active { transform: translateY(1px); }
-      button:focus-visible {
-        outline: none;
-        box-shadow: 0 0 0 2px #090f1f, 0 0 0 4px #49c2ffcc;
-      }
-      button.ghost { background: #1a2748; border-color: #4b5f93; }
-      button.good { background: linear-gradient(180deg, #18795b, #13674d); border-color: #258866; }
-      button.warn { background: linear-gradient(180deg, #7a5d21, #654b1b); border-color: #a88033; color: #ffecc7; }
-      button:disabled { opacity: .65; cursor: not-allowed; }
-
-      .trash-btn {
-        background: transparent;
-        border: 1px solid #3d4f74;
-        color: #8ea2c9;
-        padding: 6px 9px;
-        border-radius: 10px;
-        min-width: 34px;
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-      }
-      .trash-btn svg { width: 14px; height: 14px; stroke: currentColor; fill: none; stroke-width: 1.8; }
-      .trash-btn:hover {
-        border-color: #4a5d86;
-        color: #b4c6e8;
-        background: #101b35;
-      }
-
-      .grid {
-        display: grid;
-        grid-template-columns: minmax(0, 1.25fr) minmax(0, .75fr);
-        gap: 12px;
-      }
-      @media (max-width: 1060px) {
-        .grid {
-          grid-template-columns: 1fr;
-          grid-template-areas:
-            "activity"
-            "library";
-        }
-
-        .panel.activity { grid-area: activity; }
-        .panel.library { grid-area: library; }
-
-        .wrap { padding: 12px; }
-        .top { gap: 8px; margin-bottom: 10px; }
-        .logo { width: 36px; height: 36px; }
-        h1 { font-size: 1.08rem; }
-        .sub { font-size: .8rem; }
-        .panel { padding: 10px; border-radius: 12px; }
-        .stats { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
-        .stat { padding: 7px; }
-        .toolbar { grid-template-columns: 1fr auto; }
-        .list { max-height: 52vh; }
-        .file, .job { padding: 8px; }
-        button { padding: 8px 10px; font-size: .8rem; }
-      }
-
-      .panel {
-        background: linear-gradient(180deg, var(--panel), var(--panel-2));
-        border: 1px solid var(--border);
-        border-radius: 14px;
-        box-shadow: var(--shadow);
-        backdrop-filter: blur(2px);
-        padding: 12px;
-        min-width: 0;
-      }
-      .panel h2 { margin: 0; font-size: .98rem; letter-spacing: .2px; }
-      .page-footer {
-        margin-top: 12px;
-        text-align: center;
-        font-size: .75rem;
-        color: #8ea2c9;
-      }
-      .page-footer a {
-        color: #9ed0ff;
-        text-decoration: none;
-      }
-      .page-footer a:hover { text-decoration: underline; }
-
-      .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-      .row.between { justify-content: space-between; }
-
-      .muted { color: var(--muted); }
-      .tiny { font-size: .76rem; color: var(--muted); }
-      .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
-
-      .stats {
-        margin-top: 8px;
-        display: grid;
-        grid-template-columns: repeat(3, minmax(0, 1fr));
-        gap: 8px;
-      }
-      .stat {
-        border: 1px solid #2c436b;
-        border-radius: 10px;
-        background: #0b1429;
-        padding: 8px;
-      }
-      .stat .k { font-size: 1.05rem; font-weight: 700; }
-      .stat .l { font-size: .72rem; color: var(--muted); text-transform: uppercase; letter-spacing: .3px; }
-
-      .toolbar {
-        margin-top: 10px;
-        display: grid;
-        grid-template-columns: 1fr auto;
-        gap: 8px;
-      }
-      .toolbar input {
-        width: 100%;
-        border: 1px solid #385082;
-        border-radius: 10px;
-        background: #0a1328;
-        padding: 8px 10px;
-      }
-
-      .list {
-        margin-top: 10px;
-        max-height: 68vh;
-        overflow: auto;
-        padding-right: 4px;
-      }
-
-      .file {
-        border: 1px solid #30476b;
-        border-radius: 11px;
-        background: #0b1328;
-        padding: 9px;
-        margin-bottom: 7px;
-        display: grid;
-        grid-template-columns: minmax(0, 1fr) auto;
-        gap: 8px;
-        align-items: center;
-        transition: transform var(--motion-mid) ease, box-shadow var(--motion-mid) ease, border-color var(--motion-mid) ease;
-      }
-      .file.queued-upload {
-        border-color: #2ccf9b;
-        box-shadow: 0 0 0 1px #2ccf9b55, 0 0 12px #2ccf9b22;
-        background: linear-gradient(180deg, #0d1d2e, #0b1328);
-      }
-      .file-main { min-width: 0; }
-      .file-title {
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-        display: block;
-      }
-
-      .file.focus-upload {
-        border-color: #38bdf8;
-        box-shadow: 0 0 0 1px #38bdf866, 0 0 22px #38bdf833;
-      }
-
-      .job.focus-upload-job {
-        border-color: #38bdf8;
-        box-shadow: 0 0 0 1px #38bdf866, 0 0 22px #38bdf833;
-      }
-      .truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-
-      .job {
-        border: 1px solid #30476b;
-        border-radius: 11px;
-        background: #0b1328;
-        padding: 9px;
-        margin-bottom: 8px;
-        transition: transform var(--motion-mid) ease, box-shadow var(--motion-mid) ease, border-color var(--motion-mid) ease;
-      }
-      .file:hover { transform: translateY(-1px); border-color: #3e5b8d; }
-      .job:hover { border-color: #3e5b8d; }
-      .file-title strong, .tonies-item strong, .job strong { color: #eaf2ff; font-weight: 800; }
-
-      .job-top {
-        display: grid;
-        grid-template-columns: 1fr auto;
-        gap: 8px;
-        align-items: start;
-      }
-      .status {
-        font-size: .72rem;
-        text-transform: uppercase;
-        font-weight: 700;
-        letter-spacing: .45px;
-        border: 1px solid;
-        border-radius: 999px;
-        padding: 2px 7px;
-        max-width: 100%;
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
-      }
-      .status.done { color: #bcf4e0; border-color: #2f8667; background: #10392e; }
-      .status.failed { color: #ffc8d4; border-color: #934157; background: #3c1625; }
-      .status.uploading { color: #ffe2a9; border-color: #9b7430; background: #3f2d12; }
-      .status.searching, .status.queued, .status.parsing { color: #cde3ff; border-color: #4064a6; background: #122447; }
-      .status.awaiting_selection { color: #c8f0ff; border-color: #3f8ea8; background: #10303d; box-shadow: 0 0 0 1px #5ab9d033 inset; }
-      .status.downloading, .status.preparing, .status.waiting_upload { color: #d8e7ff; border-color: #4f6ea5; background: #15294d; }
-
-      .job-title-row {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        min-width: 0;
-        margin-bottom: 2px;
-      }
-      .job-title-row strong {
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-        display: block;
-      }
-
-      details {
-        margin-top: 7px;
-        border: 1px solid #273c5f;
-        border-radius: 9px;
-        background: #081024;
-        padding: 6px;
-      }
-      summary { cursor: pointer; color: #b7c9ee; font-size: .78rem; }
-      .logs { margin-top: 6px; font-size: .75rem; color: #a5b7e0; line-height: 1.35; }
-
-      .error {
-        margin-top: 6px;
-        border: 1px solid #85384d;
-        background: #2b1220;
-        border-radius: 9px;
-        padding: 7px;
-        color: #ffc9d6;
-        font-size: .78rem;
-      }
-
-      .modal-backdrop {
-        position: fixed;
-        inset: 0;
-        background: rgba(4, 10, 24, 0.72);
-        display: none;
-        align-items: center;
-        justify-content: center;
-        z-index: 9999;
-        padding: 16px;
-      }
-      .modal-backdrop.open { display: flex; }
-      .modal {
-        width: min(520px, 100%);
-        border: 1px solid #334a74;
-        border-radius: 14px;
-        background: linear-gradient(180deg, #0f1b37, #0b1530);
-        box-shadow: 0 20px 60px rgba(0,0,0,.45);
-        padding: 14px;
-      }
-      .modal h3 { margin: 0 0 6px; font-size: 1.02rem; }
-      .modal p { margin: 0; color: #c2d2f0; line-height: 1.35; white-space: pre-line; }
-      .modal-actions { margin-top: 14px; display: flex; justify-content: flex-end; gap: 8px; }
-
-      .tonies-menu {
-        position: fixed;
-        z-index: 10001;
-        min-width: 160px;
-        border: 1px solid #334a74;
-        border-radius: 12px;
-        background: linear-gradient(180deg, #0f1b37, #0b1530);
-        box-shadow: 0 20px 50px rgba(0,0,0,.45);
-        padding: 6px;
-        display: none;
-      }
-      .tonies-menu.open { display: block; }
-      .tonies-menu button {
-        width: 100%;
-        text-align: left;
-        background: transparent;
-        border: 1px solid transparent;
-        border-radius: 8px;
-        padding: 7px 8px;
-        color: #d6e4ff;
-        font-size: .82rem;
-      }
-      .tonies-menu button:hover { background: #14264a; border-color: #355384; }
-
-      .local-upload-btn { display: none; }
-      @media (max-width: 1060px) {
-        .local-upload-btn { display: inline-flex; }
-      }
-
-      .toast-stack {
-        position: fixed;
-        left: 50%;
-        transform: translateX(-50%);
-        bottom: 14px;
-        z-index: 10000;
-        display: grid;
-        gap: 8px;
-        justify-items: center;
-      }
-      .toast {
-        border: 1px solid #37507b;
-        background: #0f1b36;
-        border-radius: 10px;
-        padding: 8px 10px;
-        color: #d6e4ff;
-        box-shadow: 0 10px 26px rgba(0,0,0,.35);
-        min-width: 220px;
-        animation: toastIn .2s ease-out;
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 10px;
-      }
-      .toast-action {
-        border: 1px solid #4b679a;
-        background: transparent;
-        color: #dce9ff;
-        border-radius: 999px;
-        padding: 2px 8px;
-        font-size: .74rem;
-        font-weight: 700;
-      }
-      .toast.ok { border-color: #2f8667; }
-      .toast.warn { border-color: #9b7430; }
-      .toast.err { border-color: #934157; }
-      @keyframes toastIn { from { opacity: 0; transform: translateY(8px);} to { opacity: 1; transform: translateY(0);} }
-
-      .skeleton {
-        height: 52px;
-        border-radius: 10px;
-        margin-bottom: 7px;
-        background: linear-gradient(90deg, #0d1832 25%, #132447 50%, #0d1832 75%);
-        background-size: 220% 100%;
-        animation: shimmer 1.2s infinite;
-        border: 1px solid #2a3f64;
-      }
-      .results-empty {
-        border: 1px dashed #3a568a;
-        border-radius: 12px;
-        padding: 10px 12px;
-        background: linear-gradient(180deg, #0d1834, #0c1730);
-      }
-      .tonies-sync-skeleton {
-        height: 58px;
-        border-radius: 11px;
-        margin-bottom: 7px;
-        border: 1px solid #2f456d;
-        background: linear-gradient(90deg, #0f1b37 25%, #16274b 50%, #0f1b37 75%);
-        background-size: 220% 100%;
-        animation: shimmer 1.2s infinite;
-      }
-      .tonies-row-skeleton {
-        height: 54px;
-        border-radius: 12px;
-        border: 1px solid #2f456d;
-        background: linear-gradient(90deg, #0f1b37 25%, #16274b 50%, #0f1b37 75%);
-        background-size: 220% 100%;
-        animation: shimmer 1.2s infinite;
-      }
-      .tonies-end-drop-zone {
-        margin-top: 8px;
-        border: 1px dashed #355384;
-        border-radius: 10px;
-        min-height: 34px;
-        display: none;
-        align-items: center;
-        justify-content: center;
-        color: #87a3cf;
-        font-size: .78rem;
-        background: rgba(12, 22, 44, .45);
-      }
-      .list.external-drop .tonies-end-drop-zone { display: flex; }
-      .tonies-end-drop-zone.active {
-        border-color: #5ea8ff;
-        color: #cfe5ff;
-        background: rgba(20, 40, 78, .62);
-      }
-      @keyframes shimmer { 0% { background-position: 100% 0; } 100% { background-position: -100% 0; } }
-
-
-      .note {
-        margin-top: 10px;
-        border: 1px dashed #385281;
-        border-radius: 12px;
-        background: linear-gradient(180deg, #0c1731, #0a1430);
-        box-shadow: 0 8px 24px rgba(7, 12, 26, .24);
-        padding: 10px;
-      }
-
-      .tonies-grid {
-        margin-top: 8px;
-        display: grid;
-        grid-template-columns: 1fr;
-        gap: 8px;
-      }
-
-      .tonies-row {
-        width: 100%;
-        text-align: left;
-        border: 1px solid #30476b;
-        background: #0b1328;
-        border-radius: 12px;
-        padding: 8px;
-        display: grid;
-        grid-template-columns: 38px 1fr;
-        gap: 9px;
-        align-items: center;
-      }
-      .tonies-row.active {
-        border-color: #38bdf8;
-        box-shadow: 0 0 0 1px #38bdf866, 0 0 16px #38bdf833;
-        background: #0f2241;
-      }
-      .tonies-row img {
-        width: 38px;
-        height: 38px;
-        border-radius: 8px;
-        object-fit: cover;
-        background: #0a1226;
-      }
-
-      .tonies-thumb {
-        height: 82px;
-      }
-
-      @media (max-width: 1060px) {
-        .tonies-thumb {
-          height: 88px;
-        }
-      }
-
-      .loading-dot {
-        width: 8px;
-        height: 8px;
-        border-radius: 999px;
-        background: #7dd3fc;
-        display: inline-block;
-        animation: pulse 1s infinite ease-in-out;
-        margin-right: 6px;
-        vertical-align: middle;
-      }
-
-      .spinner {
-        width: 14px;
-        height: 14px;
-        border: 2px solid #6b86c9;
-        border-top-color: #34c7ff;
-        border-radius: 50%;
-        display: inline-block;
-        animation: spin .8s linear infinite;
-        vertical-align: middle;
-        margin-right: 7px;
-      }
-
-      .tonies-item {
-        border: 1px solid #30476b;
-        border-radius: 11px;
-        background: #0b1328;
-        padding: 8px;
-        margin-bottom: 7px;
-        display: grid;
-        grid-template-columns: auto minmax(0, 1fr) auto auto;
-        gap: 8px;
-        align-items: center;
-      }
-
-      #tonies-content { max-height: 62vh; }
-      @media (max-width: 1060px) {
-        #tonies-content {
-          max-height: none;
-          overflow: visible;
-        }
-      }
-
-      .tonies-item.dragging { opacity: .45; border-color: #38bdf8; }
-      .drag-handle {
-        cursor: grab;
-        color: #8fb1ea;
-        font-size: 16px;
-        touch-action: none;
-        user-select: none;
-        padding: 6px;
-        margin: -6px;
-        border-radius: 8px;
-      }
-      .drag-handle:active { background: #14264a; }
-      .tap-feedback { animation: tapPop var(--motion-fast) ease; }
-      @keyframes tapPop { 0% { transform: scale(1);} 50% { transform: scale(.97);} 100% { transform: scale(1);} }
-      .tonies-item.just-moved { animation: rowPulse .45s ease; }
-      @keyframes rowPulse {
-        0% { box-shadow: 0 0 0 0 #4fd2ff66; border-color: #4fd2ff; }
-        100% { box-shadow: 0 0 0 10px #4fd2ff00; border-color: #30476b; }
-      }
-
-      .tonies-item.removing {
-        animation: toniesDissolve .45s ease forwards;
-      }
-      @keyframes toniesDissolve {
-        0% { opacity: 1; transform: scale(1); filter: blur(0px); }
-        100% { opacity: 0; transform: scale(.96); filter: blur(2px); }
-      }
-
-      .tonies-item.new-upload {
-        border-color: #2ccf9b;
-        box-shadow: 0 0 0 1px #2ccf9b55, 0 0 16px #2ccf9b33;
-        background: linear-gradient(180deg, #0d1d2e, #0b1328);
-      }
-
-      .tonies-item.deleting {
-        opacity: .82;
-        border-color: #f59e0b;
-      }
-      .drag-handle { cursor: grab; color: #8fb1ea; font-size: 16px; touch-action: none; user-select: none; }
-      .drag-handle:active { cursor: grabbing; }
-      .tonies-item.drop-target { border-color: #5fd4ff; box-shadow: 0 0 0 1px #5fd4ff66; }
-      #tonies-content.external-drop {
-        border: 1px dashed #5fd4ff;
-        border-radius: 10px;
-        padding: 6px;
-      }
-
-      @keyframes spin { to { transform: rotate(360deg); } }
-
-      @keyframes pulse {
-        0%, 100% { opacity: .35; transform: scale(.9); }
-        50% { opacity: 1; transform: scale(1); }
-      }
-
-    </style>
+    <link rel="stylesheet" href="/static/assets/workspace.css?v=1" />
   </head>
   <body>
-    <div class="wrap">
-      <div class="top">
-        <div class="brand">
-          <img class="logo" src="/static/assets/tonie-box-icon.webp?v=1" alt="Tonies-YT logo" />
-          <div>
-            <h1>Tonies-YT</h1>
-            <div class="sub">Upload manager</div>
+    <div class="workspace" data-view="tracks" id="workspace">
+      <header class="app-header">
+        <a class="app-brand" href="/" aria-label="Tonies-YT home"><img src="/static/assets/tonie-box-icon.webp?v=1" alt="" width="34" height="34" /><span>Tonies-YT <small>Audio workspace</small></span></a>
+        <div class="header-actions">
+          <button class="ghost" id="activity-summary" onclick="setWorkspaceView('activity', true)">Activity</button>
+          <details class="app-settings"><summary aria-label="Workspace settings">Settings</summary><div class="settings-popover">
+            <label for="workspace-theme">Appearance</label><select id="workspace-theme" onchange="setWorkspaceTheme(this.value)"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select>
+            <a href="/settings">Account &amp; settings</a><a href="/logs">Application logs</a><button class="ghost" id="lock-app">Lock app</button>
+            <span class="tiny" id="health">Connecting…</span><span id="realtime-status" hidden></span>
+          </div></details>
+        </div>
+      </header>
+      <main class="studio-grid">
+        <aside class="tonie-rail" aria-label="Your Tonies" id="tonie-rail">
+          <div class="rail-heading"><h2>Your Tonies</h2><button class="ghost" id="refresh-tonies" aria-label="Refresh Tonies">Refresh</button></div>
+          <div id="tonies" class="tonies-grid"></div>
+          <p class="rail-caption">A little space for<br />their next favourite.</p>
+        </aside>
+        <div class="workspace-main">
+          <header class="target-header">
+            <div class="target-art" id="selected-tonie-art"></div>
+            <div class="target-copy"><div class="target-label">Selected Tonie</div><h1 id="selected-tonie-name">Choose a Tonie</h1><button class="target-change ghost" id="change-tonie" onclick="toggleTonieSelector()" aria-expanded="false" aria-controls="tonie-rail">Change Tonie</button></div>
+            <div class="capacity"><span class="tiny" id="tonies-minutes">Capacity loading…</span><div id="tonies-progress-track"><div id="tonies-progress"></div></div></div>
+            <div id="workspace-undo" class="workspace-undo" hidden><span id="workspace-undo-label"></span><button id="workspace-undo-button" class="ghost" onclick="undoWorkspaceAction()">Undo</button></div>
+          </header>
+          <section id="view-tracks" class="tracks-pane" aria-labelledby="tracks-heading" tabindex="-1">
+            <div class="section-heading"><div><h2 id="tracks-heading">Tracks</h2><p class="tiny" id="track-order-description">Playback positions on this Tonie.</p></div><button class="primary mobile-add" onclick="setWorkspaceView('add', true)">Add audio</button></div>
+            <div class="track-toolbar"><button id="toggle-tonies-order" class="ghost">Reverse display</button><button id="toggle-tonies-edit" class="ghost">Edit names</button><button id="select-tracks" class="ghost" onclick="toggleTrackSelection()">Select</button></div>
+            <div id="tonies-status" class="tiny" role="status"></div>
+            <div id="tonies-edit-actions" class="row" style="display:none"><button id="save-tonies-names">Save names</button><button id="cancel-tonies-names" class="ghost">Cancel</button></div>
+            <div id="track-selection-bar" class="selection-bar" hidden><span id="track-selection-count"></span><button class="danger ghost" id="delete-selected-tracks" onclick="deleteSelectedTracks()">Remove selected</button></div>
+            <div class="list" id="tonies-content"></div>
+            <details class="danger-zone"><summary>Manage this Tonie</summary><p class="tiny">Permanently remove every track. This cannot be undone.</p><button id="delete-all-tonies-content" class="danger ghost">Clear all tracks</button></details>
+          </section>
+          <section id="view-activity" class="activity-pane" aria-labelledby="activity-heading" tabindex="-1" hidden><div class="section-heading"><div><h2 id="activity-heading">Activity</h2><p class="tiny">Background work, across your Tonies.</p></div><button class="ghost" onclick="setWorkspaceView('tracks', true)">Back to tracks</button></div><div id="workspace-activity" aria-live="polite"></div></section>
+        </div>
+        <section id="view-add" class="source-pane" aria-labelledby="add-heading" tabindex="-1">
+          <div class="section-heading"><h2 id="add-heading">Add audio</h2><span class="source-mark" aria-hidden="true">+</span></div>
+          <p id="add-destination" class="destination">Choose a Tonie to add audio.</p>
+          <div class="source-tabs" role="tablist" aria-label="Audio source"><button id="source-tab-youtube" role="tab" aria-selected="true" aria-controls="source-youtube" onclick="setWorkspaceSource('youtube')">YouTube</button><button id="source-tab-local" role="tab" aria-selected="false" aria-controls="source-local" tabindex="-1" onclick="setWorkspaceSource('local')">Local files</button></div>
+          <div id="source-youtube" role="tabpanel" aria-labelledby="source-tab-youtube">
+            <label class="field-label" for="query-input">Find a song or story</label><div class="search-field"><input id="query-input" aria-label="Search YouTube" placeholder="Song, story, or YouTube link" /><button id="search-btn">Search</button></div>
+            <div class="results-heading"><span class="tiny" id="search-limit-label">Top 5 results</span><button id="clear-results" class="ghost">Clear</button></div><div id="results-loader" class="tiny" role="status"></div><div class="list" id="jobs"></div>
           </div>
-        </div>
-        <div class="chips">
-          <button class="ghost tiny" onclick="window.location.href='/logs'" style="padding:5px 8px;">Logs</button>
-          <button class="ghost tiny" onclick="window.location.href='/settings'" style="padding:5px 8px;">Settings</button>
-          <button class="ghost tiny" id="lock-app" style="padding:5px 8px;">Lock</button>
-          <span class="chip" id="health">checking…</span>
-          <span class="chip" id="realtime-status" style="display:none;">realtime: -</span>
-        </div>
-      </div>
-
-      <div class="note" style="margin-bottom:12px;">
-        <div class="row between">
-          <h2>Search YouTube</h2>
-          <span class="tiny" id="search-limit-label">Top 5 results</span>
-        </div>
-        <div class="row" style="margin-top:8px;">
-          <input id="query-input" placeholder="Enter a song, story, or video title…" style="flex:1;border:1px solid #385082;border-radius:10px;background:#0a1328;padding:8px 10px;" />
-          <button id="search-btn">Search</button>
-        </div>
-      </div>
-
-      <section class="panel" style="margin-bottom:12px;">
-        <div class="row between">
-          <h2>Results</h2>
-          <button id="clear-results" class="ghost tiny" style="padding:5px 8px;">Clear results</button>
-        </div>
-        <div id="results-loader" class="tiny" style="margin-top:6px;color:#9eb1dc;"></div>
-        <div class="list" id="jobs" style="max-height:none;overflow:visible;"></div>
+          <div id="source-local" class="library" role="tabpanel" aria-labelledby="source-tab-local" hidden>
+            <div class="import-strip" id="local-import-zone"><div><strong>Your audio, ready to add.</strong><p class="tiny">Import an audio file or drop it here.</p></div><button id="browse-files" class="ghost">Import file</button></div><input id="upload-file-input" type="file" accept="audio/*,.mp3,.m4a,.aac,.wav,.flac,.ogg" hidden />
+            <div class="local-meta"><span><span id="st-count">0</span> files</span><span id="st-size">0 MB</span><span id="st-length" hidden>0:00</span><button class="ghost" id="refresh-files" aria-label="Refresh local files">Refresh</button></div>
+            <label class="field-label" for="file-filter">Find a local file</label><div class="search-field"><input id="file-filter" aria-label="Filter local files" placeholder="Filter by filename" /><button id="clear-filter" class="ghost">Clear</button></div>
+            <div id="local-selection-bar" class="selection-bar" hidden><span id="local-selection-count"></span><button id="add-selected-local" onclick="addSelectedLocalFiles()">Add selected</button><button class="ghost" onclick="clearLocalSelection()" aria-label="Clear local selection">Cancel</button></div>
+            <div class="list" id="files"></div>
+          </div>
+        </section>
+      </main>
+      <section id="local-player" class="local-player" aria-label="Local preview" hidden>
+        <div class="preview-label"><span class="preview-disc" aria-hidden="true">♪</span><div><span class="tiny">Local preview</span><div class="local-player-name" id="local-player-name"></div></div></div>
+        <audio id="local-audio" controls preload="metadata" aria-label="Local MP3 playback"></audio>
+        <button type="button" id="local-player-close" class="ghost" aria-label="Stop and close player">Close</button><div id="local-player-status" class="local-player-status tiny" role="status"></div>
       </section>
-
-      <div class="grid">
-        <section class="panel activity">
-          <div style="margin-top:0;margin-bottom:10px;padding:8px 0;">
-            <div class="row between">
-              <div>
-                <h2>Creative Tonies</h2>
-                <div class="tiny" style="margin-top:3px;">Select a Tonies to upload to.</div>
-              </div>
-              <button class="ghost" id="refresh-tonies">Refresh</button>
-            </div>
-            <div id="tonies" class="tonies-grid"></div>
-          </div>
-
-          <div class="row between" style="align-items:flex-start;">
-            <div class="row" style="gap:8px;align-items:center;">
-              <h2>Tonies MP3 Library</h2>
-              <button id="toggle-tonies-order" class="ghost tiny" style="padding:5px 8px;">Show newest first</button>
-              <button id="toggle-tonies-edit" class="ghost tiny" style="padding:5px 8px;">Edit names</button>
-            </div>
-            <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px;">
-              <div id="tonies-progress-track" style="width:112px;border:1px solid #31486f;border-radius:999px;background:#0a1328;height:7px;overflow:hidden;">
-                <div id="tonies-progress" style="height:100%;width:0%;background:linear-gradient(90deg,#34c7ff,#7b8fff);transition:width .25s ease;"></div>
-              </div>
-              <span class="tiny" id="tonies-minutes">-- / 90 min free</span>
-            </div>
-          </div>
-          <div class="tiny" style="margin-top:6px;color:#9eb1dc;">Already uploaded on selected Tonies. Drag to reorder, delete to remove. Tip: swipe left or hold a row for quick actions.</div>
-          <div id="tonies-status" class="tiny" style="margin-top:6px;margin-bottom:8px;color:#9eb1dc;"></div>
-          <div id="tonies-edit-actions" class="row" style="display:none;gap:8px;margin-bottom:8px;">
-            <button id="save-tonies-names" class="good">Save names</button>
-            <button id="cancel-tonies-names" class="ghost">Cancel</button>
-            <button id="delete-all-tonies-content" class="warn" style="margin-left:auto;background:linear-gradient(180deg,#b9222f,#941a24);border-color:#d64556;color:#ffe4e8;">Delete all content</button>
-          </div>
-          <div class="list" id="tonies-content"></div>
-        </section>
-
-        <section class="panel library">
-          <div class="row between">
-            <h2>Local MP3 Library</h2>
-            <div class="row" style="gap:8px;">
-              <button class="ghost" id="browse-files">Browse</button>
-              <button class="ghost" id="refresh-files">Refresh</button>
-            </div>
-          </div>
-          <input id="upload-file-input" type="file" accept="audio/*,.mp3,.m4a,.aac,.wav,.flac,.ogg" style="display:none;" />
-
-          <div class="stats" id="stats">
-            <div class="stat"><div class="k" id="st-count">0</div><div class="l">files</div></div>
-            <div class="stat"><div class="k" id="st-size">0 MB</div><div class="l">total size</div></div>
-            <div class="stat"><div class="k" id="st-length">0:00</div><div class="l">total length</div></div>
-          </div>
-
-          <div class="toolbar">
-            <input id="file-filter" placeholder="Filter by filename…" />
-            <button id="clear-filter" class="ghost">Clear</button>
-          </div>
-
-          <div class="list" id="files"></div>
-
-        </section>
-      </div>
-      <div class="page-footer">v1.0.0 · <a href="https://github.com/c1rca/tonies-yt" target="_blank" rel="noopener noreferrer">View on GitHub</a></div>
+      <nav class="workspace-nav" aria-label="Workspace"><button id="nav-tracks" aria-current="page" onclick="setWorkspaceView('tracks', true)"><span aria-hidden="true">≡</span>Tracks</button><button id="nav-add" onclick="setWorkspaceView('add', true)"><span aria-hidden="true">+</span>Add audio</button><button id="nav-activity" onclick="setWorkspaceView('activity', true)"><span aria-hidden="true">↗</span>Activity</button></nav>
     </div>
-
     <div id="confirm-modal" class="modal-backdrop" aria-hidden="true">
       <div class="modal" role="dialog" aria-modal="true" aria-labelledby="confirm-title">
         <h3 id="confirm-title">Confirm action</h3>
@@ -738,12 +80,14 @@
 
     <div id="toast-stack" class="toast-stack"></div>
 
-    <div id="tonies-menu" class="tonies-menu" aria-hidden="true">
+    <div id="tonies-menu" class="tonies-menu" aria-hidden="true" role="menu" aria-label="Track actions">
+      <button id="tonies-menu-rename" role="menuitem">Rename</button>
       <button id="tonies-menu-top">Move to top</button>
       <button id="tonies-menu-bottom">Move to bottom</button>
       <button id="tonies-menu-up">Move up</button>
       <button id="tonies-menu-down">Move down</button>
-      <button id="tonies-menu-cancel" class="ghost">Cancel</button>
+      <button id="tonies-menu-delete" class="danger" role="menuitem">Remove track</button>
+      <button id="tonies-menu-cancel" class="ghost" role="menuitem">Cancel</button>
     </div>
 
     <div id="file-menu" class="tonies-menu" aria-hidden="true">
@@ -755,6 +99,14 @@
     </div>
 
     <script src="/static/assets/session.js?v=1"></script>
+    <script src="/static/assets/workspace-navigation.js?v=1"></script>
+    <script src="/static/assets/workspace-sources.js?v=1"></script>
+    <script src="/static/assets/workspace-source-selection.js?v=1"></script>
+    <script src="/static/assets/workspace-tracks.js?v=1"></script>
+    <script src="/static/assets/local-preview.js?v=1"></script>
+    <script src="/static/assets/workspace-activity.js?v=1"></script>
+    <script src="/static/assets/workspace-undo.js?v=1"></script>
+    <script src="/static/assets/workspace-dialogs.js?v=1"></script>
     <script>
       try {
         if (localStorage.getItem('tonies-auto.results-cleared.v1') === '1') {
@@ -763,6 +115,12 @@
       } catch {}
 
       const filesEl = document.getElementById('files');
+      const localPlayerEl = document.getElementById('local-player');
+      const localAudioEl = document.getElementById('local-audio');
+      const localPlayerNameEl = document.getElementById('local-player-name');
+      const localPlayerStatusEl = document.getElementById('local-player-status');
+      let localPlaybackFilename = '';
+      let localPlaybackIntent = 0;
       const jobsEl = document.getElementById('jobs');
       const resultsLoaderEl = document.getElementById('results-loader');
       const searchBtnEl = document.getElementById('search-btn');
@@ -775,7 +133,6 @@
       const toniesStatusEl = document.getElementById('tonies-status');
       const toniesMinutesEl = document.getElementById('tonies-minutes');
       const toniesProgressEl = document.getElementById('tonies-progress');
-      const toniesProgressTrackEl = document.getElementById('tonies-progress-track');
       const toggleToniesOrderEl = document.getElementById('toggle-tonies-order');
       const toggleToniesEditEl = document.getElementById('toggle-tonies-edit');
       const toniesEditActionsEl = document.getElementById('tonies-edit-actions');
@@ -830,6 +187,7 @@
       let toniesNameDrafts = {};
       let toniesContentRequestSeq = 0;
       const toniesContentVersionByUrl = {};
+      const toniesContentReadSeqByUrl = {};  // latest-started library read per Tonie
       let toniesContentByUrlCache = {};
       const jobStatusById = {};
       let highlightedJobId = '';
@@ -1020,11 +378,19 @@
       }
 
       function hasUploadAttachmentReceipt(job) {
-        return !!job?.uploaded_chapter_id && Array.isArray(job?.tonies_content?.chapters);
+        return !isReversedStatus(job?.status) && !!job?.uploaded_chapter_id
+          && (Array.isArray(job?.tonies_content?.chapters) || !!job?.attachment_receipt);
+      }
+
+      // Tonies accepted the attachment but its read-back failed: a receipt, not inventory.
+      // The source stays blocked so it can't be added twice; nothing is positioned or replayed.
+      function isAcceptedUnconfirmedAttachment(job) {
+        return hasUploadAttachmentReceipt(job) && !!job.attachment_receipt && !Array.isArray(job.tonies_content?.chapters);
       }
 
       async function finalizePendingToniesUpload(job, succeeded) {
         if (!job?.id) return;
+        const reversed = isReversedStatus(job.status);
         const firstCompletion = !completedUploadJobIds.has(job.id);
         const newReceipt = hasUploadAttachmentReceipt(job) && !reconciledUploadReceiptJobIds.has(job.id);
         if (!firstCompletion && !newReceipt) return;
@@ -1036,13 +402,18 @@
           || (pendingDropUploadIntent?.jobId === job.id ? pendingDropUploadIntent : null);
         const url = String(job.target_url || intent?.targetUrl || pending?.targetUrl || '');
         const saved = succeeded || newReceipt;
+        const unconfirmed = isAcceptedUnconfirmedAttachment(job);
         // A terminal status without an attachment receipt is not proof of rejection or identity.
         // Keep its positioning intent until the exact-ID receipt arrives.
-        if (newReceipt) uploadIntentsByJobId.delete(job.id);
+        if (newReceipt || reversed) uploadIntentsByJobId.delete(job.id);
         else if (intent) uploadIntentsByJobId.set(job.id, intent);
         if (pendingDropUploadIntent?.jobId === job.id) pendingDropUploadIntent = null;
         const finish = async () => {
           try {
+            if (reversed) {
+              if (url === selectedToniesUrl) setToniesStatus(job.status === 'undone' ? 'Upload undone.' : 'Upload canceled.', false);
+              return;
+            }
             if (!saved) throw new Error(classifyError(job.error || ''));
             // Job content is a historical attachment receipt, never the current inventory.
             invalidateToniesContentRequests(url);
@@ -1069,7 +440,7 @@
                 renderToniesContent();
               }, TONIES_NEW_HIGHLIGHT_MS);
             }
-            if (intent && !job.upload_positioned) {
+            if (intent && !job.upload_positioned && !unconfirmed) {
               const from = content.chapters.findIndex(c => c.chapter_id === chapterId);
               if (!chapterId || from < 0) throw new Error('Upload saved, but its cloud ID is missing. Refresh before positioning it.');
               const to = intent.targetEdge === 'end' ? content.chapters.length - 1
@@ -1088,6 +459,7 @@
             showToast('Uploaded to Tonies', 'ok', 2800);
           } catch (e) {
             const message = saved ? `Upload saved; library update failed: ${e?.message || e}` : `Upload failed: ${e?.message || e}`;
+            recordWorkspaceNotice({id:`upload-result:${job.id}`, title:job.filename || intent?.filename || 'Add audio', targetUrl:url, stage:saved ? 'Saved; refresh needed' : 'Upload failed', error:message});
             if (url === selectedToniesUrl) setToniesStatus(message, false);
             showToast(message, 'err', 5200);
           } finally {
@@ -1099,7 +471,7 @@
               // Several local uploads can be in flight; each resolves its own file row.
               attachedUploadJobIds.delete(job.id);
               const uploadedFilename = pending?.filename || intent?.filename;
-              if (uploadedFilename) resolveLocalUploadPlanned(uploadedFilename);
+              if (uploadedFilename && !unconfirmed) resolveLocalUploadPlanned(uploadedFilename);
             }
             toniesUploadSyncing = hasInFlightTrackedUploadForSelectedTonies();
             renderTonies();
@@ -1141,7 +513,7 @@
         // Finalize regardless of current selection; otherwise pending upload state can get stuck
         // if the selected Tonie changes while job finishes in background.
         if (status === 'done' || hasUploadAttachmentReceipt(job)) { void finalizePendingToniesUpload(job, status === 'done'); }
-        else if (status === 'failed') { void finalizePendingToniesUpload(job, false); }
+        else if (isTerminalStatus(status)) { void finalizePendingToniesUpload(job, false); }
       }
 
       function isJobActive(jobOrStatus) {
@@ -1228,19 +600,26 @@
         return SEARCH_PENDING_STATUSES.has(getJobStatus(status));
       }
 
-      function renderJobProgress(job) {
-        if (isCandidateSelectionPending(job?.id)) return `<div class="tiny" style="margin-top:6px;color:#9eb1dc;"><span class="loading-dot"></span>Downloading audio…</div>`;
+      // tone: '' (in progress, muted), 'ok' or 'err'; placement 'above' sits over a candidate row.
+      function statusLine(text, { tone = '', busy = false, placement = '' } = {}) {
+        const classes = ['tiny', 'status-line', tone && `status-${tone}`, placement].filter(Boolean).join(' ');
+        return `<div class="${classes}">${busy ? '<span class="loading-dot"></span>' : ''}${esc(text)}</div>`;
+      }
+
+      const JOB_PROGRESS_TEXT = {
+        queued_download: 'Queued for download…', downloading: 'Downloading audio…',
+        queued_prepare: 'Queued for preparation…', preparing: 'Preparing audio…',
+        waiting_upload: 'Queued for upload…', uploading: 'Uploading to Tonies…',
+      };
+
+      function renderJobProgress(job, placement = '') {
         const s = String(job?.status || '');
-        if (s === 'awaiting_selection') return `<div class="tiny" style="margin-top:6px;color:#9eb1dc;">Select a result to upload to creative Tonies</div>`;
-        if (s === 'queued_download') return `<div class="tiny" style="margin-top:6px;color:#9eb1dc;"><span class="loading-dot"></span>Queued for download…</div>`;
-        if (s === 'downloading') return `<div class="tiny" style="margin-top:6px;color:#9eb1dc;"><span class="loading-dot"></span>Downloading audio…</div>`;
-        if (s === 'queued_prepare') return `<div class="tiny" style="margin-top:6px;color:#9eb1dc;"><span class="loading-dot"></span>Queued for local prep…</div>`;
-        if (s === 'preparing') return `<div class="tiny" style="margin-top:6px;color:#9eb1dc;"><span class="loading-dot"></span>Preparing local audio…</div>`;
-        if (s === 'waiting_upload') return `<div class="tiny" style="margin-top:6px;color:#9eb1dc;"><span class="loading-dot"></span>Queued for upload…</div>`;
-        if (s === 'uploading') return `<div class="tiny" style="margin-top:6px;color:#9eb1dc;"><span class="loading-dot"></span>Uploading to Tonies…</div>`;
-        if (s === 'done' && syncingResultJobIds.has(job?.id)) return `<div class="tiny" style="margin-top:6px;color:#9eb1dc;"><span class="loading-dot"></span>Syncing with my.tonies.com…</div>`;
-        if (s === 'done') return `<div class="tiny" style="margin-top:6px;color:#bcf4e0;">✓ Completed</div>`;
-        if (s === 'failed') return `<div class="tiny" style="margin-top:6px;color:#ffc9d6;">✕ Failed</div>`;
+        if (isCandidateSelectionPending(job?.id)) return statusLine('Downloading audio…', { busy: true, placement });
+        if (s === 'awaiting_selection') return statusLine('Select a result to upload to creative Tonies', { placement });
+        if (JOB_PROGRESS_TEXT[s]) return statusLine(JOB_PROGRESS_TEXT[s], { busy: true, placement });
+        if (s === 'done' && syncingResultJobIds.has(job?.id)) return statusLine('Syncing with my.tonies.com…', { busy: true, placement });
+        if (s === 'done') return statusLine('✓ Completed', { tone: 'ok', placement });
+        if (s === 'failed') return statusLine('✕ Failed', { tone: 'err', placement });
         return '';
       }
 
@@ -1298,12 +677,10 @@
         const info = getCandidateState(parentJob, candidate, index);
         const displayState = getCandidateDisplayState(info);
         if (!displayState) return '';
-        if (displayState === 'done') return `<div class="tiny" style="margin-bottom:4px;color:#bcf4e0;">✓ Uploaded</div>`;
-        if (info.job) return renderJobProgress(info.job).replace('margin-top:6px','margin-bottom:4px');
-        if (displayState === 'downloading') return `<div class="tiny" style="margin-bottom:4px;color:#9eb1dc;"><span class="loading-dot"></span>Downloading audio…</div>`;
-        if (displayState === 'waiting_upload') return `<div class="tiny" style="margin-bottom:4px;color:#9eb1dc;"><span class="loading-dot"></span>Queued for upload…</div>`;
-        if (displayState === 'uploading') return `<div class="tiny" style="margin-bottom:4px;color:#9eb1dc;"><span class="loading-dot"></span>Uploading to Tonies…</div>`;
-        if (displayState === 'preparing') return `<div class="tiny" style="margin-bottom:4px;color:#9eb1dc;"><span class="loading-dot"></span>Preparing audio…</div>`;
+        if (displayState === 'done') return statusLine('✓ Uploaded', { tone: 'ok', placement: 'above' });
+        if (info.job) return renderJobProgress(info.job, 'above');
+        const text = JOB_PROGRESS_TEXT[displayState];
+        if (text) return statusLine(text, { busy: true, placement: 'above' });
         return '';
       }
 
@@ -1320,18 +697,6 @@
         };
       }
 
-      function renderCandidateCard(parentJob, candidate, index) {
-        const view = getCandidateCardView(parentJob, candidate, index);
-        return `
-            <div style="margin-top:6px;border:1px solid ${view.isSelected ? '#5ea8ff' : '#2f4468'};border-radius:10px;padding:7px;background:${view.isSelected ? '#0c1730' : '#0a1224'};">
-              ${view.progressHtml}
-              <div class="truncate"><strong>${view.isSelected ? 'Selected' : (view.index + 1) + '.'}</strong> ${esc(uiText(view.candidate.title))}</div>
-              <div class="tiny truncate">${esc(uiText(view.candidate.uploader || ''))} • ${fmtDuration(view.candidate.duration)}</div>
-              <div class="tiny mono truncate"><a href="${esc(view.candidate.url)}" target="_blank" rel="noopener noreferrer" style="color:#9ed0ff;">${esc(view.candidate.url)}</a></div>
-              <div style="margin-top:6px">${view.isSelected ? '' : `<button class="good" onclick="pickCandidate('${view.parentJob.id}', ${view.index})">${view.selectLabel}</button>`}</div>
-            </div>
-          `;
-      }
 
       function getSearchCardCandidates(job) {
         return job.candidates || (job.selected_candidate ? [job.selected_candidate] : []);
@@ -1533,7 +898,7 @@
         try {
           const res = await api(`/api/jobs/${jobId}/cancel`, { method: 'POST' });
           if (res?.error) throw new Error(res.error);
-          showToast('Job cancelled', 'ok', 1500);
+          showToast('Job canceled', 'ok', 1500);
           await refreshJobs();
         } catch (e) {
           showToast(`Cancel failed: ${e?.message || e}`, 'err', 2500);
@@ -1601,32 +966,6 @@
         await sendQuery();
       }
 
-      function askConfirm({ title = 'Confirm action', message = '', confirmText = 'Confirm' } = {}) {
-        return new Promise((resolve) => {
-          confirmTitleEl.textContent = title;
-          confirmMessageEl.textContent = message;
-          confirmOkEl.textContent = confirmText;
-
-          const close = (result) => {
-            confirmModalEl.classList.remove('open');
-            confirmModalEl.setAttribute('aria-hidden', 'true');
-            confirmOkEl.onclick = null;
-            confirmCancelEl.onclick = null;
-            confirmModalEl.onclick = null;
-            document.onkeydown = null;
-            resolve(result);
-          };
-
-          confirmOkEl.onclick = () => close(true);
-          confirmCancelEl.onclick = () => close(false);
-          confirmModalEl.onclick = (e) => { if (e.target === confirmModalEl) close(false); };
-          document.onkeydown = (e) => { if (e.key === 'Escape') close(false); };
-
-          confirmModalEl.classList.add('open');
-          confirmModalEl.setAttribute('aria-hidden', 'false');
-        });
-      }
-
       function showToast(message, kind = 'ok', ms = 3800, action = null) {
         if (!toastStackEl) return () => {};
         const minByKind = {
@@ -1666,8 +1005,12 @@
         return close;
       }
 
+      let menuReturnFocusId = null;
+      let toniesMenuTargetUrl = '';
       function closeToniesMenu() {
+        const returnId = menuReturnFocusId; menuReturnFocusId = null;
         toniesMenuChapterId = null;
+        if (returnId) focusTrackAction(returnId);
         if (!toniesMenuEl) return;
         toniesMenuEl.classList.remove('open');
         toniesMenuEl.setAttribute('aria-hidden', 'true');
@@ -1678,14 +1021,17 @@
         toniesMenuChapterId = toniesContentCache?.chapters?.[index]?.chapter_id || null;
         const vw = window.innerWidth;
         const vh = window.innerHeight;
-        const width = 180;
-        const height = 190;
+        toniesMenuTargetUrl = selectedToniesUrl;
+        if (!toniesMenuChapterId) return;
+        const width = 208;
+        const height = 370;
         const left = Math.max(8, Math.min(x, vw - width - 8));
         const top = Math.max(8, Math.min(y, vh - height - 8));
         toniesMenuEl.style.left = `${left}px`;
         toniesMenuEl.style.top = `${top}px`;
         toniesMenuEl.classList.add('open');
         toniesMenuEl.setAttribute('aria-hidden', 'false');
+        document.getElementById('tonies-menu-rename').focus();
       }
 
       function closeFileMenu() {
@@ -1742,7 +1088,7 @@
       }
 
       async function moveToniesFromMenu(kind) {
-        if (!toniesMenuChapterId) return;
+        if (!toniesMenuChapterId || toniesMenuTargetUrl !== selectedToniesUrl) { closeToniesMenu(); return; }
         const chapters = toniesContentCache?.chapters || [];
         const count = chapters.length;
         const from = chapters.findIndex(c => c.chapter_id === toniesMenuChapterId);
@@ -1905,61 +1251,6 @@
         return isCandidateSelectionPending(job?.id) && getJobStatus(job) !== 'awaiting_selection';
       }
 
-      async function pickCandidate(jobId, index) {
-        if (isCandidateSelectionPending(jobId)) {
-          showToast('A selection is already being processed.', 'warn', 1800);
-          return;
-        }
-        applyOptimisticCandidateSelection(jobId, index);
-        searchUiActive = false;
-        renderSearchUX();
-        renderJobs();
-
-        // For YouTube selects, default insertion should follow current visual top.
-        // Store the intended FINAL native index after upload settles.
-        // Newest-first => visual top maps to native last index after insert.
-        // Oldest-first => visual top maps to native first index.
-        if (selectedToniesUrl) {
-          const chaptersLen = (toniesContentCache?.chapters || []).length;
-          const desiredTopIndex = toniesReverseView ? Math.max(0, chaptersLen) : 0;
-          pendingDropUploadIntent = {
-            jobId,
-            targetIndex: desiredTopIndex,
-            targetEdge: toniesReverseView ? 'end' : 'start',
-            position: { edge: toniesReverseView ? 'end' : 'start' },
-            targetUrl: selectedToniesUrl,
-            createdAt: Date.now(),
-          };
-          uploadIntentsByJobId.set(jobId, pendingDropUploadIntent);
-        }
-
-        try {
-          const res = await api(`/api/jobs/${jobId}/select`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(getCandidateSelectionPayload(index))
-          }, 180000);
-          const returnedJobId = res?.id || jobId;
-          const intent = uploadIntentsByJobId.get(jobId);
-          if (intent && returnedJobId !== jobId) {
-            uploadIntentsByJobId.delete(jobId);
-            intent.jobId = returnedJobId;
-            uploadIntentsByJobId.set(returnedJobId, intent);
-          }
-          applySelectionResponse(jobId, index, res);
-          await refreshJobs();
-        } catch (e) {
-          uploadIntentsByJobId.delete(jobId);
-          if (pendingDropUploadIntent?.jobId === jobId) pendingDropUploadIntent = null;
-          activeUploadJobIds.delete(jobId);
-          rollbackOptimisticCandidateSelection(jobId);
-          renderJobs();
-          showToast(`Selection failed: ${e?.message || e}`, 'err', 2200);
-        } finally {
-          endCandidateSelection(jobId);
-          renderJobs();
-        }
-      }
 
       function focusUploadInLibrary(filename) {
         renderFiles();
@@ -1986,6 +1277,8 @@
         renderFiles();
       }
 
+      // Returns false only when the file may be submitted again (nothing was sent, or the
+      // server refused it); otherwise the file stays blocked until its job settles.
       async function startSingleLocalUpload(filename, options = {}) {
         const { scrollToResults = false, skipQueuedToast = true, suppressInitialToast = false, targetIndex = null } = options;
         const targetUrl = options.targetUrl || await ensureUploadTargetUrl();
@@ -2014,6 +1307,7 @@
         pendingDropUploadIntent = intent;
 
         startPendingToniesUpload(filename, targetUrl);
+        let acknowledged = false;
         try {
           const res = await api('/api/upload-existing', {
             method: 'POST',
@@ -2021,14 +1315,17 @@
             body: JSON.stringify({ filename, target_url: targetUrl, position })
           });
 
-          highlightedJobId = res?.job_id || '';
-          if (res?.job_id) {
-            activeUploadJobIds.add(res.job_id);
-            localUploadToastShownJobIds.add(res.job_id);
-            if (pendingToniesUpload?.filename === filename && !pendingToniesUpload.jobId) pendingToniesUpload.jobId = res.job_id;
-            intent.jobId = res.job_id;
-            uploadIntentsByJobId.set(res.job_id, intent);
+          if (!res?.job_id) {
+            holdUnconfirmedLocalUpload(intent, filename, 'No job was returned for this upload.');
+            return true;
           }
+          acknowledged = true;
+          highlightedJobId = res.job_id;
+          activeUploadJobIds.add(res.job_id);
+          localUploadToastShownJobIds.add(res.job_id);
+          if (pendingToniesUpload?.filename === filename && !pendingToniesUpload.jobId) pendingToniesUpload.jobId = res.job_id;
+          intent.jobId = res.job_id;
+          uploadIntentsByJobId.set(res.job_id, intent);
           if (!skipQueuedToast) showToast('Upload queued', 'warn', 3000);
           if (skipQueuedToast && !suppressInitialToast) showToast('Preparing local file…', 'warn', 3000);
           if (highlightJobTimer) clearTimeout(highlightJobTimer);
@@ -2037,20 +1334,59 @@
             renderJobs();
           }, 8000);
 
-          await refreshJobs();
+          try {
+            await refreshJobs();
+          } catch (error) {
+            // The POST already returned a job. A failed read must not release the source
+            // or invite another upload. SSE/polling will reconcile the accepted job.
+            recordWorkspaceNotice({id:`accepted-upload:${res?.job_id || filename}`, title:filename,
+              targetUrl, stage:'Accepted; refresh needed', error:String(error?.message || error)});
+            setToniesStatus('Upload accepted. Activity will update when the connection returns. Do not add again.', false);
+          }
 
           const jobsCard = document.getElementById('jobs');
           if (scrollToResults && jobsCard) jobsCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
           return true;
         } catch (e) {
+          if (acknowledged) {
+            // The job exists and its completion releases the file; never invite a second Add.
+            recordWorkspaceNotice({id:`accepted-upload:${intent.jobId}`, title:filename, targetUrl,
+              stage:'Accepted; refresh needed', error:String(e?.message || e)});
+            return true;
+          }
+          if (!isDefiniteRefusal(e)) {
+            holdUnconfirmedLocalUpload(intent, filename, String(e?.message || e));
+            return true;
+          }
           if (pendingDropUploadIntent === intent) pendingDropUploadIntent = null;
           if (pendingToniesUpload?.filename === filename && !pendingToniesUpload.jobId) clearPendingToniesUpload();
           toniesUploadSyncing = hasInFlightTrackedUploadForSelectedTonies();
           setToniesStatus(`Upload failed: ${e?.message || e}`, false);
           renderToniesContent();
+          recordWorkspaceNotice({title:filename, targetUrl, stage:'Upload refused', error:String(e?.message || e)});
           showToast(`Upload failed: ${e?.message || e}`, 'err', 3200);
           return false;
         }
+      }
+
+      // Only a 4xx answer proves the server refused the upload. A lost connection, timeout,
+      // 5xx or an answer without a job may still have queued it, so don't invite a repeat.
+      function isDefiniteRefusal(error) {
+        const status = /^HTTP (\d{3})\b/.exec(String(error?.message || error || ''))?.[1] || '';
+        return status.startsWith('4') && status !== '408';
+      }
+
+      // Keeps the file blocked (its outstanding count is not released) and the captured
+      // destination; Activity explains why. Reloading the page after checking the Tonie clears it.
+      function holdUnconfirmedLocalUpload(intent, filename, reason) {
+        intent.unconfirmed = true;
+        if (pendingToniesUpload?.filename === filename && !pendingToniesUpload.jobId) clearPendingToniesUpload();
+        toniesUploadSyncing = hasInFlightTrackedUploadForSelectedTonies();
+        renderToniesContent();
+        recordWorkspaceNotice({id:`unconfirmed-upload:${intent.targetUrl}:${filename}`, title:filename, targetUrl:intent.targetUrl,
+          stage:'Could not confirm upload', error:reason,
+          note:'Do not add again. It may already be queued; refresh the Tonie and check Activity first.'});
+        setToniesStatus('Could not confirm the upload. Do not add it again until you have refreshed the Tonie.', false);
       }
 
       async function pumpLocalUploadQueue() {
@@ -2073,6 +1409,8 @@
       }
 
       async function uploadExisting(filename, options = {}) {
+        // Keep a single local source pending through its accepted job and reconciliation.
+        if ((Number(localUploadOutstandingByName[String(filename || '')]) || 0) > 0) return;
         const { targetIndex = null } = options;
         const targetUrl = options.targetUrl || await ensureUploadTargetUrl();
         if (!targetUrl) { showToast('Select a Creative Tonie before uploading.', 'err'); return; }
@@ -2113,6 +1451,7 @@
       }
 
       function renderTonies() {
+        renderWorkspaceTarget();
         const el = document.getElementById('tonies');
         const refreshBtn = document.getElementById('refresh-tonies');
         const busy = isToniesActionBusy();
@@ -2124,7 +1463,7 @@
           if (loadingTonies) {
             el.innerHTML = '<div class="tonies-row-skeleton"></div><div class="tonies-row-skeleton"></div>';
           } else if (toniesLoadError) {
-            el.innerHTML = `<div class="tiny" style="color:#ffc9d6;">${esc(toniesLoadError)}</div>`;
+            el.innerHTML = `<div class="tiny status-err">${esc(toniesLoadError)}</div>`;
           } else {
             el.innerHTML = '<div class="tiny muted">No creative tonies found.</div>';
           }
@@ -2142,34 +1481,7 @@
           else if (selectedContentSyncing || statusLooksSyncing) refreshBtn.innerHTML = `<span class="loading-dot"></span>Syncing…`;
           else refreshBtn.innerHTML = busy ? 'Busy…' : 'Refresh';
         }
-        el.innerHTML = toniesCache.map((t, i) => {
-          const active = selectedToniesUrl === t.edit_url || (!selectedToniesUrl && i === 0);
-          const cachedImg = toniesImageCache[t.edit_url];
-          const imgSrc = cachedImg || t.image;
-          let meta = toniesContentByUrlCache?.[t.edit_url]?.data || {};
-          if ((!meta || !Array.isArray(meta.chapters)) && selectedToniesUrl === t.edit_url) {
-            meta = toniesContentCache || {};
-          }
-          const tracks = Array.isArray(meta.chapters) ? meta.chapters.length : 'syncing…';
-          const total = Number(meta.total_minutes ?? 90);
-          const freeNum = Number(meta.free_minutes);
-          const hasFree = Number.isFinite(freeNum);
-          const used = hasFree ? Math.max(0, total - freeNum) : null;
-          const capacityText = hasFree
-            ? `${Math.round(freeNum)} min left • ${Math.round(used)} min used`
-            : 'Space syncing…';
-          return `
-            <button class="tonies-row ${active ? 'active' : ''}" onclick="selectTonies('${String(t.edit_url).replaceAll("'", "\\'")}')">
-              <div>
-                ${imgSrc ? `<img src="${esc(imgSrc)}" alt="${esc(t.name)}"/>` : `<div style="width:38px;height:38px;border-radius:8px;background:#0a1226;"></div>`}
-              </div>
-              <div style="min-width:0;">
-                <div class="truncate" style="color:#dbe7ff;font-weight:700;">${esc(t.name)}</div>
-                <div class="tiny">${tracks} tracks • ${capacityText}</div>
-              </div>
-            </button>
-          `;
-        }).join('');
+        renderWorkspaceTonieRail(el);
       }
 
       function saveImageCache() {
@@ -2229,7 +1541,9 @@
       function renderToniesOrderToggle() {
         if (!toggleToniesOrderEl) return;
         const showingNewestFirst = isToniesShowingNewestFirst();
-        toggleToniesOrderEl.textContent = showingNewestFirst ? 'Show newest first' : 'Show oldest first';
+        toggleToniesOrderEl.textContent = showingNewestFirst ? 'Show playback order' : 'Reverse display';
+        toggleToniesOrderEl.setAttribute('aria-pressed', String(showingNewestFirst));
+        toggleToniesOrderEl.title = showingNewestFirst ? 'Currently reversed. Show playback order without changing the Tonie.' : 'Reverse the display only. Playback order will not change.';
       }
 
       function loadToniesViewPrefs() {
@@ -2383,10 +1697,17 @@
             setToniesStatus(toniesLoadError, false);
             return;
           }
+          const previousSelection = selectedToniesUrl;
           if (!selectedToniesUrl && toniesCache.length) selectedToniesUrl = toniesCache[0].edit_url;
           // If previous selected Tonies disappeared, fall back to first available.
           if (selectedToniesUrl && toniesCache.length && !toniesCache.some(t => t.edit_url === selectedToniesUrl)) {
             selectedToniesUrl = toniesCache[0].edit_url;
+          }
+          if (selectedToniesUrl !== previousSelection) {
+            // Source Add controls rendered before discovery name and enable the new destination.
+            renderWorkspaceTarget();
+            renderLocalSelection();
+            renderFiles();
           }
 
           renderTonies();
@@ -2419,7 +1740,7 @@
         const isSynced = !loading && String(text || '').trim() === 'Synced with my.tonies.com';
         toniesStatusEl.innerHTML = loading
           ? `<span class="spinner"></span>${safeText}`
-          : (isSynced ? `<span style="color:#7df6cf;margin-right:6px;">✓</span>${safeText}` : safeText);
+          : (isSynced ? `<span class="synced-mark">✓</span>${safeText}` : safeText);
         // Keep header controls (like Refresh) visually in sync with status transitions.
         if (typeof renderTonies === 'function') {
           try { renderTonies(); } catch {}
@@ -2433,12 +1754,6 @@
         if (typeof renderTonies === 'function') {
           try { renderTonies(); } catch {}
         }
-      }
-
-      function syncToniesProgressWidth() {
-        if (!toniesMinutesEl || !toniesProgressTrackEl) return;
-        const w = Math.max(90, Math.ceil(toniesMinutesEl.getBoundingClientRect().width));
-        toniesProgressTrackEl.style.width = `${w}px`;
       }
 
       function pulseToniesRow(sourceIndex) {
@@ -2488,11 +1803,11 @@
       }
 
       async function deleteAllToniesContent() {
-        if (!toniesEditMode || !selectedToniesUrl || isToniesActionBusy()) return;
+        if (!selectedToniesUrl || isToniesActionBusy()) return;
         const url = selectedToniesUrl;
         const ok = await askConfirm({
           title: 'Delete all content?',
-          message: 'This will permanently delete all tracks from the selected Creative Tonie.\n\nThis cannot be undone.',
+          message: `Permanently remove all ${(toniesContentCache?.chapters || []).length} tracks from ${workspaceTargetName(url)}?\n\nThis cannot be undone.`,
           confirmText: 'Delete all content'
         });
         if (!ok || url !== selectedToniesUrl) return;
@@ -2530,6 +1845,11 @@
       }
 
       function renderToniesContent() {
+        const focused = document.activeElement;
+        const restoreInline = focused?.classList?.contains('tonies-title-inline');
+        const caret = restoreInline ? [focused.selectionStart, focused.selectionEnd] : null;
+        renderTrackSelection();
+        const inline = getInlineRename();
         const chapters = toniesContentCache?.chapters || [];
         const freeRaw = toniesContentCache?.free_minutes;
         const freeNum = Number(freeRaw);
@@ -2543,7 +1863,6 @@
           ? `${Math.round(freeNum)} min left • ${Math.round(used)} min used`
           : `Space syncing…`;
         toniesMinutesEl.textContent = minutesText;
-        syncToniesProgressWidth();
         if (toniesProgressEl) {
           const pct = used == null || !total ? 0 : Math.max(0, Math.min(100, (used / total) * 100));
           toniesProgressEl.style.width = `${pct.toFixed(1)}%`;
@@ -2561,7 +1880,7 @@
           const showInlineSync = syncing;
           toniesContentEl.innerHTML = showInlineSync
             ? '<div class="tonies-sync-skeleton" title="Syncing with my.tonies.com…"></div>'
-            : '<div class="tiny muted">No tracks on this Tonies yet. Upload from local files or YouTube above.</div>';
+            : '<div class="empty-tracks"><span class="empty-note" aria-hidden="true">♪</span><h3>Room for a new favourite.</h3><p>No tracks yet. Choose YouTube or Local files in Add audio to get started.</p><button class="ghost mobile-add" onclick="setWorkspaceView(\'add\', true)">Add audio</button></div>';
           return;
         }
 
@@ -2597,17 +1916,17 @@
           const isNew = ts && (nowTs - ts) < TONIES_NEW_HIGHLIGHT_MS;
           const isDeleting = pendingDeleteIds.has(c.chapter_id);
           const html = `
-          <div class="tonies-item ${isNew ? 'new-upload' : ''} ${isDeleting ? 'deleting' : ''} " draggable="${(toniesEditMode || busy) ? 'false' : 'true'}" data-source-index="${sourceIndex}">
-            <div class="drag-handle" style="opacity:${(toniesEditMode || busy) ? '0.35' : '1'};">⋮⋮</div>
+          <div class="tonies-item ${isNew ? 'new-upload' : ''} ${isDeleting ? 'deleting' : ''} " draggable="${(toniesEditMode || busy) ? 'false' : 'true'}" data-source-index="${sourceIndex}" data-chapter-id="${esc(c.chapter_id || '')}">
+            ${trackSelectionMode ? `<label class="track-select-label"><input type="checkbox" class="track-select" aria-label="Select ${esc(title)}" ${selectedTracks().has(c.chapter_id) ? 'checked' : ''} /></label>` : `<div class="drag-handle" style="opacity:${(toniesEditMode || busy) ? '0.35' : '1'};" aria-label="Drag to arrange">⋮⋮</div>`}
             <div>
-              ${toniesEditMode
-                ? `<input class="tonies-title-edit" data-source-index="${sourceIndex}" value="${esc(draftTitle)}" style="width:100%;border:1px solid #385082;border-radius:8px;background:#0a1328;padding:6px 8px;color:#e9efff;" />`
-                : `<div class="truncate"><strong>${esc(title)}</strong>${isNew ? ' <span class="tiny" style="color:#7df6cf;">NEW</span>' : ''}</div>`}
+              ${inline?.id === c.chapter_id ? `<input class="tonies-title-edit tonies-title-inline" aria-label="Track name" value="${esc(inline.draft)}" ${inline.busy || inline.submitted ? 'readonly' : ''} /><div class="row inline-rename-actions"><button class="inline-save" ${inline.busy || inline.submitted ? 'disabled' : ''}>${inline.busy ? 'Saving…' : 'Save'}</button><button class="inline-cancel ghost">Cancel</button></div>${inline.error ? `<p class="error" role="alert">${esc(inline.error)}</p>` : ''}` : toniesEditMode
+                ? `<input class="tonies-title-edit" data-source-index="${sourceIndex}" value="${esc(draftTitle)}" />`
+                : `<div class="truncate"><strong>${esc(title)}</strong>${isNew ? ' <span class="tiny badge-new">NEW</span>' : ''}</div>`}
               <div class="tiny">${c.processing === true ? '<span class="loading-dot"></span>Processing audio…' : esc(fmtChapterDuration(c.duration || ''))}</div>
             </div>
-            <div class="row" style="justify-content:flex-end;gap:6px;">
-              <div class="tiny mono">#${displayNumber}</div>
-              <button class="trash-btn" title="Remove" aria-label="Remove" ${(isDeleting || toniesEditMode) ? 'disabled' : ''} onclick="enqueueToniesDelete(${sourceIndex})">${isDeleting ? 'Deleting…' : '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M6 6l1 14h10l1-14"/><path d="M10 10v7"/><path d="M14 10v7"/></svg>'}</button>
+            <div class="row track-actions">
+              <div class="tiny mono" title="Playback position ${displayNumber}">#${displayNumber}</div>
+<button type="button" class="ghost track-overflow" aria-label="Actions for ${esc(title)}" aria-haspopup="menu" ${(isDeleting || toniesEditMode) ? 'disabled' : ''}>⋯</button>
             </div>
           </div>
         `;
@@ -2628,6 +1947,11 @@
         const syncSkeleton = (toniesUploadSyncing && !uploadPlaceholders.length && unplacedUpload) ? '<div class="tonies-sync-skeleton" title="Syncing with my.tonies.com…"></div>' : '';
         const endDropZone = toniesEditMode ? '' : '<div class="tonies-end-drop-zone" data-end-drop-zone="1">Drop here to upload to bottom</div>';
         toniesContentEl.innerHTML = syncSkeleton + rowsHtml + endDropZone;
+        bindWorkspaceTrackRows();
+        if (restoreInline) {
+          const input = toniesContentEl.querySelector('.tonies-title-inline');
+          input?.focus(); if (input?.setSelectionRange && caret) input.setSelectionRange(...caret);
+        }
 
         toniesContentEl.querySelectorAll('.tonies-title-edit').forEach((inp) => {
           inp.addEventListener('input', () => {
@@ -2952,6 +2276,7 @@
           toniesContentCache = { chapters: [], free_minutes: null, total_minutes: 90 };
         }
         const reqId = selected ? ++toniesContentRequestSeq : null;
+        const readSeq = toniesContentReadSeqByUrl[url] = (toniesContentReadSeqByUrl[url] || 0) + 1;
         const version = toniesContentVersionByUrl[url] || 0;
         if (selected) {
           loadingToniesContent = true;
@@ -2965,6 +2290,8 @@
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ target_url: url })
           }, 45000);
+          // A newer read of this Tonie (or newer content from an event) supersedes this one.
+          if (readSeq !== toniesContentReadSeqByUrl[url]) return;
           if (version !== (toniesContentVersionByUrl[url] || 0)) return;
           if (selected && (reqId !== toniesContentRequestSeq || url !== selectedToniesUrl)) return;
           applyToniesContent(url, data, { processingPoll });
@@ -3051,10 +2378,10 @@
       function activeUploadPlaceholders(url) {
         const intents = new Set([...uploadIntentsByJobId.values(), pendingDropUploadIntent]);
         const finished = (jobId) => attachedUploadJobIds.has(jobId)
-          || ['done', 'failed'].includes(String(getJobById(jobId)?.status || ''));
+          || isTerminalStatus(getJobById(jobId)?.status);
         return [...intents].filter(intent => intent && intent.targetUrl === url
           && (intent.jobId ? activeUploadJobIds.has(intent.jobId) && !finished(intent.jobId)
-            : intent === pendingDropUploadIntent));
+            : intent === pendingDropUploadIntent && !intent.unconfirmed));
       }
 
       function showToniesSettledStatus(url, data) {
@@ -3084,11 +2411,13 @@
         }, 20000);
         if (res?.error) throw new Error(res.error);
         for (const action of res?.actions || []) {
+          recordWorkspaceAction(url, action);
           // The result event can beat this response; never resurrect a finished action.
-          if (['done', 'failed'].includes(action.status) || finishedToniesActionIds.has(action.id)) continue;
+          if (isTerminalStatus(action.status) || finishedToniesActionIds.has(action.id)) continue;
           toniesQueuedActions.set(action.id, { id: action.id, url, type: action.type, params: action.params || {} });
         }
         showQueuedToniesContent(url);
+        renderWorkspaceActivity();
         scheduleToniesActionPoll();
         return res?.actions || [];
       }
@@ -3098,6 +2427,7 @@
           await submitToniesActions(url, specs);
           return true;
         } catch (e) {
+          recordWorkspaceNotice({title:label, targetUrl:url, stage:'Could not confirm change', error:String(e?.message || e)});
           if (url === selectedToniesUrl) setToniesStatus(`${label} failed: ${e?.message || e}`, false);
           showToast(`${label} failed: ${e?.message || e}`, 'err', 5200);
           return false;
@@ -3110,12 +2440,14 @@
         const failures = [];
         let succeeded = 0;
         for (const action of evt.actions || []) {
-          if (!['done', 'failed'].includes(action.status)) continue;
+          recordWorkspaceAction(url, action);
+          if (!isTerminalStatus(action.status)) continue;
           rememberFinishedToniesAction(action.id);
           if (!toniesQueuedActions.delete(action.id)) continue;  // not queued from this page
           if (action.status === 'failed') failures.push(action);
-          else succeeded += 1;
+          else if (action.status === 'done') succeeded += 1;
         }
+        renderWorkspaceActivity();
         if (evt.content) applyToniesContent(url, evt.content);
         else showQueuedToniesContent(url);
         // An attached upload replaces its placeholder at once; its job catches up right after.
@@ -3158,11 +2490,13 @@
           try {
             const res = await api(`/api/tonies-actions?target_url=${encodeURIComponent(url)}`);
             const known = new Map((res?.actions || []).map(action => [action.id, action]));
+            for (const latest of known.values()) recordWorkspaceAction(url, latest);
+            renderWorkspaceActivity();
             const finished = [];
             for (const action of pendingToniesActions(url)) {
               const latest = known.get(action.id);
               if (!latest) toniesQueuedActions.delete(action.id);  // server restarted; it's gone
-              else if (['done', 'failed'].includes(latest.status)) finished.push(latest);
+              else if (isTerminalStatus(latest.status)) finished.push(latest);
             }
             if (finished.length) {
               handleToniesActionsEvent({ target_url: url, actions: finished }, { refreshing: true });
@@ -3181,7 +2515,7 @@
         const chapterName = toniesDisplayTitle(uiText(chapter.title || `Chapter #${index + 1}`));
         const ok = await askConfirm({
           title: 'Remove from Tonies?',
-          message: `${chapterName}\n\nThis will update the Tonies library.`,
+          message: `Remove “${chapterName}” from ${workspaceTargetName(url)}?\n\nOnce sent, removal cannot be undone.`,
           confirmText: 'Remove'
         });
         if (!ok || url !== selectedToniesUrl) return;
@@ -3218,12 +2552,31 @@
         await new Promise(r => setTimeout(r, 2400));
         if (canceled) return;
 
-        await fetch(`/api/files/${encodeURIComponent(filename)}`, { method: 'DELETE' });
+        const response = await fetch(`/api/files/${encodeURIComponent(filename)}`, { method: 'DELETE' });
+        if (!response.ok) {
+          showToast('Could not delete local file. Refresh and try again.', 'err');
+          return;
+        }
+        if (filename === localPlaybackFilename) stopLocalPlayback();
         await refreshFiles();
         showToast('Local file deleted', 'ok');
       }
 
+      for (const event of ['play', 'pause', 'ended']) {
+        localAudioEl.addEventListener(event, updateLocalPlaybackButtons);
+      }
+      localAudioEl.addEventListener('error', () => {
+        if (localPlaybackFilename) {
+          localPlayerStatusEl.textContent = 'Could not play this file. Try again or refresh the library.';
+          updateLocalPlaybackButtons();
+        }
+      });
+      document.getElementById('local-player-close').addEventListener('click', stopLocalPlayback);
+
       function renderFiles() {
+        renderLocalSelection();
+        // The one native player lives outside filesEl, so routine list updates never reset it.
+        if (localPlaybackFilename && !filesCache.some(f => f.name === localPlaybackFilename)) stopLocalPlayback();
         const q = (fileFilterEl.value || '').toLowerCase().trim();
         const filtered = !q ? filesCache : filesCache.filter(f => String(f.name).toLowerCase().includes(q));
 
@@ -3239,7 +2592,7 @@
         }
 
         if (!filtered.length) {
-          filesEl.innerHTML = '<div class="muted">No files match your filter.</div>';
+          filesEl.innerHTML = `<div class="muted results-empty">${q ? 'No files match your filter.' : 'Your local library is empty. Import an audio file to get started.'}</div>`;
           return;
         }
 
@@ -3248,12 +2601,14 @@
           const isQueuedLocalUpload = (Number(localUploadOutstandingByName[String(f.name || '')]) || 0) > 0;
           return `
             <article class="file ${isQueuedLocalUpload ? 'queued-upload' : ''}" draggable="true" data-file-key="${fileKey}" data-file-name="${esc(f.name)}">
+              <label class="file-select-label"><input type="checkbox" class="local-file-select" aria-label="Select ${esc(f.name)}" ${localSelectedFiles.has(f.name) ? 'checked' : ''} ${localSelectionSubmitting ? 'disabled' : ''} /></label>
               <div class="file-main">
                 <div class="file-title" title="${esc(uiText(f.name))}"><strong>${esc(uiText(f.name))}</strong></div>
                 <div class="tiny">${fmtDuration(f.duration_sec)} • ${Math.round((f.size_bytes || 0) / 1024)} KB</div>
               </div>
-              <div class="row" style="justify-content:flex-end;flex-wrap:nowrap;">
-                <button class="good local-upload-btn">Upload</button>
+              <div class="row">
+                <button type="button" class="ghost local-play-btn" aria-label="Play ${esc(f.name)}">Play</button>
+                <button class="good local-upload-btn" aria-label="Add ${esc(f.name)} to ${esc(workspaceTargetName())}" ${isQueuedLocalUpload || !selectedToniesUrl ? 'disabled' : ''}>${isQueuedLocalUpload ? 'Adding…' : 'Add'}</button>
                 <button class="trash-btn" title="Delete local file" aria-label="Delete local file"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M6 6l1 14h10l1-14"/><path d="M10 10v7"/><path d="M14 10v7"/></svg></button>
               </div>
             </article>
@@ -3276,6 +2631,11 @@
             openFileMenu(name, e.clientX, e.clientY);
           });
 
+          el.querySelector('.local-file-select')?.addEventListener('change', e => toggleLocalSelection(el.getAttribute('data-file-name') || '', e.target.checked));
+          el.querySelector('.local-play-btn')?.addEventListener('click', () => {
+            const name = el.getAttribute('data-file-name') || '';
+            if (name) toggleLocalPlayback(name);
+          });
           el.querySelector('.local-upload-btn')?.addEventListener('click', () => {
             const name = el.getAttribute('data-file-name') || '';
             if (name) uploadExisting(name);
@@ -3285,6 +2645,7 @@
             if (name) deleteFile(name);
           });
         });
+        updateLocalPlaybackButtons();
       }
 
       function getResultsRenderState() {
@@ -3304,6 +2665,7 @@
       }
 
       function renderJobs() {
+        renderWorkspaceActivity();
         const hideResults = !!resultsCleared && getSearchDisplayState() === 'idle';
         document.documentElement.classList.toggle('hide-search-results', hideResults);
         const renderState = getResultsRenderState();
@@ -3323,6 +2685,9 @@
           ? [renderState.views[0]]
           : renderState.views;
         jobsEl.innerHTML = renderSearchJobCardsHtml(singleCardViews);
+        for (const button of jobsEl.querySelectorAll('.candidate-add')) button.addEventListener('click', () => {
+          void pickCandidate(button.getAttribute('data-job-id'), Number(button.getAttribute('data-candidate-index')));
+        });
       }
 
       async function refreshFiles() {
@@ -3332,25 +2697,6 @@
         saveFilesCache();
         loadingFiles = false;
         renderFiles();
-      }
-
-      async function uploadFileToLibrary(file) {
-        if (!file) return;
-        const form = new FormData();
-        form.append('file', file, file.name || 'upload');
-        showToast(`Adding ${file.name || 'file'} to Local MP3 Library…`, 'warn', 2800);
-        const res = await fetch('/api/files/upload', {
-          method: 'POST',
-          body: form,
-        });
-        if (!res.ok) {
-          const txt = await res.text().catch(() => '');
-          throw new Error(`HTTP ${res.status}${txt ? `: ${txt.slice(0, 160)}` : ''}`);
-        }
-        const data = await res.json();
-        await refreshFiles();
-        focusUploadInLibrary(data?.filename || '');
-        showToast('Added to Local MP3 Library', 'ok', 2600);
       }
 
       function reconcileSelectionStateWithBackend(sourceJobs = jobsCache) {
@@ -3427,6 +2773,9 @@
         handleTrackedInFlightTransitions(job, transitions, isTracked && isTrackedJobForSelectedTonie(job));
         handleTrackedDoneTransition(job, transitions, isTracked);
         handleTrackedFailedTransition(job, transitions, isTracked);
+        if (isTracked && isReversedStatus(job.status)) {
+          void finalizePendingToniesUpload(job, false);
+        }
         if (hasUploadAttachmentReceipt(job) && (isTracked || completedUploadJobIds.has(job.id))) {
           void finalizePendingToniesUpload(job, job.status === 'done');
         }
@@ -3454,6 +2803,24 @@
         if (job) syncPendingToniesUploadFromJob(job);
       }
 
+      let jobsReadSeq = 0;
+      let jobsAppliedSeq = 0;
+      const reversedJobsById = new Map();
+
+      // Undone/canceled is final: no snapshot may bring back the job's earlier status or receipt.
+      function keepReversedJobs(snapshot) {
+        for (const job of jobsCache) {
+          if (isReversedStatus(job?.status)) reversedJobsById.set(job.id, job);
+        }
+        return snapshot.map(job => {
+          if (isReversedStatus(job?.status)) {
+            reversedJobsById.set(job.id, job);
+            return job;
+          }
+          return reversedJobsById.get(job?.id) || job;
+        });
+      }
+
       async function refreshJobs(options = {}) {
         const { background = false } = options;
         const showLoading = !background && !hasLoadedJobsOnce;
@@ -3461,7 +2828,11 @@
           loadingJobs = true;
           renderJobs();
         }
-        jobsCache = await api('/api/jobs');
+        const readSeq = ++jobsReadSeq;
+        const snapshot = await api('/api/jobs');
+        if (readSeq < jobsAppliedSeq) return;  // an older poll answered after a newer one
+        jobsAppliedSeq = readSeq;
+        jobsCache = keepReversedJobs(Array.isArray(snapshot) ? snapshot : []);
 
         if (shouldAutoClearAgedResults()) {
           resultsCleared = true;
@@ -3484,6 +2855,7 @@
       }
 
       async function lockApp() {
+        stopLocalPlayback();
         try {
           await api('/api/setup/lock', { method: 'POST' });
         } catch {}
@@ -3521,7 +2893,15 @@
 
       function selectTonies(url) {
         closeToniesMenu();
+        workspaceTargetVisit += 1;
+        trackSelectionMode = false;
+        toggleTonieSelector(false);
         selectedToniesUrl = url;
+        renderWorkspaceTarget();
+        renderLocalSelection();
+        void refreshWorkspaceActions();
+        renderFiles();
+        renderJobs();
         toniesEditMode = false;
         toniesNameDrafts = {};
         renderToniesEditUI();
@@ -3556,20 +2936,6 @@
       }
 
       document.getElementById('refresh-files').onclick = refreshFiles;
-      if (browseFilesEl) browseFilesEl.onclick = () => uploadFileInputEl?.click();
-      if (uploadFileInputEl) {
-        uploadFileInputEl.onchange = async () => {
-          const f = uploadFileInputEl.files && uploadFileInputEl.files[0];
-          if (!f) return;
-          try {
-            await uploadFileToLibrary(f);
-          } catch (e) {
-            showToast(`Library upload failed: ${e?.message || e}`, 'err', 3600);
-          } finally {
-            uploadFileInputEl.value = '';
-          }
-        };
-      }
       let manualToniesRefreshInFlight = false;
       document.getElementById('refresh-tonies').onclick = async () => {
         if (blockIfActionInProgress() || manualToniesRefreshInFlight) return;
@@ -3588,6 +2954,24 @@
         }
       };
 
+      document.getElementById('tonies-menu-rename').onclick = () => {
+        const id = toniesMenuChapterId, url = toniesMenuTargetUrl; closeToniesMenu();
+        if (url === selectedToniesUrl) beginInlineRename(id);
+      };
+      document.getElementById('tonies-menu-delete').onclick = () => {
+        const id = toniesMenuChapterId, url = toniesMenuTargetUrl; closeToniesMenu();
+        const index = (toniesContentCache?.chapters || []).findIndex(c => c.chapter_id === id);
+        if (url === selectedToniesUrl && index >= 0) void enqueueToniesDelete(index);
+      };
+      toniesMenuEl.addEventListener('keydown', e => {
+        const items = [...toniesMenuEl.querySelectorAll('button')];
+        if (['ArrowUp','ArrowDown','Home','End','Tab'].includes(e.key)) {
+          if (e.key === 'Tab') { closeToniesMenu(); return; }
+          e.preventDefault(); const i = items.indexOf(document.activeElement);
+          const next = e.key === 'Home' ? 0 : e.key === 'End' ? items.length-1 : (i + (e.key === 'ArrowUp' ? -1 : 1) + items.length) % items.length;
+          items[next]?.focus();
+        }
+      });
       if (toniesMenuTopEl) toniesMenuTopEl.onclick = () => moveToniesFromMenu('top');
       if (toniesMenuBottomEl) toniesMenuBottomEl.onclick = () => moveToniesFromMenu('bottom');
       if (toniesMenuUpEl) toniesMenuUpEl.onclick = () => moveToniesFromMenu('up');
@@ -3652,7 +3036,13 @@
       document.getElementById('clear-filter').onclick = () => { fileFilterEl.value = ''; renderFiles(); };
       fileFilterEl.oninput = renderFiles;
 
+
       loadResultsClearedState();
+      initWorkspaceSources();
+      loadWorkspaceTheme();
+      setWorkspaceView('tracks');
+      setWorkspaceSource('youtube');
+      renderWorkspaceTarget();
       saveResultsClearedState();
       loadSearchLimit();
       loadFilesCache();
@@ -3671,9 +3061,9 @@
         renderToniesContent();
       }
       void refreshTonies({ force: true });
+      void refreshWorkspaceActions();
       Promise.all([refreshFiles(), refreshJobs()]);
 
-      window.addEventListener('resize', () => syncToniesProgressWidth());
 
       function hasActiveJobFlow() {
         if (searchUiActive || selectingCandidateJobIds.size > 0) return true;

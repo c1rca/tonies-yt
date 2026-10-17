@@ -2,11 +2,12 @@ from __future__ import annotations
 
 from .config import settings
 from .models import ParseIntent
+from .youtube_source import normalize_youtube_input
 
 
 def parse_request(message: str) -> ParseIntent:
     """Backward-compatible deterministic parser used by jobs pipeline."""
-    text = (message or "").strip()
+    text = normalize_youtube_input(message)
     return ParseIntent(
         action="download_and_upload",
         youtube_query=text,

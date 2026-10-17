@@ -45,7 +45,19 @@ def test_requirements_use_existing_http_client_without_browser_dependency():
     requirements = _requirements()
     assert "playwright" not in requirements
     assert requirements["httpx"] == "httpx==0.27.2"
-    assert requirements["yt-dlp"] == "yt-dlp>=2025.1.15"
+    assert requirements["yt-dlp"] == "yt-dlp[default]>=2025.1.15"
+
+
+def test_web_parsers_pin_audited_security_fixes():
+    requirements = _requirements()
+    assert requirements["fastapi"] == "fastapi==0.135.0"
+    assert requirements["starlette"] == "starlette==1.3.1"
+    assert requirements["python-multipart"] == "python-multipart==0.0.32"
+
+
+def test_youtube_challenge_solver_is_installed_without_runtime_downloads():
+    import importlib.util
+    assert importlib.util.find_spec("yt_dlp_ejs") is not None, "Install yt-dlp default extras so disabled remote components do not remove the challenge solver"
 
 
 def test_vault_crypto_is_an_explicit_pinned_dependency():
@@ -65,27 +77,28 @@ def test_container_keeps_media_and_https_system_tools(package):
     assert any("--no-install-recommends" in tokens for tokens in installs)
 
 
-def test_container_keeps_deno_and_current_yt_dlp_workflow():
+def test_container_keeps_verified_deno_and_current_yt_dlp_workflow():
     text = "\n".join(_docker_instructions())
-    assert "https://deno.land/install.sh" in text
-    assert 'ENV PATH="/root/.deno/bin:${PATH}"' in text
+    assert "https://github.com/denoland/deno/releases/download/v2.9.7/" in text
+    assert "sha256sum -c -" in text
+    assert "/usr/local/bin" in text
     assert "pip install --no-cache-dir -r requirements.txt" in text
-    assert "pip install --no-cache-dir --upgrade yt-dlp" in text
+    assert "pip install --no-cache-dir --upgrade 'yt-dlp[default]'" in text
 
 
 def test_container_keeps_app_entrypoint_and_compose_data_port_contract():
     instructions = _docker_instructions()
     command = next(line[4:] for line in instructions if line.startswith("CMD "))
-    assert json.loads(command) == ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080"]
+    assert json.loads(command) == ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080", "--no-proxy-headers"]
     assert "WORKDIR /app" in instructions
     assert "COPY app ./app" in instructions
     assert "COPY web ./web" in instructions
     assert "ENV APP_PORT=8080" in instructions
-    # Relative host mounts work in Linux Compose and Docker Desktop's Linux containers.
+    # New installs use a project-scoped named volume, never an implicit host bind.
     compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
-    assert re.search(r"^\s*-\s*[\"']?8090:8080[\"']?\s*$", compose, re.MULTILINE)
-    assert re.search(r"^\s*-\s*[\"']?\./data:/app/data[\"']?\s*$", compose, re.MULTILINE)
-    assert re.search(r"^\s*-\s*\.env\s*$", compose, re.MULTILINE)
+    assert '${TONIES_BIND_ADDRESS:-127.0.0.1}:${TONIES_PORT:-8090}:8080' in compose
+    assert "- tonies-data:/app/data" in compose
+    assert "path: .env" in compose
     example = (ROOT / ".env.example").read_text(encoding="utf-8")
     assert "DATA_DIR=/app/data" in example
     assert "TONIES_STORAGE_STATE_FILE=" not in example

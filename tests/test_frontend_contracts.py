@@ -9,8 +9,40 @@ HTML = Path(__file__).parents[1] / "web" / "index.html"
 
 
 def run_js(body):
-    source = HTML.read_text(encoding="utf-8").split("<script>", 1)[1].split("</script>", 1)[0]
-    source = source.split("\n      loadResultsClearedState();", 1)[0]
+    # Match the real page load order. Session/auth and runtime boot are network boundaries;
+    # every local feature module is evaluated, never replaced with test-only behavior.
+    from html.parser import HTMLParser
+
+    class Scripts(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.parts = []
+            self.inline = False
+
+        def handle_starttag(self, tag, attrs):
+            if tag != 'script':
+                return
+            src = dict(attrs).get('src')
+            if src:
+                if not src.startswith('/static/assets/'):
+                    raise AssertionError(f'Unexpected script origin: {src}')
+                asset = src.split('?', 1)[0].removeprefix('/static/')
+                if asset != 'assets/session.js':
+                    self.parts.append((HTML.parent / asset).read_text(encoding='utf-8'))
+            else:
+                self.inline = True
+
+        def handle_data(self, data):
+            if self.inline:
+                self.parts.append(data.split('\n      loadResultsClearedState();', 1)[0])
+
+        def handle_endtag(self, tag):
+            if tag == 'script':
+                self.inline = False
+
+    scripts = Scripts()
+    scripts.feed(HTML.read_text(encoding='utf-8'))
+    source = '\n'.join(scripts.parts)
     harness = r"""
 const assert = require('node:assert/strict');
 const timers = new Map(); let timerId = 0;
@@ -19,10 +51,20 @@ global.clearTimeout = (id) => timers.delete(id);
 global.setInterval = () => { throw Error('Unexpected extra interval'); };
 global.clearInterval = () => {};
 const elements = new Map();
-function element() { return {value:'', textContent:'', innerHTML:'', style:{}, dataset:{},
+function element() { const listeners = new Map(), attrs = new Map(); return {
+  value:'', textContent:'', innerHTML:'', style:{}, dataset:{}, hidden:true,
+  paused:true, currentTime:0, src:'', loads:0, plays:0,
   classList:{add(){}, remove(){}, toggle(){}, contains(){return false;}},
-  addEventListener(){}, setAttribute(){}, querySelector(){return null;},
-  querySelectorAll(){return [];}, getBoundingClientRect(){return {width:100};}}; }
+  addEventListener(type, fn){ if (!listeners.has(type)) listeners.set(type, []); listeners.get(type).push(fn); },
+  dispatchEvent(event){ for (const fn of listeners.get(event.type) || []) fn(event); },
+  setAttribute(k,v){ attrs.set(k,String(v)); }, getAttribute(k){return attrs.get(k) ?? null;},
+  removeAttribute(k){ attrs.delete(k); if (k === 'src') this.src = ''; },
+  play(){ this.plays++; this.paused = false; this.dispatchEvent({type:'play'}); return Promise.resolve(); },
+  pause(){ this.paused = true; this.dispatchEvent({type:'pause'}); },
+  load(){ this.loads++; this.currentTime = 0; },
+  focus(){document.activeElement = this;}, select(){},
+  querySelector(){return null;}, querySelectorAll(){return [];},
+  getBoundingClientRect(){return {width:100};}}; }
 global.document = { getElementById(id) { if (!elements.has(id)) elements.set(id, element()); return elements.get(id); },
   documentElement:element(), addEventListener(){}, querySelector(){return null;} };
 global.window = {innerWidth:1200, innerHeight:900};
@@ -31,6 +73,8 @@ global.fetch = () => {throw Error('Live network forbidden');};
 """
     stubs = """
 const actualRenderToniesContent = renderToniesContent;
+const actualRenderTonies = renderTonies, actualAskConfirm = askConfirm;
+const actualRenderFiles = renderFiles, actualRefreshFiles = refreshFiles;
 renderTonies = renderToniesContent = renderJobs = renderFiles = renderToniesEditUI = () => {};
 showToast = () => {};
 refreshFiles = async () => {};
@@ -68,6 +112,174 @@ def test_local_file_actions_do_not_embed_filename_in_inline_javascript():
     render = html[html.index("function renderFiles()"):html.index("function getResultsRenderState")]
     assert "onclick=\"uploadExisting('" not in render
     assert "onclick=\"deleteFile('" not in render
+
+
+def test_local_player_is_one_persistent_native_control_without_autoplay():
+    from html.parser import HTMLParser
+
+    class PlayerParser(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.audio = []
+
+        def handle_starttag(self, tag, attrs):
+            if tag == 'audio':
+                self.audio.append(dict(attrs))
+
+    html = HTML.read_text(encoding='utf-8')
+    parser = PlayerParser()
+    parser.feed(html)
+    assert len(parser.audio) == 1
+    audio = parser.audio[0]
+    assert audio['id'] == 'local-audio'
+    assert 'controls' in audio and audio['preload'] == 'metadata'
+    assert 'autoplay' not in audio and 'src' not in audio
+    # The dock is outside all view/source panes, rather than above only Local files.
+    assert 'aria-label="Local preview"' in html
+    assert 'id="local-player"' not in html[html.index('function renderFiles()'):html.index('function getResultsRenderState')]
+
+
+def test_local_playback_toggles_switches_and_survives_file_renders_and_filtering():
+    run_js(r"""
+const audio = document.getElementById('local-audio');
+const panel = document.getElementById('local-player');
+const filename = `Kid's "song" & <b> 雪 #?.mp3`;
+filesCache = [{name:filename}, {name:'other.mp3'}];
+const rows = filesCache.map(f => {
+  const row = element(), play = element(), upload = element(), trash = element();
+  row.setAttribute('data-file-name', f.name);
+  row.querySelector = s => ({'.local-play-btn':play, '.local-upload-btn':upload, '.trash-btn':trash}[s]);
+  return {row, play, upload, trash};
+});
+filesEl.querySelectorAll = () => rows.map(r => r.row);
+renderFiles = actualRenderFiles;
+actualRenderFiles();
+assert.match(filesEl.innerHTML, /local-play-btn/);
+assert.doesNotMatch(filesEl.innerHTML, /onclick=/);
+assert.match(filesEl.innerHTML, /aria-label="Play /);
+assert.equal(audio.plays, 0);
+let uploads = 0, deletes = 0;
+uploadExisting = () => {uploads++;}; deleteFile = () => {deletes++;};
+rows[0].play.dispatchEvent({type:'click'});
+await Promise.resolve();
+assert.equal(audio.src, '/api/files/' + encodeURIComponent(filename) + '?inline=true');
+assert.equal(document.getElementById('local-player-name').textContent, filename);
+assert.equal(panel.hidden, false);
+assert.equal(audio.paused, false);
+assert.equal(rows[0].play.textContent, 'Pause');
+assert.equal(rows[0].play.getAttribute('aria-label'), 'Pause ' + filename);
+assert.equal(uploads, 0); assert.equal(deletes, 0);
+audio.currentTime = 37;
+const loads = audio.loads, plays = audio.plays;
+actualRenderFiles(); // Same routine rendering used by upload/queue updates.
+fileFilterEl.value = 'no matches'; actualRenderFiles();
+assert.equal(audio.currentTime, 37);
+assert.equal(audio.loads, loads); assert.equal(audio.plays, plays);
+assert.equal(audio.paused, false);
+await toggleLocalPlayback(filename);
+assert.equal(audio.paused, true);
+assert.equal(rows[0].play.textContent, 'Play');
+await toggleLocalPlayback(filename);
+assert.equal(audio.currentTime, 37);
+assert.equal(audio.paused, false);
+await toggleLocalPlayback('other.mp3');
+assert.equal(audio.src, '/api/files/other.mp3?inline=true');
+assert.equal(audio.currentTime, 0);
+assert.equal(rows[0].play.textContent, 'Play');
+assert.equal(rows[1].play.textContent, 'Pause');
+audio.pause(); // Native controls must update row labels too.
+assert.equal(rows[1].play.textContent, 'Play');
+await audio.play();
+assert.equal(rows[1].play.textContent, 'Pause');
+audio.paused = true; audio.dispatchEvent({type:'ended'});
+assert.equal(rows[1].play.textContent, 'Play');
+""")
+
+
+def test_local_playback_closes_resets_on_removal_and_stops_before_lock():
+    run_js("""
+renderFiles = actualRenderFiles; refreshFiles = actualRefreshFiles;
+const audio = document.getElementById('local-audio');
+const panel = document.getElementById('local-player');
+filesCache = [{name:'a.mp3'}, {name:'b.mp3'}];
+await toggleLocalPlayback('a.mp3'); audio.currentTime = 12;
+api = async () => [{name:'a.mp3'}]; // Removing another file does not stop this one.
+await refreshFiles(); assert.equal(audio.currentTime, 12); assert.equal(audio.paused, false);
+api = async () => []; await refreshFiles(); // Delete/clear/missing-file refresh.
+assert.equal(audio.paused, true); assert.equal(audio.src, ''); assert.equal(audio.currentTime, 0);
+assert.equal(panel.hidden, true);
+filesCache = [{name:'a.mp3'}];
+await toggleLocalPlayback('a.mp3');
+document.getElementById('local-player-close').dispatchEvent({type:'click'});
+assert.equal(audio.paused, true); assert.equal(audio.src, ''); assert.equal(panel.hidden, true);
+await toggleLocalPlayback('a.mp3');
+window.location = {};
+api = async path => {
+  assert.equal(path, '/api/setup/lock');
+  assert.equal(audio.paused, true); assert.equal(audio.src, '');
+};
+await lockApp(); assert.equal(window.location.href, '/login?locked=1');
+const plays = audio.plays;
+await toggleLocalPlayback('not-in-library.mp3');
+assert.equal(audio.plays, plays);
+""")
+
+
+def test_local_file_delete_stops_current_audio_before_refresh_but_preserves_undo_and_other_files():
+    run_js("""
+const audio = document.getElementById('local-audio');
+filesCache = [{name:'a.mp3'}, {name:'b.mp3'}];
+await toggleLocalPlayback('a.mp3');
+const remove = deleteFile; // Keep production deletion, including its Undo window.
+let undo;
+showToast = (message, kind, duration, action) => { if (action) undo = action.onClick; };
+fetch = async (path, options) => {
+  assert.equal(options.method, 'DELETE');
+  return {ok:true};
+};
+refreshFiles = async () => {};
+const other = remove('b.mp3'); await Promise.resolve();
+let timer = [...timers.values()].find(t => t.ms === 2400);
+timer.fn(); await other;
+assert.equal(audio.paused, false);
+const canceled = remove('a.mp3'); await Promise.resolve();
+undo();
+timer = [...timers.values()].filter(t => t.ms === 2400).at(-1);
+timer.fn(); await canceled;
+assert.equal(audio.paused, false);
+refreshFiles = async () => { throw Error('Must not refresh after a refused delete'); };
+fetch = async () => ({ok:false});
+const refused = remove('a.mp3'); await Promise.resolve();
+timer = [...timers.values()].filter(t => t.ms === 2400).at(-1);
+timer.fn(); await refused;
+assert.equal(audio.paused, false);
+fetch = async () => ({ok:true});
+refreshFiles = async () => { assert.equal(audio.paused, true); assert.equal(audio.src, ''); };
+const current = remove('a.mp3'); await Promise.resolve();
+timer = [...timers.values()].filter(t => t.ms === 2400).at(-1);
+timer.fn(); await current;
+assert.equal(document.getElementById('local-player').hidden, true);
+""")
+
+
+def test_local_player_handles_play_refusal_without_stale_switch_errors():
+    run_js("""
+filesCache = [{name:'a.mp3'}, {name:'b.mp3'}];
+const audio = document.getElementById('local-audio');
+const status = document.getElementById('local-player-status');
+let rejectFirst;
+audio.play = () => new Promise((resolve, reject) => {rejectFirst = reject;});
+const first = toggleLocalPlayback('a.mp3');
+audio.play = () => Promise.resolve();
+await toggleLocalPlayback('b.mp3');
+rejectFirst(Error('Aborted by source change')); await first;
+assert.equal(status.textContent, '');
+audio.play = () => Promise.reject(Error('Not allowed'));
+await toggleLocalPlayback('b.mp3');
+assert.match(status.textContent, /Could not play/);
+stopLocalPlayback();
+assert.equal(status.textContent, '');
+""")
 
 
 def test_rename_uses_cloud_identity_and_preserves_drafts_on_rejection():

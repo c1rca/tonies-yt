@@ -1,16 +1,18 @@
 from __future__ import annotations
+import copy
+import math
 import os
 import tempfile
 import threading
 import queue
 import uuid
-import subprocess
 import time
 import json
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Optional, Any
 
+from .media_process import probe_duration
 from .models import JobState
 from .ai import parse_request
 from .downloader import download_mp3, search_youtube
@@ -21,10 +23,15 @@ from .logger import get_logger
 
 logger = get_logger(__name__)
 
+# Undone/canceled jobs are final: no later queue callback may revive them.
+REVERSED_STATUSES = frozenset({"canceled", "undone"})
+TERMINAL_STATUSES = frozenset({"done", "failed"}) | REVERSED_STATUSES
+
 _jobs: Dict[str, JobState] = {}
 _q: queue.Queue[str] = queue.Queue()
 _lock = threading.Lock()
 _persist_lock = threading.Lock()
+_upload_mirror_lock = threading.Lock()
 _STAGE_TIMEOUT_SEC: dict[str, int] = {
     "parsing": 90,
     "searching": 180,
@@ -175,7 +182,7 @@ def _log(job_id: str, msg: str):
     _emit_event("job_log", job_id)
 
 
-def _is_cancelled(job_id: str) -> bool:
+def _cancel_requested(job_id: str) -> bool:
     with _lock:
         st = _jobs.get(job_id)
         return bool(st and st.cancel_requested)
@@ -186,32 +193,32 @@ def cancel_job(job_id: str) -> JobState:
         st = _jobs.get(job_id)
         if not st:
             raise RuntimeError("Job not found")
-        if st.status in {"done", "failed"}:
+        if st.status in TERMINAL_STATUSES:
             return st
         st.cancel_requested = True
         # Immediate terminal cancel for pre-selection states.
         if st.status in {"queued", "parsing", "searching", "awaiting_selection", "queued_download", "queued_prepare", "waiting_upload"}:
             st.status = "failed"
-            st.error = "Cancelled by user"
+            st.error = "Canceled by user"
         st.updated_at = now_iso()
         action_id = st.tonies_action_id
     if action_id:
         action_queue.cancel(action_id)  # only succeeds before the audio starts sending
     _emit_event("job_updated", job_id)
-    _log(job_id, "Cancelled by user")
+    _log(job_id, "Canceled by user")
     return get_job(job_id)
 
 
 def run_job(job_id: str):
     try:
-        if _is_cancelled(job_id):
-            _update(job_id, status="failed", error="Cancelled by user")
+        if _cancel_requested(job_id):
+            _update(job_id, status="failed", error="Canceled by user")
             return
         _update(job_id, status="parsing")
         _log(job_id, "Parsing request (exact-text mode)")
         parsed = parse_request(_jobs[job_id].user_message)
-        if _is_cancelled(job_id):
-            _update(job_id, status="failed", error="Cancelled by user")
+        if _cancel_requested(job_id):
+            _update(job_id, status="failed", error="Canceled by user")
             return
         _update(job_id, parsed=parsed.model_dump(), status="searching")
 
@@ -285,18 +292,13 @@ def watchdog_loop():
 
 
 def _probe_audio_duration_seconds(path: Path) -> float:
-    cmd = [
-        'ffprobe', '-v', 'error',
-        '-show_entries', 'format=duration',
-        '-of', 'json',
-        str(path)
-    ]
-    proc = subprocess.run(cmd, capture_output=True, text=True)
-    if proc.returncode != 0:
-        raise RuntimeError(f"ffprobe failed: {proc.stderr.strip()}")
-    data = json.loads(proc.stdout or '{}')
-    dur = data.get('format', {}).get('duration')
-    return float(dur) if dur is not None else 0.0
+    """Bounded ffprobe through the shared media policy; 0.0 when no duration is reported."""
+    seconds = probe_duration(path, timeout=30)
+    if seconds is None:
+        return 0.0
+    if not math.isfinite(seconds) or seconds < 0:
+        raise RuntimeError("Audio duration is not a valid number")
+    return seconds
 
 
 def _classify_download_error(err: Exception) -> str:
@@ -329,9 +331,26 @@ def _enqueue_upload(job_id: str, mp3_path: Path, target: Optional[str], target_u
 
 
 def _on_upload_action(job_id: str, action) -> None:
-    """Mirror the queued upload's progress onto its job."""
+    """Serialize upload callbacks so late forward events cannot revive Undo."""
+    with _upload_mirror_lock:
+        _mirror_upload_action(job_id, action)
+
+
+def _mirror_upload_action(job_id: str, action) -> None:
     job = get_job(job_id)
-    if job is None:
+    if job is None or job.status in REVERSED_STATUSES:
+        return
+    if action.status in REVERSED_STATUSES:
+        status = action.status
+        _update(job_id, status=status, cancel_requested=True, error=None, needs_refresh=False,
+                uploaded_chapter_id=None, tonies_content=None, attachment_receipt=None, upload_positioned=False)
+        _log(job_id, "Upload undone" if status == "undone" else "Upload canceled before attachment")
+        return
+    if action.status == "done" and action.needs_refresh:
+        # The inverse was attempted, not confirmed. Forward acceptance remains
+        # historical evidence, but is never promoted to current inventory.
+        _update(job_id, error=action.error, needs_refresh=True)
+        _log(job_id, "Undo outcome unconfirmed; refresh the Tonie before another action")
         return
     if action.status == "transferring":
         if job.status == "waiting_upload":
@@ -342,6 +361,9 @@ def _on_upload_action(job_id: str, action) -> None:
     elif action.status == "failed":
         if job.status not in {"done", "failed"}:
             _update(job_id, status="failed", error=action.error)
+        accepted = _accepted_attachment(action)
+        if accepted:
+            _update(job_id, error=action.error, **accepted)
         _log(job_id, f"Upload failed: {action.error}")
     elif action.status == "done":
         content = action.content or {}
@@ -357,6 +379,15 @@ def _on_upload_action(job_id: str, action) -> None:
             return
         _update(job_id, status="done", error=None, **receipt)
         _log(job_id, "Audio added to Tonies; processing continues in the library" if content.get("processing") else "Completed")
+
+
+def _accepted_attachment(action) -> dict | None:
+    """Tonies accepted the attachment but its read-back failed: keep the receipt so the
+    page blocks a duplicate upload, without presenting it as the current library."""
+    if not (action.attachment_receipt and action.chapter_id):
+        return None
+    return {"uploaded_chapter_id": action.chapter_id, "attachment_receipt": copy.deepcopy(action.attachment_receipt),
+            "needs_refresh": True, "tonies_content": None, "target_url": action.target_url}
 
 
 def select_candidate_and_continue(job_id: str, index: int, target_url: Optional[str] = None,
@@ -420,8 +451,8 @@ def run_selected_candidate_async(job_id: str, selected: dict, target_url: Option
     def _runner():
         t0 = time.time()
         try:
-            if _is_cancelled(job_id):
-                _update(job_id, status="failed", error="Cancelled by user")
+            if _cancel_requested(job_id):
+                _update(job_id, status="failed", error="Canceled by user")
                 return
             _log(job_id, f"Selected candidate: {selected.get('title', 'unknown')}")
             parsed = _jobs[job_id].parsed or {}
@@ -433,8 +464,8 @@ def run_selected_candidate_async(job_id: str, selected: dict, target_url: Option
             mp3 = download_mp3(selected["url"], settings.data_dir / "downloads", preferred_title)
             _log(job_id, f"Timing: download+extract completed in {time.time() - dl_started:.1f}s")
 
-            if _is_cancelled(job_id):
-                _update(job_id, status="failed", error="Cancelled by user")
+            if _cancel_requested(job_id):
+                _update(job_id, status="failed", error="Canceled by user")
                 return
             if get_job(job_id).status in {"done", "failed"}:
                 return
@@ -476,8 +507,8 @@ def create_upload_only_job(file_path: str, note: str = "upload existing file", t
     def _runner():
         t0 = time.time()
         try:
-            if _is_cancelled(job_id):
-                _update(job_id, status="failed", error="Cancelled by user")
+            if _cancel_requested(job_id):
+                _update(job_id, status="failed", error="Canceled by user")
                 return
             p = Path(file_path)
             if not p.exists():
@@ -488,8 +519,8 @@ def create_upload_only_job(file_path: str, note: str = "upload existing file", t
             if incoming_seconds <= 0:
                 raise RuntimeError('Local audio duration could not be verified')
 
-            if _is_cancelled(job_id):
-                _update(job_id, status="failed", error="Cancelled by user")
+            if _cancel_requested(job_id):
+                _update(job_id, status="failed", error="Canceled by user")
                 return
 
             _enqueue_upload(job_id, p, target=None, target_url=target_url, position=position)

@@ -64,20 +64,14 @@
 
       <div class="card">
         <h2>Tooling</h2>
-        <div class="desc">Runtime versions and updater controls.</div>
+        <div class="desc">Installed tool versions. Updates are managed outside the app.</div>
         <div class="grid">
           <div class="kv"><span class="k">Tonies-YT</span><span id="ver-app" class="v">loading…</span></div>
           <div class="kv"><span class="k">yt-dlp installed</span><span id="ver-ytdlp" class="v">loading…</span></div>
           <div class="kv"><span class="k">Deno runtime</span><span id="ver-deno" class="v">loading…</span></div>
-          <div class="row" id="ytdlp-update-row" style="display:none;justify-content:space-between;margin-top:2px;">
-            <span class="pill-warn">Update available</span>
-            <button id="update-ytdlp" class="secondary" style="margin-top:0;">Install latest yt-dlp</button>
-          </div>
-          <div class="row" id="ytdlp-current-row" style="display:none;justify-content:flex-start;margin-top:2px;">
-            <span class="pill-ok">yt-dlp is up to date</span>
-          </div>
+
         </div>
-        <div id="status-ytdlp" class="status"></div>
+        <div id="status-ytdlp" class="status">To update yt-dlp in Docker, rebuild the image and recreate the container. Native installs: update yt-dlp in the app's Python environment, then restart the app.</div>
       </div>
 
       <div class="card">
@@ -129,7 +123,7 @@
       const statusEl = document.getElementById('status');
       const statusToniesEl = document.getElementById('status-tonies');
       const statusSearchEl = document.getElementById('status-search');
-      const statusYtdlpEl = document.getElementById('status-ytdlp');
+
       const saveSearchBtn = document.getElementById('save-search');
       const saveAppBtn = document.getElementById('save');
       const saveToniesBtn = document.getElementById('save-tonies');
@@ -157,13 +151,11 @@
           document.getElementById('tonies-email').value = String(d.tonies_email || '').trim();
         }
         const installed = String(d?.versions?.yt_dlp || 'unknown');
-        const latest = String(d?.versions?.yt_dlp_latest || 'unknown');
+
         document.getElementById('ver-app').textContent = String(d?.app_version || 'unknown');
         document.getElementById('ver-ytdlp').textContent = installed;
         document.getElementById('ver-deno').textContent = String(d?.versions?.deno || 'unknown').split('\n')[0];
-        const showUpdate = installed !== 'unknown' && latest !== 'unknown' && installed !== latest;
-        document.getElementById('ytdlp-update-row').style.display = showUpdate ? 'flex' : 'none';
-        document.getElementById('ytdlp-current-row').style.display = showUpdate ? 'none' : 'flex';
+
 
         const raw = Number(localStorage.getItem(SEARCH_LIMIT_KEY));
         const lim = [5,10,15,20].includes(raw) ? raw : 5;
@@ -193,46 +185,11 @@
         setTimeout(() => { saveSearchBtn.textContent = original; saveSearchBtn.disabled = false; }, 900);
       };
 
-      document.getElementById('update-ytdlp').onclick = async () => {
-        const btn = document.getElementById('update-ytdlp');
-        const original = btn.textContent;
-        btn.disabled = true;
-        btn.textContent = 'Updating…';
-        statusYtdlpEl.className='status';
-        statusYtdlpEl.textContent='Updating yt-dlp…';
-        try {
-          const r = await fetch('/api/setup/update-yt-dlp', { method:'POST' });
-          const d = await r.json();
-          if (!d.ok) {
-            statusYtdlpEl.className='status err';
-            statusYtdlpEl.textContent = d.error || 'yt-dlp update failed';
-            return;
-          }
-          statusYtdlpEl.className='status ok';
-          statusYtdlpEl.textContent = `yt-dlp updated: ${d.before || '?'} → ${d.after || '?'}`;
-
-          const rs = await fetch('/api/setup/status');
-          const ds = await rs.json();
-          const installed = String(ds?.versions?.yt_dlp || d.after || 'unknown');
-          const latest = String(ds?.versions?.yt_dlp_latest || 'unknown');
-          document.getElementById('ver-ytdlp').textContent = installed;
-          const showUpdate = installed !== 'unknown' && latest !== 'unknown' && installed !== latest;
-          document.getElementById('ytdlp-update-row').style.display = showUpdate ? 'flex' : 'none';
-          document.getElementById('ytdlp-current-row').style.display = showUpdate ? 'none' : 'flex';
-        } catch (e) {
-          statusYtdlpEl.className='status err';
-          statusYtdlpEl.textContent = `yt-dlp update failed: ${e?.message || e}`;
-        } finally {
-          btn.disabled = false;
-          btn.textContent = original;
-        }
-      };
-
       document.getElementById('save').onclick = async () => {
         const username = (currentUsername || '').trim();
-        const current_password=(document.getElementById('current').value||'').trim();
-        const new_password=(document.getElementById('next').value||'').trim();
-        const new_confirm=(document.getElementById('next-confirm').value||'').trim();
+        const current_password=document.getElementById('current').value||'';
+        const new_password=document.getElementById('next').value||'';
+        const new_confirm=document.getElementById('next-confirm').value||'';
         if(!username||!current_password||!new_password||!new_confirm){ statusEl.className='status err'; statusEl.textContent='All password fields are required.'; return; }
         if(new_password !== new_confirm){ statusEl.className='status err'; statusEl.textContent='New password and confirmation do not match.'; return; }
 
@@ -252,9 +209,9 @@
 
       document.getElementById('save-tonies').onclick = async () => {
         const username = (currentUsername || '').trim();
-        const app_password=(document.getElementById('cred-app-password').value||'').trim();
+        const app_password=document.getElementById('cred-app-password').value||'';
         const tonies_email=(document.getElementById('tonies-email').value||'').trim();
-        const tonies_password=(document.getElementById('tonies-password').value||'').trim();
+        const tonies_password=document.getElementById('tonies-password').value||'';
         if(!username||!app_password||!tonies_password){ statusToniesEl.className='status err'; statusToniesEl.textContent='App password and my.tonies.com password are required.'; return; }
 
         const original = saveToniesBtn.textContent;

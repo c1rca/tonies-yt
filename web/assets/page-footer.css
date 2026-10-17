@@ -1,0 +1,16 @@
+.app-version-footer {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: center;
+  gap: 0.5rem 1rem;
+  margin: 1rem auto 0;
+  padding: 1rem 1rem calc(5.5rem + env(safe-area-inset-bottom, 0px));
+  color: inherit;
+  font: 0.75rem/1.5 system-ui, sans-serif;
+}
+
+.app-version-footer a {
+  color: inherit;
+  text-underline-offset: 0.2em;
+}

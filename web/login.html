@@ -76,7 +76,7 @@
       async function doLogin() {
         const btn = document.getElementById('unlock');
         const username = (document.getElementById('username').value || '').trim();
-        const app_password = (document.getElementById('app-password').value || '').trim();
+        const app_password = document.getElementById('app-password').value || '';
         if (!username || !app_password) {
           statusEl.className = 'status err';
           statusEl.textContent = 'Username and password are required.';

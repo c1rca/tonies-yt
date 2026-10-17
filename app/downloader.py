@@ -1,17 +1,24 @@
-import subprocess
-import sys
+"""YouTube commands, download resource policy and exclusive audio publication."""
+import logging
+import os
 from pathlib import Path
 import re
-import json
+import stat
+import sys
+import tempfile
 import time
-import logging
 from threading import Lock
+from uuid import uuid4
 
+from .subprocess_runner import run_ytdlp as _run_ytdlp
+from .youtube_source import normalize_youtube_input, parse_candidates
 
-# No artificial yt-dlp throttling; run as fast as possible.
+_SEARCH_TIMEOUT_SEC = 60
+_DOWNLOAD_TIMEOUT_SEC = 600
+_MAX_SEARCH_OUTPUT_BYTES = 1024 * 1024
+_MAX_DOWNLOAD_BYTES = 512 * 1024 * 1024
 _MIN_YTDLP_SEARCH_SPACING_SEC = 0.0
 _MIN_YTDLP_DOWNLOAD_SPACING_SEC = 0.0
-_SEARCH_CACHE_TTL_SEC = 0
 _search_cache: dict[str, tuple[float, list[dict]]] = {}
 _last_ytdlp_call_at = 0.0
 _call_lock = Lock()
@@ -33,97 +40,88 @@ def _throttle_ytdlp_calls(min_spacing_sec: float):
         _last_ytdlp_call_at = time.time()
 
 
-def _cookie_args() -> list[str]:
-    # Cookies disabled by request.
-    return []
-
-
 def sanitize_filename(name: str) -> str:
-    return re.sub(r"[^a-zA-Z0-9._-]+", "_", name).strip("_")[:120] or "audio"
+    return re.sub(r"[^a-zA-Z0-9._-]+", "_", name).strip("_.")[:120] or "audio"
+
+
+def _base_command() -> list[str]:
+    # Isolated Python ignores PYTHONPATH/user-site code. Configuration/plugins,
+    # cookies and runtime component downloads are never opted into. Install the
+    # matching yt-dlp-ejs wheel and Deno alongside yt-dlp; no runtime GitHub fetch.
+    return [
+        sys.executable, "-I", "-m", "yt_dlp",
+        "--ignore-config", "--no-plugin-dirs", "--no-remote-components",
+        "--use-extractors", "youtube,youtube:search", "--no-playlist",
+        "--no-progress", "--no-warnings", "--no-cache-dir",
+        "--retries", "0", "--fragment-retries", "0", "--extractor-retries", "0",
+    ]
+
+
+def _check_download_size(directory: Path) -> None:
+    """Sample aggregate staging bytes; this is not an OS-level disk quota."""
+    total = 0
+    for index, path in enumerate(directory.rglob("*")):
+        if index >= 100:
+            raise RuntimeError("YouTube download size limit exceeded") from None
+        info = path.lstat()
+        if stat.S_ISDIR(info.st_mode):
+            continue
+        if not stat.S_ISREG(info.st_mode):
+            raise RuntimeError("YouTube download produced an invalid file") from None
+        total += info.st_size
+        if total > _MAX_DOWNLOAD_BYTES:
+            raise RuntimeError("YouTube download size limit exceeded") from None
 
 
 def search_youtube(youtube_query: str, limit: int = 3) -> list[dict]:
-    t0 = time.time()
-
-    raw_limit = max(1, min(limit, 20))
-    cmd = [
-        sys.executable,
-        "-m", "yt_dlp",
-        "--dump-json",
-        "--flat-playlist",
-        "--socket-timeout", "12",
-        # Keep search path lean/fast; JS runtime remote components are mainly needed for extraction/download.
-        *_cookie_args(),
-        f"ytsearch{raw_limit}:{youtube_query}",
-    ]
-
+    text = normalize_youtube_input(youtube_query)
+    raw_limit = max(1, min(int(limit), 20))
+    target = text if text.startswith("https://") else f"ytsearch{raw_limit}:{text}"
+    cmd = [*_base_command(), "--dump-json", "--flat-playlist", "--socket-timeout", "12", "--", target]
     _throttle_ytdlp_calls(_MIN_YTDLP_SEARCH_SPACING_SEC)
-    proc = subprocess.run(cmd, check=True, capture_output=True, text=True)
-    lines = [ln.strip() for ln in proc.stdout.splitlines() if ln.strip()]
-
-    candidates: list[dict] = []
-    for ln in lines:
-        try:
-            j = json.loads(ln)
-            vid = j.get("id")
-            title = j.get("title") or "Untitled"
-            url = j.get("url") or (f"https://www.youtube.com/watch?v={vid}" if vid else None)
-            if not url:
-                continue
-            candidates.append({
-                "id": vid,
-                "title": title,
-                "uploader": j.get("uploader") or "",
-                "duration": j.get("duration") or 0,
-                "url": url,
-            })
-        except Exception:
-            continue
-
-    out = candidates[:limit]
-    logger.info("yt_search query=%r limit=%s cache=disabled results=%s duration_ms=%d", youtube_query, limit, len(out), int((time.time() - t0) * 1000))
-    return out
+    output = _run_ytdlp(cmd, operation="search", timeout=_SEARCH_TIMEOUT_SEC, max_output_bytes=_MAX_SEARCH_OUTPUT_BYTES)
+    candidates, rejected = parse_candidates(output, raw_limit)
+    logger.info("yt_search results=%d rejected_metadata=%d", len(candidates), rejected)
+    return candidates
 
 
-def download_mp3(youtube_query_or_url: str, out_dir: Path, preferred_title: str = None) -> Path:
-    base = sanitize_filename(preferred_title or youtube_query_or_url)
-    output_template = str(out_dir / f"{base}.%(ext)s")
-    before = {
-        p: (p.stat().st_mtime_ns, p.stat().st_size)
-        for p in out_dir.glob(f"{base}*.mp3")
-    }
-
-    # Strict single-attempt download (no retry/fallback here).
-    cmd = [
-        sys.executable,
-        "-m", "yt_dlp",
-        "-x",
-        "--format", "bestaudio/best",
-        "--concurrent-fragments", "4",
-        "--audio-format", "mp3",
-        "--socket-timeout", "20",
-        "--js-runtimes", "deno",
-        "--remote-components", "ejs:github",
-        *_cookie_args(),
-        "-o", output_template,
-        youtube_query_or_url,
-    ]
-
-    _throttle_ytdlp_calls(_MIN_YTDLP_DOWNLOAD_SPACING_SEC)
+def _publish_audio(source: Path, out_dir: Path, base: str) -> Path:
+    source.chmod(0o600)
+    destination = out_dir / f"{base}.mp3"
     try:
-        proc = subprocess.run(cmd, check=True, capture_output=True, text=True)
-    except subprocess.CalledProcessError as e:
-        out = (e.stdout or "") + "\n" + (e.stderr or "")
-        raise RuntimeError(
-            f"yt-dlp failed for URL/query: {youtube_query_or_url}. Command: {' '.join(cmd)}. Error: exit={e.returncode}; yt-dlp output: {out[-900:]}"
-        ) from e
+        # Atomic, exclusive publication: don't overwrite a job or local symlink.
+        os.link(source, destination)
+    except FileExistsError:
+        destination = out_dir / f"{base}_{uuid4().hex}.mp3"
+        os.link(source, destination)
+    return destination
 
-    matches = [
-        p for p in out_dir.glob(f"{base}*.mp3")
-        if p not in before or (p.stat().st_mtime_ns, p.stat().st_size) != before[p]
-    ]
-    matches.sort(key=lambda p: p.stat().st_mtime_ns, reverse=True)
-    if not matches:
-        out = (proc.stdout or "") + "\n" + (proc.stderr or "")
-        raise RuntimeError(f"Download command finished but no MP3 file found. yt-dlp output: {out[-700:]}")
-    return matches[0]
+
+def download_mp3(youtube_query_or_url: str, out_dir: Path, preferred_title: str | None = None) -> Path:
+    text = normalize_youtube_input(youtube_query_or_url)
+    target = text if text.startswith("https://") else f"ytsearch1:{text}"
+    base = sanitize_filename(preferred_title or "audio")
+    try:
+        # A private operation directory prevents stale/concurrent-file reuse.
+        with tempfile.TemporaryDirectory(prefix=".yt-audio-", dir=out_dir) as staging:
+            directory = Path(staging)
+            output_template = str(directory / f"{base}.%(ext)s")
+            cmd = [
+                *_base_command(), "-x", "--format", "bestaudio/best",
+                "--concurrent-fragments", "4", "--audio-format", "mp3",
+                "--socket-timeout", "20", "--js-runtimes", "deno",
+                "--max-filesize", str(_MAX_DOWNLOAD_BYTES), "-o", output_template,
+                "--", target,
+            ]
+            _throttle_ytdlp_calls(_MIN_YTDLP_DOWNLOAD_SPACING_SEC)
+            _run_ytdlp(
+                cmd, operation="download", timeout=_DOWNLOAD_TIMEOUT_SEC,
+                resource_check=lambda: _check_download_size(directory),
+            )
+            _check_download_size(directory)
+            matches = list(directory.glob("*.mp3"))
+            if len(matches) != 1 or matches[0].stat().st_size == 0:
+                raise RuntimeError("Download command finished but no MP3 file found") from None
+            return _publish_audio(matches[0], out_dir, base)
+    except OSError:
+        raise RuntimeError("YouTube download failed") from None

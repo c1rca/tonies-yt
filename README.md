@@ -11,8 +11,9 @@ Fast web app for managing Creative Tonies audio.
 - Upload audio to Creative Tonies through the Tonies cloud API
 - Manage Tonies tracks: rename, reorder, delete, **delete all content with confirmation**
 - Maintain a Local MP3 Library for drag/drop or upload-to-Tonies flows
-- Queue multiple local uploads sequentially, with queued-state highlighting
-- Import local audio using **Browse**; it is converted to a Tonies-friendly MP3 once, on import
+- Preview local MP3s with **Play / Pause** on each row and one browser-native player for seeking and volume. Playback survives library refreshes and filtering; **Close**, deleting the playing file, or **Lock** stops it. Playback is local to your browser, never uploads to Tonies, and requires sign-in.
+- Transfer up to three local uploads concurrently, with queued attachment order and pending-state highlighting
+- Import local audio using **Import file**; it is converted to a Tonies-friendly MP3 once, on import
 - Right-click local files on desktop for upload / upload to top / upload to bottom
 
 ## How it talks to Tonies
@@ -28,11 +29,42 @@ The app calls the Tonies cloud directly over HTTPS (`httpx`): OAuth login at `lo
 
 ## Security model
 
-- Each browser signs in with the app username and password and gets its own session cookie (HttpOnly, SameSite=Strict). Every page and API call needs it, except sign-in, first-run setup and `/api/health`.
+- Each browser signs in with the app username and password and gets its own session cookie (HttpOnly, SameSite=Strict). Application pages and APIs require it; minimal setup/sign-in/health routes and public static assets remain accessible.
 - **Lock** (top bar) signs every browser out and locks the vault. Changing the app password signs other browsers out. A restart signs everyone out.
 - Five wrong passwords from one address within five minutes trigger a wait. Writes sent from other websites are refused.
-- Tonies credentials are stored encrypted with a key derived from the app password; they are only decrypted in memory after sign-in.
-- The app speaks plain HTTP. On a home network that is the usual trade-off; **to reach it from the internet, put it behind an HTTPS reverse proxy** (see [Operations](docs/OPERATIONS.md#running-behind-a-reverse-proxy)) and use a strong app password. Until first-run setup is done, whoever opens the app first creates the login, so set it up right after starting it.
+- Tonies credentials are encrypted with a vault key protected by the app password; OAuth tokens stay server-side in memory, never browser storage. New app passwords require at least 12 characters; existing vaults remain supported.
+- The Docker image runs as **UID/GID 10001:10001**. Compose additionally makes code read-only, drops all capabilities, prevents privilege escalation and limits resources. There is no root startup/ownership-repair fallback.
+- Compose exposes only **127.0.0.1:8090** by default. Finish setup locally before opting into remote access: the first visitor to an unconfigured app creates the login. **Use HTTPS outside localhost**, including shared LANs, and configure the exact allowed Host/origin and proxy trust. See [Security](docs/SECURITY.md) and [proxy instructions](docs/OPERATIONS.md#running-behind-a-reverse-proxy).
+
+## Audio workspace
+
+1. **Choose a Tonie.** Desktop keeps your Tonies in a compact rail. On mobile and tablet, use **Change Tonie** in the selected-target header. Capacity and the destination stay visible while you browse.
+2. **Add audio.** Switch between **YouTube** and **Local files** without losing your search or file filter. Import a file with **Import file** or drop it on the import area. Use a row's **Add** button, or select several local files and use **Add to [Tonie]**. Each submission keeps the destination captured when you clicked it.
+3. **Arrange tracks.** Playback positions identify the actual listening order. **Reverse display** changes only the view, not the Tonie. Every row has a visible **Actions** menu for Rename, Move up/down/top/bottom and Remove. Inline rename supports Enter to save and Escape to cancel; drafts survive background refreshes. **Select** enables a single confirmed batch removal. **Manage this Tonie** keeps Clear all separate from ordinary actions.
+4. **Check Activity.** Jobs and library changes share one view, named by destination. Sending, queued attachment, saved attachment, cloud processing and refresh-needed states remain distinct. Partial failures stay visible until dismissed. Accepted uploads are not resubmitted when their follow-up refresh fails.
+5. **Preview locally.** Play opens one persistent native audio dock, including seeking and volume. Changing views, sources or Tonies does not remount it. It is explicitly a local preview, not playback on your physical Tonie. Close, confirmed deletion of the playing local file and Lock stop playback.
+
+Mobile has three primary destinations: **Tracks**, **Add audio**, and **Activity**. Desktop keeps Tracks and Add audio side by side. **Settings → Appearance** follows the system by default and remembers a manual light/dark choice. Account settings and logs retain their existing routes.
+
+### Undo mistakes
+
+The selected Tonie offers **Undo** only when the server has a valid capability for its latest submission. Confirmed Rename/Move and a newly attached upload can be reversed for up to ten minutes, provided the Tonie has not changed. Removal has a short **five-second cancellation window before it is sent**; after a cloud deletion is committed, the app does not claim it can recover the audio. Clear all is not recoverable.
+
+Undo rechecks current chapter identities/order under the same target lock before one inverse write. A stale or unconfirmed outcome refuses further Undo and asks you to refresh—never blindly retries or restores a client-supplied library snapshot. A newer submission, Lock, account/password changes, expiry or restart revokes old capabilities. The provider has no proven compare-and-swap contract, so another device can still race the final read/write boundary.
+
+### Frontend structure
+
+No framework, build step or external frontend dependency is required. The page loads focused classic-script modules in its declared order:
+
+- `workspace-navigation.js`: view/source navigation, appearance, selected destination and safe artwork/rail rendering.
+- `workspace-sources.js`: local multi-selection, captured-target submission and local import lifecycle.
+- `workspace-tracks.js`: exact-ID selection, inline rename ownership and row-action bindings.
+- `workspace-activity.js`: in-session job/action presentation and dismissible feedback; never mutation replay or client-side recovery history.
+- `workspace-dialogs.js`: confirmation ownership, keyboard focus and safe initial action.
+- `local-preview.js`: persistent native local playback, source switching and cleanup.
+- `workspace.css`: readable theme tokens, shell, source/track/player components and explicit touch-layout rules.
+
+The existing queue, receipt reconciliation, caching, drag/drop and SSE/polling domain controller remains in `index.html`; this change does not claim a wholesale legacy-controller refactor. Feature modules call those established boundaries rather than wrapping or replacing them. Frontend contract tests evaluate the actual local scripts in page order and fail if an async contract never reaches its final assertion.
 
 ## Main UI
 - App: `http://localhost:8090`
@@ -52,7 +84,7 @@ The app calls the Tonies cloud directly over HTTPS (`httpx`): OAuth login at `lo
 - FastAPI + `httpx` for the Tonies OAuth/API client (`app/tonies_api.py`)
 - `cryptography` for the encrypted app vault
 - `yt-dlp`, `ffmpeg` and Deno for YouTube/audio processing (Deno is yt-dlp's JavaScript runtime)
-- `python:3.12-slim` container (about 1.1 GB) + Docker Compose
+- `python:3.12-slim` nonroot container + Docker Compose
 
 ## Quick start (recommended)
 
@@ -61,36 +93,40 @@ Docker Compose on Linux, or Docker Desktop with Linux containers on Windows.
 Linux:
 ```bash
 cp .env.example .env
-docker compose up -d --build
+chmod 600 .env
+docker compose -p tonies-local up -d --build
 ```
 
 Windows PowerShell:
 ```powershell
 Copy-Item .env.example .env
-docker compose up -d --build
+docker compose -p tonies-local up -d --build
 ```
 
-Open `http://localhost:8090` and complete first-run setup: choose an app username and password, then enter your Tonies email and password. They are stored encrypted in `data/secrets/`; nothing needs to go in `.env`. Each browser then signs in with the app username and password.
+Open `http://localhost:8090` on the Docker host and immediately complete first-run setup: choose an app username and a long unique password, then enter your Tonies credentials. They are encrypted under the volume's `secrets/`; no credentials need to go in `.env`. Each browser signs in separately. Docker Compose 2.24+ is required; on Windows protect `.env` with your account's file permissions.
 
-Compose maps host port 8090 to container port 8080 and mounts `./data` at `/app/data`. Back up `data/` and `.env`; do not commit either.
+Compose maps loopback host port 8090 to container port 8080 and mounts the project's **named volume** at `/app/data`. Back up that whole volume and `.env`; never use `down -v` unless you intend to delete the library/vault. **Existing users: old `./data` is not imported automatically.** Follow the [backed-up migration procedure](docs/OPERATIONS.md#existing-root-owned-bind-mounts) before upgrading; do not initialize an empty replacement vault or switch runtime to root. Use the same `-p tonies-local` for later commands. See [Quick Start](docs/QUICKSTART.md) for LAN/proxy configuration and [backup/restore](docs/OPERATIONS.md#backup--restore).
 
 ## Native setup (without Docker)
 
-See [Quick Start](docs/QUICKSTART.md) for Python 3.12 instructions on Linux and Windows. Install ffmpeg and Deno on the host, then install `requirements.txt`.
+See [Quick Start](docs/QUICKSTART.md) for native Python 3.12 instructions on Linux/macOS. Install ffmpeg and Deno on the host, then install `requirements.txt` (including yt-dlp's matched build-time solver dependencies).
 
-On Windows, `scripts/setup-windows.ps1` installs the prerequisites and checks out `main`. It runs `git reset --hard origin/main`, so do not run it in a checkout with local changes.
+The hardened native runtime uses POSIX file locking and process groups; **native Windows Python is not supported by this branch**. Windows users should use Docker Desktop with Linux containers or a Linux environment such as WSL2. The legacy `scripts/setup-windows.ps1` targets native Windows and resets to `main`; do not use it to install/evaluate this branch.
 
 ## Optional config
 - `LOG_LEVEL`
 - `LOG_FILE` (the Compose example uses `/app/data/logs/toni-auto.log`)
 - `DATA_DIR` (`/app/data` under Compose; use `./data` for native runs)
+- `TONIES_BIND_ADDRESS` / `TONIES_PORT`: loopback / 8090 by default; remote exposure requires deliberate HTTPS/firewall configuration.
+- `APP_ALLOWED_HOSTS` / `APP_PUBLIC_URL`: explicit browser hostname/IP allowlist and optional canonical HTTPS origin.
+- `APP_MAX_UPLOAD_BYTES`: per-file limit (100 MiB by default); container disk/resource limits still apply.
 - `TONIES_EMAIL` / `TONIES_PASSWORD`: when both are set they choose the Tonies account instead of the one saved in the vault. You still create and use an app login. Keep them private.
 - `TONIES_CREATIVE_UPLOAD_URL` or `TONIES_CHARACTER_NAME`: default target Tonie (edit URL or name) when a job doesn't pick one.
 
 ## Upgrading from 1.x
 
 Version 1.x drove my.tonies.com with Playwright. See the [changelog](CHANGELOG.md) for everything that changed. When upgrading:
-- Keep your `data/` directory; the vault, job history and library carry over, and you sign in with your existing app login.
+- Preserve your complete old `data/` directory and `.env`; migrate into the new mount with the documented backup/ownership procedure before starting this nonroot version. The existing app login and vault format remain supported.
 - If you used `TONIES_EMAIL` / `TONIES_PASSWORD` instead of the vault, the first visit now asks you to create an app login (the Tonies fields can stay empty).
 - Scripts that call the API must sign in first (`POST /api/setup/login`) and send the session cookie back.
 - `TONIES_STORAGE_STATE_FILE`, `TONIES_APP_URL`, `TONIES_LOGIN_URL` and the `TONIES_*_SELECTOR` settings are ignored and can be removed from `.env`.
@@ -105,4 +141,5 @@ It cannot be recovered: the vault is encrypted with it. To start over, stop the 
 - Quick start: [`docs/QUICKSTART.md`](docs/QUICKSTART.md)
 - App overview: [`docs/APP_OVERVIEW.md`](docs/APP_OVERVIEW.md)
 - Operations: [`docs/OPERATIONS.md`](docs/OPERATIONS.md)
+- Security and deployment boundaries: [`docs/SECURITY.md`](docs/SECURITY.md)
 - Contributing: [`CONTRIBUTING.md`](CONTRIBUTING.md)

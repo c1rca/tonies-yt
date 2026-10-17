@@ -17,7 +17,6 @@ def vault(tmp_path, monkeypatch):
     monkeypatch.setattr(credentials.settings, "tonies_password", "")
     monkeypatch.setattr(main, "reset_upload_session", lambda: None)
     monkeypatch.setattr(main, "_cmd_version", lambda cmd: "test")
-    monkeypatch.setattr(main, "_yt_dlp_latest_version", lambda: "test")
     credentials.initialize_vault(USER, PASSWORD, "kid@example.invalid", "tonies-secret")
     credentials.lock_runtime()
     yield
@@ -39,7 +38,7 @@ def protected_api_routes():
         path = getattr(route, "path", "")
         if path.startswith("/api/") and path not in PUBLIC:
             for method in sorted(route.methods - {"HEAD"}):
-                yield method, path.replace("{filename}", "x.mp3").replace("{job_id}", "x")
+                yield method, path.replace("{filename}", "x.mp3").replace("{job_id}", "x").replace("{action_id}", "x")
 
 
 @pytest.mark.parametrize("method,path", sorted(set(protected_api_routes())))
@@ -81,10 +80,10 @@ def test_sign_in_sets_a_strict_httponly_cookie_and_opens_the_app(vault):
     assert status["signed_in"] and status["username"] == USER and status["app_version"] == main.__version__
 
 
-def test_cookie_is_secure_behind_an_https_proxy(vault):
+def test_untrusted_proxy_header_does_not_set_secure_cookie(vault):
     r = client().post("/api/setup/login", json={"username": USER, "app_password": PASSWORD},
                       headers={"x-forwarded-proto": "https"})
-    assert "secure" in r.headers["set-cookie"].lower()
+    assert "secure" not in r.headers["set-cookie"].lower()
 
 
 def test_a_second_browser_is_not_signed_in_by_the_first(vault):
@@ -109,12 +108,34 @@ def test_lock_signs_every_browser_out(vault):
     assert not credentials.vault_unlocked()
 
 
+def test_local_media_full_and_range_requests_require_session_and_relock(vault):
+    library = main.settings.data_dir / 'downloads'
+    library.mkdir(exist_ok=True)
+    (library / 'sample.mp3').write_bytes(b'0123456789')
+    url = '/api/files/sample.mp3?inline=true'
+    signed_out, signed_in = client(), client()
+    for headers in ({}, {'Range': 'bytes=2-4'}):
+        response = signed_out.get(url, headers=headers)
+        assert response.status_code == 401 and b'0123456789' not in response.content
+    sign_in(signed_in)
+    response = signed_in.get(url)
+    assert response.status_code == 200 and response.content == b'0123456789'
+    assert response.headers['cache-control'] == 'no-store'
+    response = signed_in.get(url, headers={'Range': 'bytes=2-4'})
+    assert response.status_code == 206 and response.content == b'234'
+    assert response.headers['cache-control'] == 'no-store'
+    assert signed_in.post('/api/setup/lock').json()['ok']
+    for headers in ({}, {'Range': 'bytes=2-4'}):
+        response = signed_in.get(url, headers=headers)
+        assert response.status_code == 401 and b'0123456789' not in response.content
+
+
 def test_password_change_signs_other_browsers_out(vault):
     mine, other = client(), client()
     sign_in(mine)
     sign_in(other)
     r = mine.post("/api/setup/change-password",
-                  json={"username": USER, "current_password": PASSWORD, "new_password": "new pass"})
+                  json={"username": USER, "current_password": PASSWORD, "new_password": "new synthetic passphrase"})
     assert r.json()["ok"]
     assert mine.get("/api/jobs").status_code == 200
     assert other.get("/api/jobs").status_code == 401
@@ -174,12 +195,12 @@ def test_cross_site_writes_are_refused_even_when_signed_in(vault, headers):
     assert credentials.vault_unlocked()
 
 
-def test_same_origin_and_proxied_writes_are_allowed(vault):
+def test_same_origin_allowed_but_spoofed_proxy_host_refused(vault):
     c = client()
     sign_in(c)
     assert c.post("/api/search-cache/clear", headers={"origin": "http://tonies.local:8090"}).status_code == 200
     assert c.post("/api/search-cache/clear", headers={
-        "origin": "https://tonies.example.com", "x-forwarded-host": "tonies.example.com"}).status_code == 200
+        "origin": "https://tonies.example.com", "x-forwarded-host": "tonies.example.com"}).status_code == 403
 
 
 def test_login_itself_is_refused_cross_site(vault):
@@ -187,3 +208,28 @@ def test_login_itself_is_refused_cross_site(vault):
                       headers={"origin": "http://evil.example"})
     assert r.status_code == 403
     assert not credentials.vault_unlocked()
+
+
+def test_undo_is_authenticated_and_cross_site_safe_with_real_queue(vault, cloud_api, monkeypatch):
+    from app.actions import ActionQueue
+    from tonies_fake import URL
+    cloud, api = cloud_api
+    queue = ActionQueue(lambda: api, batch_window=0)
+    monkeypatch.setattr(queue, "_ensure_worker", lambda target: None)
+    monkeypatch.setattr(main, "action_queue", queue)
+    c = client()
+    try:
+        sign_in(c)
+        action = queue.submit(URL, [{"type": "delete", "chapter_id": "one"}])[0]
+        url = f"/api/tonies-actions/{action.id}/undo"
+        denied = client().post(url)
+        assert denied.status_code == 401 and denied.json() == {"detail": "Sign in required"}
+        assert action.public()["undo_available"] and not cloud.calls
+        assert c.post(url, headers={"origin": "https://attacker.invalid"}).status_code == 403
+        assert action.public()["undo_available"] and not cloud.calls
+        response = c.post(url)
+        assert response.status_code == 200 and response.json()["actions"][0]["status"] == "canceled"
+        assert not cloud.calls
+    finally:
+        queue.reset()
+        queue._transfers.shutdown(wait=True)

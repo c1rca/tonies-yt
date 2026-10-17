@@ -1,13 +1,46 @@
 services:
   tonies-yt:
     build: .
-    container_name: tonies-yt
+    # Fixed non-root identity, including when the entry command is overridden.
+    user: "10001:10001"
+    init: true
     env_file:
-      - .env
+      - path: .env
+        required: false
     environment:
+      DATA_DIR: /app/data
+      LOG_FILE: /app/data/logs/toni-auto.log
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      HOME: /tmp/home
+      XDG_CACHE_HOME: /tmp/cache
+      DENO_DIR: /tmp/cache/deno
+      OMP_NUM_THREADS: "1"
+      OPENBLAS_NUM_THREADS: "1"
     ports:
-      - "8090:8080"
+      - "${TONIES_BIND_ADDRESS:-127.0.0.1}:${TONIES_PORT:-8090}:8080"
     volumes:
-      - ./data:/app/data
+      - tonies-data:/app/data
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=268435456,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 256
+    mem_limit: 1g
+    cpus: 2.0
+    ulimits:
+      nofile:
+        soft: 1024
+        hard: 4096
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     restart: unless-stopped
+
+# Project-scoped; never share this volume between running installations.
+volumes:
+  tonies-data:

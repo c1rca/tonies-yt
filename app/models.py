@@ -1,9 +1,11 @@
 from pydantic import BaseModel, Field
 from typing import Optional, Literal
 
+from .youtube_source import MAX_INPUT_LENGTH
+
 
 class ChatRequest(BaseModel):
-    message: str = Field(..., min_length=1)
+    message: str = Field(..., min_length=1, max_length=MAX_INPUT_LENGTH)
     search_limit: Optional[int] = Field(default=5, ge=1, le=20)
 
 
@@ -37,5 +39,8 @@ class JobState(BaseModel):
     upload_positioned: bool = False
     uploaded_chapter_id: Optional[str] = None
     tonies_content: Optional[dict] = None
+    # Accepted-but-unconfirmed attachment: historical evidence, never current inventory.
+    attachment_receipt: Optional[dict] = None
     error: Optional[str] = None
     cancel_requested: bool = False
+    needs_refresh: bool = False

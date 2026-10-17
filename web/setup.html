@@ -82,9 +82,9 @@
 
       document.getElementById('create').onclick = async () => {
         const username = (document.getElementById('username').value || '').trim();
-        const app_password = (document.getElementById('app-password').value || '').trim();
+        const app_password = document.getElementById('app-password').value || '';
         const tonies_email = (document.getElementById('tonies-email').value || '').trim();
-        const tonies_password = (document.getElementById('tonies-password').value || '').trim();
+        const tonies_password = document.getElementById('tonies-password').value || '';
 
         if (!username || !app_password || (!toniesFromEnv && (!tonies_email || !tonies_password))) {
           statusEl.className = 'status err';

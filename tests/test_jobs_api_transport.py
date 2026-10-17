@@ -11,6 +11,8 @@ from app.actions import ActionQueue
 class FakeTonies:
     """Stands in for ToniesAPI: records transfers and batches, returns a growing chapter list."""
 
+    closed = False
+
     def __init__(self):
         self.chapters, self.transfers, self.batches = [], [], []
         self.fail_apply = None
@@ -94,7 +96,8 @@ def test_cancelling_before_the_audio_is_sent_never_reaches_tonies(cloud, tmp_pat
     cloud.gate.set()
     for blocker in blockers:
         wait_for(blocker)
-    assert jobs.get_job(job_id).status == "failed"
+    assert jobs.get_job(job_id).status == "canceled"
+    assert jobs.get_job(job_id).error is None
     assert "queued.mp3" not in cloud.transfers
     assert all(op["file_id"] != "file-queued" for batch in cloud.batches for op in batch)
 

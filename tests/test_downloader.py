@@ -1,6 +1,3 @@
-
-import subprocess
-
 import pytest
 
 from app import downloader
@@ -30,7 +27,7 @@ def test_sanitize_filename_fallback_name():
 def test_download_mp3_does_not_return_preexisting_same_prefix_file(monkeypatch, tmp_path):
     stale = tmp_path / "Song.mp3"
     stale.write_bytes(b"old")
-    monkeypatch.setattr(downloader.subprocess, "run", lambda *_a, **_kw: subprocess.CompletedProcess([], 0, "", ""))
+    monkeypatch.setattr(downloader, "_run_ytdlp", lambda *_a, **_kw: b"")
 
     with pytest.raises(RuntimeError, match="no MP3 file found"):
-        downloader.download_mp3("https://example.test/video", tmp_path, "Song")
+        downloader.download_mp3("https://www.youtube.com/watch?v=AbCdEf_12-3", tmp_path, "Song")

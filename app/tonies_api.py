@@ -4,16 +4,17 @@ from __future__ import annotations
 import copy
 import math
 import re
-import subprocess
 import time
 from pathlib import Path
 from threading import Lock, RLock
+from typing import cast
 from urllib.parse import urlsplit
 
 import httpx
 
 from . import tonies_batch
 from .tonies_batch import ATTACH_MARK, OpError, apply_ops
+from .undo import UndoReceipt, apply_inverse, inverse_steps
 
 API_BASE = "https://api.prod.tcs.toys/v2"
 TOKEN_URL = "https://login.tonies.com/auth/realms/tonies/protocol/openid-connect/token"
@@ -72,15 +73,14 @@ def renamed_title(current: str, requested: str) -> str:
 
 
 def _audio_seconds(path: Path) -> float:
+    from .media_process import probe_seconds
+
     try:
-        result = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration",
-                                 "-of", "default=noprint_wrappers=1:nokey=1", str(path)],
-                                capture_output=True, text=True, timeout=30, check=True)
-        seconds = float(result.stdout.strip())
-    except (OSError, ValueError, subprocess.SubprocessError):
+        seconds = probe_seconds(path, timeout=30)
+    except (OSError, ValueError, RuntimeError):
         raise RuntimeError("Could not measure audio duration with ffprobe") from None
     if not math.isfinite(seconds) or seconds <= 0:
-        raise RuntimeError("Audio duration must be positive")
+        raise RuntimeError("Audio duration must be positive") from None
     return seconds
 
 
@@ -155,6 +155,24 @@ def _content(target: dict, config: dict) -> dict:
             "chapters": chapters}
 
 
+class UnconfirmedWriteError(RuntimeError):
+    """A write was accepted, but a fresh inventory could not confirm its outcome.
+
+    ``attachment_receipt`` is historical PATCH evidence, not current content. Only
+    validated attachment identities appear in ``results``; callers must not retry
+    the mutation merely because confirmation failed.
+    """
+
+    def __init__(self, results: list[dict], attachment_receipt: dict | None):
+        message = "Saved Tonies content was not confirmed; refresh before another action"
+        if attachment_receipt is not None:
+            message += ". Tonies accepted the upload attachment. Do not upload again."
+        super().__init__(message)
+        self.results = copy.deepcopy(results)
+        self.attachment_receipt = copy.deepcopy(attachment_receipt)
+        self.needs_refresh = True
+
+
 class ToniesAPI:
     def __init__(self, email: str, password: str, *, client: httpx.Client | None = None,
                  poll_timeout: float = 8, poll_interval: float = 0.25):
@@ -167,6 +185,11 @@ class ToniesAPI:
         self._target_locks: dict[tuple[str, str], RLock] = {}
         self._closed = False
         self._poll_timeout, self._poll_interval = poll_timeout, poll_interval
+
+    @property
+    def closed(self) -> bool:
+        """True once the session was ended (lock, sign-out or account change); never reused."""
+        return self._closed
 
     def close(self):
         with self._auth_lock:
@@ -288,12 +311,13 @@ class ToniesAPI:
         with self._locks_lock:
             return self._target_locks.setdefault(ids, RLock())
 
-    def _readback(self, ids, expected, *, processing_ids):
+    def _readback(self, ids, expected, *, processing_ids, with_snapshot=False):
         deadline = time.monotonic() + self._poll_timeout
         for _ in range(40):
             target, config = self._snapshot(ids)
             if _matches_chapters(target["chapters"], expected, processing_ids):
-                return _content(target, config)
+                content = _content(target, config)
+                return (content, copy.deepcopy(target["chapters"])) if with_snapshot else content
             if time.monotonic() >= deadline:
                 break
             time.sleep(min(self._poll_interval, max(0, deadline - time.monotonic())))
@@ -334,6 +358,8 @@ class ToniesAPI:
         Returns ``{"content": ..., "results": [{"error": str | None, "chapter_id": str | None}]}``
         with one result per op. Ops that fail validation are skipped; if the write itself
         fails or can't be confirmed, this raises and no op may be assumed applied.
+        ``UnconfirmedWriteError`` retains validated attachment IDs and the historical
+        PATCH receipt, never confirmed ``content``. Refresh instead of retrying.
         """
         ids = parse_target_url(target_url)
         with self._target_lock(ids):
@@ -350,10 +376,43 @@ class ToniesAPI:
             # The provider has no proven CAS/ETag contract; another device can still race this PATCH.
             saved = self._api("PATCH", f"/households/{ids[0]}/creativetonies/{ids[1]}", {"chapters": _writable(desired)})
             expected = desired
+            attachment_receipt = None
             if any(ATTACH_MARK in c for c in desired):
                 expected = self._confirm_attachments(saved, chapters, desired, processing_ids, results)
+                attachment_receipt = {"chapters": expected}
                 processing_ids |= {r["chapter_id"] for r in results if r["chapter_id"]}
-            return {"content": self._readback(ids, expected, processing_ids=processing_ids), "results": results}
+            try:
+                content, confirmed = cast(tuple[dict, list[dict]], self._readback(
+                    ids, expected, processing_ids=processing_ids, with_snapshot=True))
+            except RuntimeError:
+                raise UnconfirmedWriteError(results, attachment_receipt) from None
+            receipt = UndoReceipt(self, ids, _writable(confirmed), inverse_steps(chapters, ops, results))
+            return {"content": content, "results": results, "_undo": receipt}
+
+    def undo(self, target_url: str, receipt: UndoReceipt, indices: list[int]) -> dict:
+        """One guarded inverse PATCH; only the queue supplies the private receipt.
+
+        The caller consumes the capability before entering here, including on failure.
+        This is not atomic CAS: the provider exposes no proven version/ETag guard.
+        """
+        ids = parse_target_url(target_url)
+        if not isinstance(receipt, UndoReceipt) or receipt.owner is not self or receipt.target != ids:
+            raise RuntimeError("Undo account session changed; refresh the library")
+        with self._target_lock(ids):
+            before, config = self._snapshot(ids)
+            if _writable(before["chapters"]) != receipt.expected:
+                raise RuntimeError("Undo inventory changed; refresh the library")
+            steps = [receipt.steps[index] for index in reversed(indices) if receipt.steps[index] is not None]
+            if not steps or len(steps) != len(indices):
+                raise RuntimeError("Undo is not available for this action")
+            desired = apply_inverse(before["chapters"], cast(list[dict], steps))
+            if _writable(desired) == _writable(before["chapters"]):
+                return _content(before, config)
+            self._api("PATCH", f"/households/{ids[0]}/creativetonies/{ids[1]}", {"chapters": _writable(desired)})
+            try:
+                return cast(dict, self._readback(ids, desired, processing_ids=set()))
+            except RuntimeError:
+                raise UnconfirmedWriteError([], None) from None
 
     @staticmethod
     def _confirm_attachments(saved, before, desired, processing_ids, results):

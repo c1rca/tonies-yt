@@ -5,12 +5,25 @@ All notable changes to Tonies-YT. Versions follow [Semantic Versioning](https://
 ## [Unreleased]
 
 ### Added
+- One-level per-Tonie server-owned Undo for guarded Rename/Move/new-upload inverses, with expiry, account reset invalidation and a five-second pre-commit cancellation window for removals. No pretend recovery after committed deletion/Clear all; uncertain inverses are never replayed.
+- Selected-Tonie-first Audio Workspace: desktop Tonie rail with adjacent Tracks and Add audio panes; mobile Tracks / Add audio / Activity navigation and a sticky target/capacity header.
+- YouTube / Local source tabs preserve in-session searches and filters. Local multi-selection adds to the captured destination; native local preview remains mounted across all workspace views.
+- Visible per-track action menus, exact-ID inline rename with Enter/Escape and refresh-safe drafts, confirmed bulk removal, and a separate Clear all danger area.
+- Unified in-session Activity with per-target jobs/actions, retained dismissible errors, partial failures and distinct accepted/processing/refresh-needed states. Follow-up read failures do not re-enable duplicate accepted local uploads.
+- System-default light/dark appearance with a remembered manual choice, reduced-motion support and keyboard-accessible confirmation focus.
+- Local MP3 playback: separate Play / Pause row actions and one persistent browser-native player with seeking, volume and Close. Library refreshes and filtering keep playback intact; removing the current file or locking the app stops it. Media requests retain session protection and HTTP range support; downloads keep their attachment behavior.
 - **Action queue.** Deletes, moves, renames, delete-all and uploads queue per Tonie and are saved in batches: one read, one write and one confirming read for any number of changes. The list shows each change immediately; nothing waits for the previous change to finish.
 - Uploads send their audio up to three at a time, alongside edits and library reads, and are attached in the order they were queued at their chosen position (no follow-up reorder). A placeholder row marks where each upload will land.
 - `POST/GET /api/tonies-actions`, and `tonies_actions` events on `/api/events` with the resulting library.
 - `scripts/dev/fake_cloud_app.py`: run the app against a fake Tonies cloud with simulated latency.
 
 ### Changed
+- Docker now defaults to fixed nonroot UID/GID 10001, project-scoped named-volume state and loopback-only publication. Compose restricts privileges, makes code read-only, uses bounded disposable scratch/caches and enforces resource/log limits. Existing host binds require an explicit backed-up ownership migration; startup never falls back to root.
+- New app passwords require at least 12 characters; existing vaults remain usable. Vault files use private atomic storage, and session/request/media boundaries have explicit security policy and bounded resource handling.
+- Settings shows installed tool versions but no longer installs yt-dlp into the running app. Update by rebuilding/recreating the container (or update the native environment offline).
+- Every app page has a server-rendered footer from the central running app version; future version bumps do not require per-page edits.
+- Deno archives are version-pinned and SHA-256 checked; matching yt-dlp EJS solvers are installed during the build while runtime component downloads/plugins/config are disabled. Python web/parser dependencies are patched and build-only pip is removed from the runtime image.
+- Native Windows Python is not supported by the POSIX-hardened runtime; Windows installation instructions now use Docker Desktop Linux containers instead of a known-broken native command.
 - Changes refer to tracks by chapter ID with anchored positions, so a queued change still hits the right track after the list moved; one failing change no longer blocks the others in its batch.
 - Upload jobs no longer re-check free space with an extra read before queuing; the queue checks capacity for the whole batch.
 

@@ -2,6 +2,7 @@ import httpx
 import pytest
 
 from app import auth
+from app.config import settings
 
 from tonies_fake import Cloud
 
@@ -19,6 +20,8 @@ def cloud_api():
 def signed_in(request, monkeypatch):
     """Treat every request as signed in, except in tests marked real_auth."""
     auth.reset_for_tests()
+    monkeypatch.setattr(settings, "allowed_hosts", ("localhost", "127.0.0.1", "::1", "testserver", "tonies.local"))
+    monkeypatch.setattr(settings, "public_url", "")
     if request.node.get_closest_marker("real_auth"):
         yield
         return

@@ -18,13 +18,16 @@ _account_fingerprint: bytes | None = None
 
 
 def reset_upload_session() -> None:
-    """Invalidate tokens on vault lock/update; retained name is the app's reset hook."""
+    """Revoke tokens, Undo capabilities and unapplied work on account/vault reset."""
     global _api_client, _account_fingerprint
     with _client_lock:
-        if _api_client is not None:
-            _api_client.close()
-        _api_client = None
+        previous, _api_client = _api_client, None
         _account_fingerprint = None
+        try:
+            if previous is not None:
+                previous.close()
+        finally:
+            action_queue.reset()
 
 
 def _get_api_client(tonies_email_override=None, tonies_password_override=None) -> ToniesAPI:

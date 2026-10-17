@@ -21,15 +21,15 @@ Tonies-YT is a small web app for moving audio onto Creative Tonies. It talks to 
 - Rename, reorder and delete tracks
 - Delete all content **with confirmation**
 - Drag local files onto the selected Tonie
-- Desktop right-click menu: upload / upload to top / upload to bottom
-- Multiple local uploads processed one at a time
+- Visible row Actions menus and keyboard/touch alternatives; desktop right-click remains an optional shortcut
+- Up to three local transfers in parallel; attachments retain submitted order and the captured destination
 - Shows free/used minutes
 
 ### Settings
 - Change app password
 - Update Tonies account credentials
 - View installed tool versions
-- Update yt-dlp from the UI when available
+- Tool updates are managed outside the UI: rebuild/recreate the Docker image, or update the native Python environment and restart. The app does not install packages at runtime.
 
 ## Architecture
 ```mermaid
@@ -53,7 +53,7 @@ flowchart LR
 - **Writes (`apply`):** one read, a batch of edits planned by chapter ID, one PATCH of the full chapter list over REST, one read-back until it matches. Unknown outcomes are never retried.
 - **Uploads:** `prepare_upload` allocates a file ID and streams the file to the presigned S3 form (no bearer token); `apply` attaches it at the requested position and confirms it by its server-assigned ID.
 
-`app/actions.py` queues every library change per Tonie and applies them in batches; uploads transfer three at a time in parallel and attach in queue order. `app/tonies_batch.py` is the pure planner that turns a list of changes into one chapter list. The page (`web/index.html`) shows queued changes at once by layering them on the last server content, and settles on the `tonies_actions` events. See [Operations](OPERATIONS.md#action-queue-and-write-safety).
+`app/actions.py` queues every library change per Tonie and applies them in batches; uploads transfer three at a time in parallel and attach in queue order. `app/tonies_batch.py` is the pure planner that turns a list of changes into one chapter list. The page (`web/index.html`) shows queued changes at once by layering them on the last server content, and settles on the `tonies_actions` events. See [Operations](OPERATIONS.md#tonies-tokens-and-queued-writes).
 
 `app/auth.py` guards everything else: per-browser session cookies, sign-in throttling and cross-site write checks (see [Operations](OPERATIONS.md#app-sign-in-and-sessions)).
 
@@ -73,6 +73,12 @@ flowchart LR
 - `app/downloader.py`: YouTube search/download
 - `app/credentials.py`: encrypted local vault and app login
 - `app/config.py`: environment config
+- `app/request_security.py`: Host/origin parsing and trust policy
+- `app/media_files.py`: bounded imports, regular-file policy and restricted audio conversion
+- `app/vault_storage.py`: private atomic vault file storage
+- `app/youtube_source.py`: YouTube-only source normalization
+- `app/subprocess_runner.py`: bounded subprocess output, deadline and process cleanup
+- `app/web_pages.py`: shared server-rendered version footer using the running app version
 
 ### Frontend
 - `web/index.html`: main app UI
@@ -81,10 +87,13 @@ flowchart LR
 - `web/account.html`: settings page
 - `web/logs.html`: logs page
 - `web/assets/session.js`: sends the browser to sign-in when its session ends
+- `web/assets/workspace-*.js`: focused navigation, source, track, Activity and dialog behavior
+- `web/assets/local-preview.js`: one persistent authenticated local player
+- `web/assets/workspace.css`: responsive light/dark workspace styles
 
 ## Important data
 
-Stored under `DATA_DIR` (`./data` natively, `/app/data` in Compose):
+Stored under `DATA_DIR` (`./data` natively, `/app/data` in Compose's project-scoped named volume; old host binds need explicit migration):
 - `downloads/`: local audio library
 - `logs/`: application log (`toni-auto.log` with `.env.example`)
 - `jobs-state.json`: the latest 200 jobs. Jobs that were mid-flight at shutdown are marked failed on the next start.
@@ -107,6 +116,7 @@ Kept in memory only:
 ### Tonies library
 - `POST /api/tonies-actions`: queue changes (`delete`, `rename`, `move`, `clear`) for one Tonie
 - `GET /api/tonies-actions`: recent changes and their status
+- `POST /api/tonies-actions/{action_id}/undo`: reverse the server-owned latest submission, or cancel a pending removal before commitment; no client snapshot/body is required. Success returns `actions` plus optional confirmed `content`; refusal is `409` with `needs_refresh: true`. Committed deletions/Clear all have no recovery guarantee.
 - `POST /api/tonies-content`
 - `POST /api/tonies-content/delete`
 - `POST /api/tonies-content/delete-all`
@@ -117,6 +127,8 @@ The single-change endpoints below `tonies-content` predate the queue and still w
 
 ### Files
 - `GET /api/files`
+- `GET /api/files/{filename}`: authenticated download; `?inline=true` enables local preview with HTTP range support
+- `POST /api/files/upload`: bounded local audio import/conversion
 - `DELETE /api/files/{filename}`
 - `POST /api/upload-existing`
 
@@ -130,4 +142,4 @@ Every endpoint except health and the first four below needs a signed-in session.
 - `POST /api/setup/lock`
 - `POST /api/setup/change-password`
 - `POST /api/setup/update-tonies-credentials`
-- `POST /api/setup/update-yt-dlp`
+- `POST /api/setup/update-yt-dlp`: compatibility-only refusal; runtime installation is disabled and the UI offers no updater.
