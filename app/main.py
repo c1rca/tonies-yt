@@ -1,28 +1,31 @@
-from contextlib import asynccontextmanager
-
-from fastapi import FastAPI, File, HTTPException, Request, UploadFile
-from fastapi.responses import JSONResponse
-from fastapi.responses import FileResponse, PlainTextResponse, RedirectResponse, StreamingResponse
-from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
-import subprocess
 import json
 import logging
 import re
-from pathlib import Path
+import subprocess
 from collections import deque
+from contextlib import asynccontextmanager
+from pathlib import Path
+from typing import Optional
 
-from .jobs import create_job, get_job, list_jobs, start_worker, select_candidate_and_continue, create_upload_only_job, get_events_since, get_event_stats, get_queue_stats, cancel_job
-from .models import ChatRequest
-from .config import settings
-from .uploader import list_creative_tonies, get_tonies_content, delete_tonies_chapter, delete_all_tonies_content, reorder_tonies_chapter, rename_tonies_chapter, reset_upload_session
-from .logger import setup_logging
-from .credentials import setup_status, initialize_vault, login_unlock, lock_runtime, get_credentials, change_app_password, update_tonies_credentials, vault_configured
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
+
 from . import __version__, auth
+from .config import settings
+from .credentials import setup_status, initialize_vault, login_unlock, lock_runtime, get_credentials, change_app_password, update_tonies_credentials, vault_configured
 from .downloader import sanitize_filename, clear_search_cache
+from .jobs import create_job, get_job, list_jobs, start_worker, select_candidate_and_continue, create_upload_only_job, get_events_since, get_event_stats, get_queue_stats, cancel_job
+from .logger import setup_logging
+from .models import ChatRequest
+from .tonies_api import parse_target_url
+from .tonies_batch import clean_position
+from .uploader import action_queue, list_creative_tonies, get_tonies_content, delete_tonies_chapter, delete_all_tonies_content, reorder_tonies_chapter, rename_tonies_chapter, reset_upload_session
 
 setup_logging()
 logger = logging.getLogger(__name__)
+
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
@@ -63,11 +66,18 @@ class Health(BaseModel):
 class SelectionRequest(BaseModel):
     index: int
     target_url: str = None
+    position: Optional[dict] = None
 
 
 class UploadExistingRequest(BaseModel):
     filename: str
     target_url: str = None
+    position: Optional[dict] = None
+
+
+class ToniesActionsRequest(BaseModel):
+    target_url: str
+    actions: list[dict]
 
 
 class ToniesContentRequest(BaseModel):
@@ -359,8 +369,32 @@ def upload_existing(req: UploadExistingRequest):
     p = settings.data_dir / 'downloads' / req.filename
     if not p.is_file():
         raise HTTPException(status_code=404, detail='Library file not found')
-    job = create_upload_only_job(str(p), note=f'upload existing: {req.filename}', target_url=req.target_url)
+    try:
+        position = clean_position(req.position)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    job = create_upload_only_job(str(p), note=f'upload existing: {req.filename}', target_url=req.target_url,
+                                 position=position)
     return {'job_id': job.id, 'status': job.status}
+
+
+@app.post('/api/tonies-actions')
+def submit_tonies_actions(req: ToniesActionsRequest):
+    """Queue library edits for one Tonie. They are batched and applied in order; progress
+    and the resulting library arrive as `tonies_actions` events on /api/events."""
+    try:
+        parse_target_url(req.target_url)
+        if not 1 <= len(req.actions) <= 200:
+            raise ValueError("Send between 1 and 200 actions")
+        actions = action_queue.submit(req.target_url, req.actions)
+    except (ValueError, RuntimeError) as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return {'actions': [a.public() for a in actions]}
+
+
+@app.get('/api/tonies-actions')
+def list_tonies_actions(target_url: str = None):
+    return {'actions': action_queue.recent(target_url)}
 
 
 @app.post('/api/search-cache/clear')
@@ -471,7 +505,7 @@ def delete_file(filename: str):
 @app.post("/api/jobs/{job_id}/select")
 def select_candidate(job_id: str, req: SelectionRequest):
     try:
-        selected_job_id = select_candidate_and_continue(job_id, req.index, req.target_url)
+        selected_job_id = select_candidate_and_continue(job_id, req.index, req.target_url, clean_position(req.position))
         j = get_job(selected_job_id)
         return j.model_dump() if j else {"error": "not_found"}
     except Exception as e:

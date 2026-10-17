@@ -32,6 +32,9 @@ class JobState(BaseModel):
     target_url: Optional[str] = None
     logs: list[str] = []
     output_file: Optional[str] = None
+    target_position: Optional[dict] = None
+    tonies_action_id: Optional[str] = None
+    upload_positioned: bool = False
     uploaded_chapter_id: Optional[str] = None
     tonies_content: Optional[dict] = None
     error: Optional[str] = None

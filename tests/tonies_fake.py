@@ -28,6 +28,7 @@ class Cloud:
         self.apply_patch = True
         self.concurrent_change = False
         self.reads = 0
+        self.allocations = 0
 
     def snapshot(self):
         return {"data": {"config": {"maxSeconds": 5400, "maxChapters": 99, "maxBytes": 10000000, "accepts": ["audio/mpeg", "audio/wav"]}, "households": [{"id": HOUSEHOLD, "name": "Synthetic household", "creativeTonies": [{"id": TONIE, "name": "Blue", "imageUrl": "https://images.example.invalid/blue.png", "live": self.live, "transcoding": self.processing, "secondsRemaining": 5376, "chapters": copy.deepcopy(self.chapters)}]}]}}
@@ -59,16 +60,18 @@ class Cloud:
             return httpx.Response(200, json=self.snapshot())
         if request.url.path == "/v2/file":
             assert json.loads(request.content) == {"headers": {}}
-            return httpx.Response(200, json={"fileId": "staging", "request": {"url": "https://synthetic.s3.amazonaws.com/", "fields": {"key": "signed-key", "policy": "synthetic-policy", "x-amz-signature": "synthetic-signature"}}})
+            self.allocations += 1
+            file_id = "staging" if self.allocations == 1 else f"staging-{self.allocations}"
+            return httpx.Response(200, json={"fileId": file_id, "request": {"url": "https://synthetic.s3.amazonaws.com/", "fields": {"key": "signed-key", "policy": "synthetic-policy", "x-amz-signature": "synthetic-signature"}}})
         assert request.method == "PATCH"
         assert request.url.path == f"/v2/households/{HOUSEHOLD}/creativetonies/{TONIE}"
         payload = json.loads(request.content)
         self.patches.append(payload)
         result = copy.deepcopy(payload["chapters"])
         for item in result:
-            if item["id"] == "staging":
-                item["id"] = "permanent"
-                item["file"] = "transcoded-reference"
+            if item["id"].startswith("staging"):
+                item["id"] = item["id"].replace("staging", "permanent", 1)
+                item["file"] = "transcoded-reference" + item["id"][len("permanent"):]
                 item["transcoding"] = True
         if self.apply_patch:
             self.chapters = copy.deepcopy(result)

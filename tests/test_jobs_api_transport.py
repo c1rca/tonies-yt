@@ -1,101 +1,116 @@
-from pathlib import Path
-from unittest.mock import Mock
+"""Upload jobs run through the Tonies action queue."""
+import threading
+import time
 
 import pytest
 
 from app import jobs
+from app.actions import ActionQueue
 
 
-def run_one_upload(monkeypatch, item):
-    queue = Mock()
-    queue.get.side_effect = [item, StopIteration]
-    monkeypatch.setattr(jobs, '_upload_q', queue)
-    # Protect the old implementation from ever spawning a real cloud worker.
-    if hasattr(jobs, '_upload_once_with_timeout'):
-        monkeypatch.setattr(jobs, '_upload_once_with_timeout', Mock(return_value=None))
-    with pytest.raises(StopIteration):
-        jobs.upload_worker_loop()
-    queue.task_done.assert_called_once()
+class FakeTonies:
+    """Stands in for ToniesAPI: records transfers and batches, returns a growing chapter list."""
+
+    def __init__(self):
+        self.chapters, self.transfers, self.batches = [], [], []
+        self.fail_apply = None
+        self.drop_chapter = False
+        self.gate = threading.Event()
+        self.gate.set()
+
+    def prepare_upload(self, path, target_url):
+        assert self.gate.wait(5)
+        self.transfers.append(path.name)
+        return {"file_id": f"file-{path.stem}", "seconds": 1.0, "live": False}
+
+    def apply(self, target_url, ops):
+        self.batches.append(ops)
+        if self.fail_apply:
+            raise RuntimeError(self.fail_apply)
+        results = []
+        for op in ops:
+            chapter_id = f"chapter-{op['file_id']}"
+            if not self.drop_chapter:
+                self.chapters.append({"chapter_id": chapter_id, "title": op["title"]})
+            results.append({"error": None, "chapter_id": chapter_id})
+        return {"content": {"chapters": list(self.chapters), "processing": True}, "results": results}
 
 
-def make_upload(tmp_path):
-    path = tmp_path / 'track.mp3'
-    path.write_bytes(b'synthetic-audio')
-    state = jobs.create_job('synthetic direct upload')
-    jobs._update(state.id, status='waiting_upload')
-    return state, {'job_id': state.id, 'mp3_path': str(path), 'target': None, 'target_url': 'synthetic-target'}
+@pytest.fixture
+def cloud(monkeypatch):
+    fake = FakeTonies()
+    monkeypatch.setattr(jobs, "action_queue", ActionQueue(lambda: fake, batch_window=0.05))
+    monkeypatch.setattr(jobs, "resolve_upload_target", lambda target, url: url or "synthetic-target")
+    monkeypatch.setattr(jobs, "upload_title", lambda path: f"{path.stem} [oc:abc123]")
+    return fake
 
 
-def test_direct_upload_uses_one_call_and_publishes_authoritative_result(monkeypatch, tmp_path):
-    state, item = make_upload(tmp_path)
-    content = {'chapters': [{'chapter_id': 'server-assigned', 'title': 'Synthetic'}], 'processing': True}
-    upload = Mock(return_value={'chapter_id': 'server-assigned', 'target_url': 'synthetic-target', 'content': content})
-    monkeypatch.setattr(jobs, 'upload_to_tonies', upload)
-    run_one_upload(monkeypatch, item)
-    upload.assert_called_once()
-    result = jobs.get_job(state.id)
-    assert result.status == 'done'
-    assert result.uploaded_chapter_id == 'server-assigned'
-    assert result.tonies_content == content
-    assert result.target_url == 'synthetic-target'
+def upload_job(tmp_path, name="track", position=None):
+    path = tmp_path / f"{name}.mp3"
+    path.write_bytes(b"synthetic-audio")
+    state = jobs.create_job(f"synthetic {name}")
+    jobs._enqueue_upload(state.id, path, target=None, target_url="synthetic-target", position=position)
+    return state.id
 
 
-def test_unconfirmed_upload_is_not_retried_with_original_file(monkeypatch, tmp_path):
-    state, item = make_upload(tmp_path)
-    item['fallback_path'] = item['mp3_path']
-    upload = Mock(side_effect=RuntimeError('Upload delivery could not be confirmed; refresh before retry'))
-    monkeypatch.setattr(jobs, 'upload_to_tonies', upload)
-    run_one_upload(monkeypatch, item)
-    upload.assert_called_once()
-    assert jobs.get_job(state.id).status == 'failed'
-    assert 'could not be confirmed' in jobs.get_job(state.id).error
+def wait_for(job_id, statuses=("done", "failed"), timeout=5):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        job = jobs.get_job(job_id)
+        if job.status in statuses:
+            return job
+        time.sleep(0.01)
+    raise AssertionError(f"job stayed {jobs.get_job(job_id).status}")
 
 
-def test_missing_upload_receipt_cannot_mark_job_done(monkeypatch, tmp_path):
-    state, item = make_upload(tmp_path)
-    monkeypatch.setattr(jobs, 'upload_to_tonies', Mock(return_value=None))
-    run_one_upload(monkeypatch, item)
-    assert jobs.get_job(state.id).status == 'failed'
-    assert 'confirmed' in jobs.get_job(state.id).error.lower()
+def test_upload_job_finishes_with_the_confirmed_chapter_and_position(cloud, tmp_path):
+    job = wait_for(upload_job(tmp_path, position={"edge": "start"}))
+    assert job.status == "done"
+    assert job.uploaded_chapter_id == "chapter-file-track"
+    assert job.tonies_content["chapters"] == [{"chapter_id": "chapter-file-track", "title": "track [oc:abc123]"}]
+    assert job.upload_positioned is True
+    assert cloud.batches[0][0]["position"] == {"edge": "start"}
+    assert any("Sending audio to Tonies" in line for line in job.logs)
 
 
-def test_receipt_must_contain_the_exact_uploaded_chapter(monkeypatch, tmp_path):
-    state, item = make_upload(tmp_path)
-    monkeypatch.setattr(jobs, 'upload_to_tonies', Mock(return_value={'chapter_id': 'expected', 'content': {'chapters': [{'chapter_id': 'other'}]}}))
-    run_one_upload(monkeypatch, item)
-    assert jobs.get_job(state.id).status == 'failed'
+def test_an_unconfirmed_write_fails_the_job_and_is_not_retried(cloud, tmp_path):
+    cloud.fail_apply = "Saved Tonies content was not confirmed; refresh before another action"
+    job = wait_for(upload_job(tmp_path))
+    assert job.status == "failed" and "not confirmed" in job.error
+    assert len(cloud.transfers) == 1 and len(cloud.batches) == 1
 
 
-def test_cancelled_upload_does_not_reach_cloud(monkeypatch, tmp_path):
-    state, item = make_upload(tmp_path)
-    jobs.cancel_job(state.id)
-    upload = Mock()
-    monkeypatch.setattr(jobs, 'upload_to_tonies', upload)
-    run_one_upload(monkeypatch, item)
-    upload.assert_not_called()
-    assert jobs.get_job(state.id).status == 'failed'
+def test_a_receipt_without_the_uploaded_chapter_cannot_mark_the_job_done(cloud, tmp_path):
+    cloud.drop_chapter = True
+    job = wait_for(upload_job(tmp_path))
+    assert job.status == "failed" and "confirmed" in job.error
 
 
-def test_queue_does_not_copy_credentials(monkeypatch, tmp_path):
-    state, item = make_upload(tmp_path)
-    monkeypatch.setattr(jobs, 'get_credentials', Mock(side_effect=AssertionError('Do not capture stale credentials in queue'))) if hasattr(jobs, 'get_credentials') else None
-    queue = Mock()
-    monkeypatch.setattr(jobs, '_upload_q', queue)
-    jobs._enqueue_upload(state.id, Path(item['mp3_path']), target=None, target_url='synthetic-target')
-    payload = queue.put.call_args.args[0]
-    assert 'tonies_email' not in payload
-    assert 'tonies_password' not in payload
-    assert 'fallback_path' not in payload
+def test_cancelling_before_the_audio_is_sent_never_reaches_tonies(cloud, tmp_path):
+    cloud.gate.clear()  # hold the transfer slots
+    blockers = [upload_job(tmp_path, f"blocker{i}") for i in range(3)]
+    job_id = upload_job(tmp_path, "queued")
+    jobs.cancel_job(job_id)
+    cloud.gate.set()
+    for blocker in blockers:
+        wait_for(blocker)
+    assert jobs.get_job(job_id).status == "failed"
+    assert "queued.mp3" not in cloud.transfers
+    assert all(op["file_id"] != "file-queued" for batch in cloud.batches for op in batch)
 
 
-def test_capacity_uses_exact_seconds_not_rounded_display_minutes(monkeypatch):
-    monkeypatch.setattr(jobs, 'get_tonies_content', lambda _: {'free_seconds': 61.5, 'free_minutes': 1})
-    jobs._ensure_tonies_capacity('synthetic-target', 61.2)
-    with pytest.raises(RuntimeError, match='Not enough free'):
-        jobs._ensure_tonies_capacity('synthetic-target', 63)
+def test_many_uploads_transfer_in_parallel_and_attach_in_queued_order(cloud, tmp_path):
+    cloud.gate.clear()
+    ids = [upload_job(tmp_path, f"song{i}") for i in range(6)]
+    cloud.gate.set()
+    for job_id in ids:
+        assert wait_for(job_id).status == "done"
+    attached = [op["file_id"] for batch in cloud.batches for op in batch]
+    assert attached == [f"file-song{i}" for i in range(6)]
+    assert len(cloud.batches) < 6  # several uploads shared a write
 
 
-def test_unknown_capacity_fails_closed(monkeypatch):
-    monkeypatch.setattr(jobs, 'get_tonies_content', lambda _: {'free_minutes': None})
-    with pytest.raises(RuntimeError, match='capacity|space|free'):
-        jobs._ensure_tonies_capacity('synthetic-target', 10)
+def test_upload_queue_does_not_hold_credentials(cloud, tmp_path):
+    job = wait_for(upload_job(tmp_path))
+    action = jobs.action_queue.get(job.tonies_action_id)
+    assert not {"tonies_email", "tonies_password", "email", "password"} & set(action.params)

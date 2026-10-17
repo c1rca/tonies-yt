@@ -122,12 +122,19 @@ def test_delete_cloud_id_can_follow_index_shift_but_not_conflicting_token(cloud_
     assert [c["id"] for c in cloud.chapters] == ["one"]
 
 
-def test_fresh_prewrite_guard_stops_concurrent_change(cloud_api):
+def test_write_is_built_from_the_read_taken_immediately_before_it(cloud_api):
     cloud, api = cloud_api
-    cloud.concurrent_change = True
-    with pytest.raises(RuntimeError, match="changed"):
+    api.rename(URL, 0, "New", "one")
+    sequence = [(r.method, r.url.path) for r in cloud.calls if r.url.host == "api.prod.tcs.toys"]
+    assert sequence == [("POST", "/v2/graphql"), ("PATCH", f"/v2/households/{HOUSEHOLD}/creativetonies/{TONIE}"),
+                        ("POST", "/v2/graphql")]
+
+
+def test_a_change_from_another_device_after_the_write_is_reported_not_confirmed(cloud_api):
+    cloud, api = cloud_api
+    cloud.concurrent_change = True  # another device adds a chapter right after our write
+    with pytest.raises(RuntimeError, match="not confirmed"):
         api.rename(URL, 0, "New", "one")
-    assert not cloud.patches
     assert [c["id"] for c in cloud.chapters] == ["one", "two", "foreign"]
 
 
@@ -496,9 +503,10 @@ def test_processing_readback_requires_original_chapter_eligibility(
 
 @pytest.mark.parametrize("operation", ["reorder", "upload"])
 @pytest.mark.parametrize("field,value", [("file", "finished-before-patch"), ("seconds", 12.05)])
-def test_processing_transition_before_write_still_refuses_stale_snapshot(
+def test_processing_transition_around_the_write_is_never_reverted(
     cloud_api, tmp_path, monkeypatch, operation, field, value
 ):
+    """Tonies finishing a chapter's processing just before or after our write must survive it."""
     from app import tonies_api
     cloud, api = cloud_api
     cloud.chapters[0]["transcoding"] = True
@@ -506,8 +514,9 @@ def test_processing_transition_before_write_still_refuses_stale_snapshot(
 
     def handler(request):
         if request.url.path == "/v2/graphql" and cloud.reads == 1:
-            cloud.chapters[0][field] = value
-            cloud.chapters[0]["transcoding"] = False
+            processed = next(c for c in cloud.chapters if c["id"] == "one")
+            processed[field] = value
+            processed["transcoding"] = False
         return original(request)
 
     api._client.close()
@@ -515,9 +524,99 @@ def test_processing_transition_before_write_still_refuses_stale_snapshot(
     monkeypatch.setattr(tonies_api, "_audio_seconds", lambda _: 1)
     path = tmp_path / "clip.mp3"
     path.write_bytes(b"synthetic")
-    with pytest.raises(RuntimeError, match="changed before saving"):
-        if operation == "upload":
-            api.upload(path, URL, "New")
-        else:
-            api.reorder(URL, 0, 1, chapter_id="one")
-    assert not cloud.patches
+    if operation == "upload":
+        api.upload(path, URL, "New")
+    else:
+        api.reorder(URL, 0, 1, chapter_id="one")
+    assert len(cloud.patches) == 1
+    assert next(c for c in cloud.chapters if c["id"] == "one")[field] == value
+
+
+def test_a_batch_of_edits_costs_one_read_one_write_and_one_readback(cloud_api):
+    cloud, api = cloud_api
+    cloud.chapters.append(chapter("three", "Third"))
+    outcome = api.apply(URL, [
+        {"type": "delete", "chapter_id": "one"},
+        {"type": "rename", "chapter_id": "three", "title": "Renamed"},
+        {"type": "move", "chapter_id": "three", "position": {"edge": "start"}},
+        {"type": "delete", "chapter_id": "missing"},
+    ])
+    assert [c["id"] for c in cloud.chapters] == ["three", "two"]
+    assert cloud.chapters[0]["title"] == "Renamed"
+    assert len(cloud.patches) == 1 and cloud.reads == 2
+    assert [r["error"] is None for r in outcome["results"]] == [True, True, True, False]
+    assert [c["chapter_id"] for c in outcome["content"]["chapters"]] == ["three", "two"]
+
+
+def test_a_batch_with_nothing_valid_does_not_write(cloud_api):
+    cloud, api = cloud_api
+    outcome = api.apply(URL, [{"type": "delete", "chapter_id": "missing"}])
+    assert not cloud.patches and outcome["results"][0]["error"]
+
+
+def test_parallel_transfers_attach_in_one_write_with_their_own_ids(cloud_api, tmp_path, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from app import tonies_api
+    cloud, api = cloud_api
+    monkeypatch.setattr(tonies_api, "_audio_seconds", lambda _: 3)
+    paths = []
+    for name in ("a", "b", "c"):
+        paths.append(tmp_path / f"{name}.mp3")
+        paths[-1].write_bytes(b"synthetic")
+    with ThreadPoolExecutor(3) as pool:
+        prepared = list(pool.map(lambda p: api.prepare_upload(p, URL), paths))
+    assert len({p["file_id"] for p in prepared}) == 3 and len(cloud.storage) == 3
+    ops = [{"type": "attach", "file_id": p["file_id"], "title": f"Song {i} [oc:00000{i}]", "seconds": 3,
+            "position": position}
+           for i, (p, position) in enumerate(zip(prepared, [{"edge": "start"}, {"edge": "end"}, {"before": "two"}]))]
+    outcome = api.apply(URL, ops)
+    assert len(cloud.patches) == 1
+    titles = [c["title"] for c in cloud.chapters]
+    assert titles == ["Song 0 [oc:000000]", "Same", "Song 2 [oc:000002]", "Same", "Song 1 [oc:000001]"]
+    new_ids = [r["chapter_id"] for r in outcome["results"]]
+    assert all(i and i.startswith("permanent") for i in new_ids) and len(set(new_ids)) == 3
+    by_id = {c["chapter_id"]: c["title"] for c in outcome["content"]["chapters"]}
+    assert [by_id[i] for i in new_ids] == [op["title"] for op in ops]
+
+
+def test_attachments_and_edits_share_one_write(cloud_api, tmp_path, monkeypatch):
+    from app import tonies_api
+    cloud, api = cloud_api
+    monkeypatch.setattr(tonies_api, "_audio_seconds", lambda _: 3)
+    path = tmp_path / "a.mp3"
+    path.write_bytes(b"synthetic")
+    prepared = api.prepare_upload(path, URL)
+    outcome = api.apply(URL, [
+        {"type": "delete", "chapter_id": "one"},
+        {"type": "attach", "file_id": prepared["file_id"], "title": "New [oc:abcdef]", "seconds": 3,
+         "position": {"edge": "start"}},
+    ])
+    assert len(cloud.patches) == 1
+    assert [c["id"] for c in cloud.chapters] == ["permanent", "two"]
+    assert outcome["results"][1]["chapter_id"] == "permanent"
+
+
+def test_reads_are_not_blocked_by_a_slow_storage_transfer(cloud_api, tmp_path, monkeypatch):
+    import threading
+    from app import tonies_api
+    cloud, api = cloud_api
+    monkeypatch.setattr(tonies_api, "_audio_seconds", lambda _: 3)
+    path = tmp_path / "a.mp3"
+    path.write_bytes(b"synthetic")
+    release, in_transfer = threading.Event(), threading.Event()
+    original = cloud.__call__
+
+    def handler(request):
+        if request.url.host == "synthetic.s3.amazonaws.com":
+            in_transfer.set()
+            assert release.wait(5)
+        return original(request)
+
+    api._client.close()
+    api._client = httpx.Client(transport=httpx.MockTransport(handler))
+    transfer = threading.Thread(target=api.prepare_upload, args=(path, URL))
+    transfer.start()
+    assert in_transfer.wait(5)
+    assert len(api.get_content(URL)["chapters"]) == 2  # answered while the transfer is still running
+    release.set()
+    transfer.join(5)

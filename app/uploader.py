@@ -9,6 +9,7 @@ from uuid import uuid4
 
 from .config import settings
 from .credentials import get_credentials
+from .actions import ActionQueue
 from .tonies_api import ToniesAPI, parse_target_url, renamed_title
 
 _client_lock = RLock()
@@ -70,16 +71,27 @@ def _resolve_target(api: ToniesAPI, target_character_name: str | None, target_ur
     return matches[0]["edit_url"]
 
 
+def upload_title(path: Path) -> str:
+    """Chapter title for an upload: the file name plus a hidden token that keeps it unique."""
+    path = Path(path)
+    title = renamed_title(path.stem, path.stem)
+    return title if " [oc:" in title else f"{title} [oc:{uuid4().hex[:6]}]"
+
+
+def resolve_upload_target(target_character_name: str | None = None, target_url: str | None = None) -> str:
+    return _resolve_target(_get_api_client(), target_character_name, target_url)
+
+
 def upload_to_tonies(mp3_path: Path, target_character_name: str | None = None, target_url: str | None = None,
                      tonies_email_override: str | None = None, tonies_password_override: str | None = None) -> dict:
-    """Upload one file and return the authoritative receipt (chapter id, target, confirmed content)."""
+    """Upload one file directly (outside the queue) and return the confirmed receipt."""
     api = _get_api_client(tonies_email_override, tonies_password_override)
     resolved = _resolve_target(api, target_character_name, target_url)
-    path = Path(mp3_path)
-    title = renamed_title(path.stem, path.stem)
-    if " [oc:" not in title:
-        title = f"{title} [oc:{uuid4().hex[:6]}]"
-    return api.upload(path, resolved, title)
+    return api.upload(Path(mp3_path), resolved, upload_title(mp3_path))
+
+
+# Every library change from the app goes through this queue (see app/actions.py).
+action_queue = ActionQueue(lambda: _get_api_client())
 
 
 def rename_tonies_chapter(target_url: str, index: int, title: str, chapter_id: str | None = None) -> dict:

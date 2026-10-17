@@ -12,6 +12,9 @@ from urllib.parse import urlsplit
 
 import httpx
 
+from . import tonies_batch
+from .tonies_batch import ATTACH_MARK, OpError, apply_ops
+
 API_BASE = "https://api.prod.tcs.toys/v2"
 TOKEN_URL = "https://login.tonies.com/auth/realms/tonies/protocol/openid-connect/token"
 _UUID = r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
@@ -62,11 +65,10 @@ def _processing(value) -> bool:
 
 
 def renamed_title(current: str, requested: str) -> str:
-    title = _TRACK.sub("", requested.strip()).strip()
-    if not title:
-        raise RuntimeError("Title cannot be empty")
-    token = _TRACK.search(current)
-    return f"{title} [oc:{token.group(1).lower()}]" if token else title
+    try:
+        return tonies_batch.renamed_title(current, requested)
+    except OpError as error:
+        raise RuntimeError(str(error)) from None
 
 
 def _audio_seconds(path: Path) -> float:
@@ -161,33 +163,34 @@ class ToniesAPI:
         self._access_token = self._refresh_token = ""
         self._expires_at = 0.0
         self._auth_lock = RLock()
-        self._request_lock = RLock()
         self._locks_lock = Lock()
         self._target_locks: dict[tuple[str, str], RLock] = {}
         self._closed = False
         self._poll_timeout, self._poll_interval = poll_timeout, poll_interval
 
     def close(self):
-        with self._auth_lock, self._request_lock:
+        with self._auth_lock:
             self._closed = True
             self._access_token = self._refresh_token = self._email = self._password = ""
             self._expires_at = 0
             self._client.close()
 
     def _request(self, method, url, *, storage=False, **kwargs):
-        with self._request_lock:
+        # httpx.Client is thread-safe: reads, storage transfers and writes run concurrently.
+        if self._closed:
+            raise RuntimeError("Tonies account session was reset; retry with current credentials")
+        try:
+            request = self._client.build_request(method, url, timeout=_TIMEOUT, **kwargs)
+            # No client defaults/cookies/auth may leak into the signed storage POST.
+            if storage:
+                for header in ("authorization", "cookie"):
+                    request.headers.pop(header, None)
+            return self._client.send(request, auth=None, follow_redirects=False)
+        except (httpx.HTTPError, RuntimeError):
             if self._closed:
-                raise RuntimeError("Tonies account session was reset; retry with current credentials")
-            try:
-                request = self._client.build_request(method, url, timeout=_TIMEOUT, **kwargs)
-                # No client defaults/cookies/auth may leak into the signed storage POST.
-                if storage:
-                    for header in ("authorization", "cookie"):
-                        request.headers.pop(header, None)
-                return self._client.send(request, auth=None, follow_redirects=False)
-            except httpx.HTTPError:
-                suffix = "; write outcome unconfirmed; refresh before another action" if method == "PATCH" else ""
-                raise RuntimeError(f"Tonies HTTP transport failed{suffix}") from None
+                raise RuntimeError("Tonies account session was reset; retry with current credentials") from None
+            suffix = "; write outcome unconfirmed; refresh before another action" if method == "PATCH" else ""
+            raise RuntimeError(f"Tonies HTTP transport failed{suffix}") from None
 
     @staticmethod
     def _json(response, operation):
@@ -285,18 +288,7 @@ class ToniesAPI:
         with self._locks_lock:
             return self._target_locks.setdefault(ids, RLock())
 
-    def _commit(self, ids, before, desired):
-        fresh, _ = self._snapshot(ids)
-        if _writable(fresh["chapters"]) != _writable(before["chapters"]) or fresh.get("live") != before.get("live"):
-            raise RuntimeError("Tonies content changed before saving; refresh and try again")
-        # The provider has no proven CAS/ETag contract. Another device can still race this PATCH.
-        return self._api("PATCH", f"/households/{ids[0]}/creativetonies/{ids[1]}", {"chapters": _writable(desired)})
-
-    def _readback(self, ids, expected, *, new_id=None, processing_ids=None):
-        if processing_ids is None:
-            processing_ids = {c["id"] for c in expected if _processing(c.get("transcoding"))}
-        if new_id:
-            processing_ids = processing_ids | {new_id}
+    def _readback(self, ids, expected, *, processing_ids):
         deadline = time.monotonic() + self._poll_timeout
         for _ in range(40):
             target, config = self._snapshot(ids)
@@ -307,120 +299,151 @@ class ToniesAPI:
             time.sleep(min(self._poll_interval, max(0, deadline - time.monotonic())))
         raise RuntimeError("Saved Tonies content was not confirmed; refresh before another action")
 
-    @staticmethod
-    def _index(chapters, index, chapter_id=None):
-        if not isinstance(index, int) or index < 0 or index >= len(chapters):
-            raise RuntimeError("Invalid chapter index; refresh stale content")
-        if chapter_id and chapters[index]["id"] != chapter_id:
-            raise RuntimeError("Chapter identity is stale; refresh before editing")
-        return index
+    def prepare_upload(self, path: Path, target_url: str) -> dict:
+        """Send one audio file to Tonies storage. It is not on the Tonie until ``apply`` attaches it.
 
-    def rename(self, target_url, index, title, chapter_id=None):
-        ids = parse_target_url(target_url)
-        with self._target_lock(ids):
-            before, _ = self._snapshot(ids)
-            index = self._index(before["chapters"], index, chapter_id)
-            desired = copy.deepcopy(before["chapters"])
-            desired[index]["title"] = renamed_title(desired[index]["title"], title)
-            self._commit(ids, before, desired)
-            return self._readback(ids, desired)
-
-    def reorder(self, target_url, from_index, to_index, chapter_id=None):
-        ids = parse_target_url(target_url)
-        with self._target_lock(ids):
-            before, config = self._snapshot(ids)
-            self._index(before["chapters"], from_index, chapter_id)
-            self._index(before["chapters"], to_index)
-            if from_index == to_index:
-                return _content(before, config)
-            desired = copy.deepcopy(before["chapters"])
-            desired.insert(to_index, desired.pop(from_index))
-            self._commit(ids, before, desired)
-            return self._readback(ids, desired)
-
-    def delete(self, target_url, index, chapter_title=None, chapter_id=None, chapter_fingerprint=None,
-               app_track_token=None):
-        ids = parse_target_url(target_url)
-        with self._target_lock(ids):
-            before, config = self._snapshot(ids)
-            chapters = before["chapters"]
-            if chapter_id:
-                matches = [i for i, c in enumerate(chapters) if c["id"] == chapter_id]
-                if len(matches) != 1:
-                    raise RuntimeError("Chapter identity does not match; refresh stale content")
-                index = matches[0]
-            else:
-                self._index(chapters, index)
-            selected = chapters[index]
-            token = _TRACK.search(selected["title"])
-            if app_track_token and (not token or token.group(1).lower() != app_track_token.lower()):
-                raise RuntimeError("Chapter token does not match")
-            if chapter_title and chapter_title not in (selected["title"], _TRACK.sub("", selected["title"]).strip()):
-                raise RuntimeError("Chapter title does not match")
-            if chapter_fingerprint:
-                selected_content = _content(before, config)["chapters"][index]
-                if chapter_fingerprint != f'{selected["title"]}|{selected_content["duration"]}':
-                    raise RuntimeError("Chapter fingerprint does not match")
-            if not chapter_id and not app_track_token and chapter_title:
-                matches = [c for c in chapters if chapter_title in (c["title"], _TRACK.sub("", c["title"]).strip())]
-                if len(matches) != 1:
-                    raise RuntimeError("Chapter title is ambiguous; select by chapter ID")
-            if not chapter_id and app_track_token:
-                matches = [c for c in chapters if (match := _TRACK.search(c["title"])) and match.group(1).lower() == app_track_token.lower()]
-                if len(matches) != 1:
-                    raise RuntimeError("Chapter token is ambiguous")
-            desired = copy.deepcopy(chapters)
-            desired.pop(index)
-            self._commit(ids, before, desired)
-            return self._readback(ids, desired)
-
-    def delete_all(self, target_url):
-        ids = parse_target_url(target_url)
-        with self._target_lock(ids):
-            before, _ = self._snapshot(ids)
-            self._commit(ids, before, [])
-            return self._readback(ids, [])
-
-    def upload(self, path: Path, target_url: str, title: str):
+        Safe to run in parallel with other transfers and with ``apply`` on the same Tonie.
+        """
         ids = parse_target_url(target_url)
         path = Path(path)
         if not path.is_file() or path.stat().st_size <= 0:
             raise RuntimeError("Audio file is missing or empty")
         seconds = _audio_seconds(path)
+        target, config = self._snapshot(ids)
+        if seconds > _number(target["secondsRemaining"], "remaining capacity"):
+            raise RuntimeError("Not enough free Tonies capacity")
+        if len(target["chapters"]) >= _number(config.get("maxChapters"), "chapter limit"):
+            raise RuntimeError("Tonies chapter limit reached")
+        if path.stat().st_size > _number(config.get("maxBytes"), "file size limit"):
+            raise RuntimeError("Audio exceeds the Tonies file size limit")
+        allocation = self._api("POST", "/file", {"headers": {}})
+        identity, storage_url, fields = _signed_storage_request(allocation, target["chapters"])
+        mime = "audio/wav" if path.suffix.lower() == ".wav" else "audio/mpeg"
+        try:
+            with path.open("rb") as audio:
+                response = self._request("POST", storage_url, storage=True, data=fields, files={"file": (identity, audio, mime)})
+        except OSError:
+            raise RuntimeError("Could not read the audio file") from None
+        if not 200 <= response.status_code < 300:
+            raise RuntimeError(f"Tonies storage upload failed (HTTP {response.status_code})")
+        return {"file_id": identity, "seconds": seconds, "live": bool(target.get("live"))}
+
+    def apply(self, target_url: str, ops: list[dict]) -> dict:
+        """Apply a batch of edits with one read, one write and one confirming read-back.
+
+        Returns ``{"content": ..., "results": [{"error": str | None, "chapter_id": str | None}]}``
+        with one result per op. Ops that fail validation are skipped; if the write itself
+        fails or can't be confirmed, this raises and no op may be assumed applied.
+        """
+        ids = parse_target_url(target_url)
         with self._target_lock(ids):
             before, config = self._snapshot(ids)
-            if seconds > _number(before["secondsRemaining"], "remaining capacity"):
-                raise RuntimeError("Not enough free Tonies capacity")
-            if len(before["chapters"]) >= _number(config.get("maxChapters"), "chapter limit"):
-                raise RuntimeError("Tonies chapter limit reached")
-            if path.stat().st_size > _number(config.get("maxBytes"), "file size limit"):
-                raise RuntimeError("Audio exceeds the Tonies file size limit")
-            allocation = self._api("POST", "/file", {"headers": {}})
-            identity, storage_url, fields = _signed_storage_request(allocation, before["chapters"])
-            mime = "audio/wav" if path.suffix.lower() == ".wav" else "audio/mpeg"
-            try:
-                with path.open("rb") as audio:
-                    response = self._request("POST", storage_url, storage=True, data=fields, files={"file": (identity, audio, mime)})
-            except OSError:
-                raise RuntimeError("Could not read the audio file") from None
-            if not 200 <= response.status_code < 300:
-                raise RuntimeError(f"Tonies storage upload failed (HTTP {response.status_code})")
-            new = {"id": identity, "file": identity, "title": title, "seconds": seconds, "type": "file"}
-            desired = copy.deepcopy(before["chapters"])
-            position = 0 if before.get("live") else len(desired)
-            desired.insert(position, new)
-            attached = self._commit(ids, before, desired)
-            returned = _chapters(attached.get("chapters"))
-            originals = _writable(before["chapters"])
-            processing_ids = {c["id"] for c in before["chapters"] if _processing(c.get("transcoding"))}
-            original_ids = {c["id"] for c in originals}
-            additions = [c for c in returned if c["id"] not in original_ids]
-            if (len(additions) != 1 or len(returned) != len(desired)
-                    or not _matches_chapters([c for c in returned if c["id"] in original_ids], originals, processing_ids)
-                    or returned[position]["id"] != additions[0]["id"]
-                    or additions[0]["title"] != title or additions[0]["type"] != "file"):
-                raise RuntimeError("Upload attachment identity was not confirmed; refresh before another action")
-            chapter_id = additions[0]["id"]
-            expected = copy.deepcopy(returned)
-            content = self._readback(ids, expected, new_id=chapter_id, processing_ids=processing_ids)
-            return {"chapter_id": chapter_id, "target_url": target_url, "content": content}
+            chapters = before["chapters"]
+            capacity = _number(before["secondsRemaining"], "remaining capacity") + sum(
+                _number(c["seconds"], "chapter duration") for c in chapters)
+            desired, errors = apply_ops(chapters, ops, capacity_seconds=capacity,
+                                        max_chapters=_number(config.get("maxChapters"), "chapter limit"))
+            results = [{"error": error, "chapter_id": None} for error in errors]
+            if _writable(desired) == _writable(chapters):
+                return {"content": _content(before, config), "results": results}
+            processing_ids = {c["id"] for c in chapters if _processing(c.get("transcoding"))}
+            # The provider has no proven CAS/ETag contract; another device can still race this PATCH.
+            saved = self._api("PATCH", f"/households/{ids[0]}/creativetonies/{ids[1]}", {"chapters": _writable(desired)})
+            expected = desired
+            if any(ATTACH_MARK in c for c in desired):
+                expected = self._confirm_attachments(saved, chapters, desired, processing_ids, results)
+                processing_ids |= {r["chapter_id"] for r in results if r["chapter_id"]}
+            return {"content": self._readback(ids, expected, processing_ids=processing_ids), "results": results}
+
+    @staticmethod
+    def _confirm_attachments(saved, before, desired, processing_ids, results):
+        """Map each attached upload to the chapter ID Tonies assigned, by position and title."""
+        returned = _chapters(saved.get("chapters"))
+        original_ids = {c["id"] for c in before}
+        if len(returned) != len(desired):
+            raise RuntimeError("Upload attachment identity was not confirmed; refresh before another action")
+        kept_returned, kept_desired = [], []
+        for got, want in zip(returned, desired):
+            if ATTACH_MARK in want:
+                if got["id"] in original_ids or got["title"] != want["title"] or got["type"] != "file":
+                    raise RuntimeError("Upload attachment identity was not confirmed; refresh before another action")
+                results[want[ATTACH_MARK]]["chapter_id"] = got["id"]
+            else:
+                kept_returned.append(got)
+                kept_desired.append(want)
+        if not _matches_chapters(kept_returned, kept_desired, processing_ids):
+            raise RuntimeError("Upload attachment identity was not confirmed; refresh before another action")
+        return copy.deepcopy(returned)
+
+    def _apply_one(self, target_url, op):
+        outcome = self.apply(target_url, [op])
+        error = outcome["results"][0]["error"]
+        if error:
+            raise RuntimeError(error)
+        return outcome
+
+    # Single-edit helpers for callers that don't batch (and older API clients).
+
+    def rename(self, target_url, index, title, chapter_id=None):
+        renamed_title("", title)
+        op = {"type": "rename", "chapter_id": chapter_id, "index": index, "expect_index": index, "title": title}
+        return self._apply_one(target_url, op)["content"]
+
+    def reorder(self, target_url, from_index, to_index, chapter_id=None):
+        op = {"type": "move", "chapter_id": chapter_id, "index": from_index, "expect_index": from_index,
+              "position": {"index": to_index}}
+        if not isinstance(to_index, int) or to_index < 0:
+            raise RuntimeError("Invalid chapter index; refresh stale content")
+        return self._apply_one(target_url, op)["content"]
+
+    def delete(self, target_url, index, chapter_title=None, chapter_id=None, chapter_fingerprint=None,
+               app_track_token=None):
+        if not chapter_id or chapter_title or chapter_fingerprint or app_track_token:
+            chapter_id = self._resolve_legacy_delete(target_url, index, chapter_title, chapter_id,
+                                                     chapter_fingerprint, app_track_token)
+        return self._apply_one(target_url, {"type": "delete", "chapter_id": chapter_id})["content"]
+
+    def _resolve_legacy_delete(self, target_url, index, chapter_title, chapter_id, chapter_fingerprint,
+                               app_track_token):
+        """Older clients name a delete by index plus title/token/fingerprint checks."""
+        before, config = self._snapshot(parse_target_url(target_url))
+        chapters = before["chapters"]
+        if chapter_id:
+            matches = [i for i, c in enumerate(chapters) if c["id"] == chapter_id]
+            if len(matches) != 1:
+                raise RuntimeError("Chapter identity does not match; refresh stale content")
+            index = matches[0]
+        elif not isinstance(index, int) or not 0 <= index < len(chapters):
+            raise RuntimeError("Invalid chapter index; refresh stale content")
+        selected = chapters[index]
+        token = _TRACK.search(selected["title"])
+        if app_track_token and (not token or token.group(1).lower() != app_track_token.lower()):
+            raise RuntimeError("Chapter token does not match")
+        if chapter_title and chapter_title not in (selected["title"], _TRACK.sub("", selected["title"]).strip()):
+            raise RuntimeError("Chapter title does not match")
+        if chapter_fingerprint:
+            selected_content = _content(before, config)["chapters"][index]
+            if chapter_fingerprint != f'{selected["title"]}|{selected_content["duration"]}':
+                raise RuntimeError("Chapter fingerprint does not match")
+        if not chapter_id and not app_track_token and chapter_title:
+            matches = [c for c in chapters if chapter_title in (c["title"], _TRACK.sub("", c["title"]).strip())]
+            if len(matches) != 1:
+                raise RuntimeError("Chapter title is ambiguous; select by chapter ID")
+        if not chapter_id and app_track_token:
+            matches = [c for c in chapters if (match := _TRACK.search(c["title"])) and match.group(1).lower() == app_track_token.lower()]
+            if len(matches) != 1:
+                raise RuntimeError("Chapter token is ambiguous")
+        return selected["id"]
+
+    def delete_all(self, target_url):
+        return self._apply_one(target_url, {"type": "clear"})["content"]
+
+    def upload(self, path: Path, target_url: str, title: str, position: dict | None = None):
+        """Transfer and attach one file. Without a position it goes first on a live Tonie, else last."""
+        prepared = self.prepare_upload(path, target_url)
+        if position is None:
+            position = {"edge": "start" if prepared["live"] else "end"}
+        op = {"type": "attach", "file_id": prepared["file_id"], "title": title, "seconds": prepared["seconds"],
+              "position": position}
+        outcome = self._apply_one(target_url, op)
+        return {"chapter_id": outcome["results"][0]["chapter_id"], "target_url": target_url, "content": outcome["content"]}

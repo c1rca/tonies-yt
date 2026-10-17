@@ -25,7 +25,6 @@ def test_run_job_success(monkeypatch, tmp_path):
     monkeypatch.setattr(jobs, 'search_youtube', fake_search)
     monkeypatch.setattr(jobs, 'download_mp3', fake_download)
     monkeypatch.setattr(jobs, '_probe_audio_duration_seconds', lambda _path: 1.0)
-    monkeypatch.setattr(jobs, '_ensure_tonies_capacity', lambda *_args: None)
     monkeypatch.setattr(
         jobs,
         '_enqueue_upload',
@@ -80,7 +79,6 @@ def test_failed_job_cannot_enqueue_upload_after_download_returns(monkeypatch, tm
 
     monkeypatch.setattr(jobs, 'download_mp3', blocked_download)
     monkeypatch.setattr(jobs, '_probe_audio_duration_seconds', lambda _path: 1.0)
-    monkeypatch.setattr(jobs, '_ensure_tonies_capacity', lambda *_args: None)
     monkeypatch.setattr(jobs, '_enqueue_upload', lambda *args, **kwargs: uploads.append((args, kwargs)))
 
     st = jobs.create_job('late download')

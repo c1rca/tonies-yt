@@ -14,7 +14,8 @@ from typing import Dict, Optional, Any
 from .models import JobState
 from .ai import parse_request
 from .downloader import download_mp3, search_youtube
-from .uploader import upload_to_tonies, get_tonies_content
+from . import events
+from .uploader import action_queue, resolve_upload_target, upload_title
 from .config import settings
 from .logger import get_logger
 
@@ -22,22 +23,8 @@ logger = get_logger(__name__)
 
 _jobs: Dict[str, JobState] = {}
 _q: queue.Queue[str] = queue.Queue()
-_upload_q: queue.Queue[dict[str, Any]] = queue.Queue()
 _lock = threading.Lock()
-_upload_lock = threading.Lock()
 _persist_lock = threading.Lock()
-_event_cond = threading.Condition()
-_event_seq = 0
-_events: list[dict[str, Any]] = []
-_MAX_EVENTS = 500
-_event_stats: dict[str, int] = {
-    "emitted": 0,
-    "created": 0,
-    "updated": 0,
-    "logs": 0,
-    "selected": 0,
-}
-
 _STAGE_TIMEOUT_SEC: dict[str, int] = {
     "parsing": 90,
     "searching": 180,
@@ -45,7 +32,8 @@ _STAGE_TIMEOUT_SEC: dict[str, int] = {
     "downloading": 900,
     "queued_prepare": 120,
     "preparing": 900,
-    "waiting_upload": 600,
+    # Uploads wait in the action queue behind others; each step there refreshes the job.
+    "waiting_upload": 1800,
     "uploading": 420,
 }
 
@@ -54,48 +42,21 @@ _JOBS_STATE_FILE = settings.data_dir / "jobs-state.json"
 _MAX_PERSISTED_JOBS = 200
 
 
-def now_iso() -> str:
-    return datetime.now(timezone.utc).replace(tzinfo=None).isoformat() + "Z"
+now_iso = events.now_iso
 
 
 def _emit_event(kind: str, job_id: Optional[str] = None):
-    global _event_seq
-    payload: dict[str, Any] = {"kind": kind, "at": now_iso()}
+    payload: dict[str, Any] = {}
     if job_id:
         with _lock:
             st = _jobs.get(job_id)
             payload["job"] = st.model_dump() if st else None
             payload["job_id"] = job_id
-    with _event_cond:
-        _event_seq += 1
-        evt = {"id": _event_seq, **payload}
-        _events.append(evt)
-        if len(_events) > _MAX_EVENTS:
-            del _events[: len(_events) - _MAX_EVENTS]
-
-        _event_stats["emitted"] = _event_stats.get("emitted", 0) + 1
-        if kind == "job_created":
-            _event_stats["created"] = _event_stats.get("created", 0) + 1
-        elif kind == "job_updated":
-            _event_stats["updated"] = _event_stats.get("updated", 0) + 1
-        elif kind == "job_log":
-            _event_stats["logs"] = _event_stats.get("logs", 0) + 1
-        elif kind == "job_selected":
-            _event_stats["selected"] = _event_stats.get("selected", 0) + 1
-
-        _event_cond.notify_all()
+    events.publish(kind, payload)
 
 
-def get_events_since(last_id: int, timeout_sec: float = 15.0) -> list[dict[str, Any]]:
-    with _event_cond:
-        if _event_seq <= last_id:
-            _event_cond.wait(timeout=timeout_sec)
-        return [e for e in _events if e["id"] > last_id]
-
-
-def get_event_stats() -> dict[str, int]:
-    with _event_cond:
-        return {**_event_stats, "last_event_id": _event_seq, "buffered": len(_events)}
+get_events_since = events.events_since
+get_event_stats = events.stats
 
 
 def get_queue_stats() -> dict[str, int]:
@@ -105,7 +66,8 @@ def get_queue_stats() -> dict[str, int]:
         })
     return {
         "search_queue_depth": _q.qsize(),
-        "upload_queue_depth": _upload_q.qsize(),
+        "upload_queue_depth": sum(1 for a in action_queue.recent() if a["type"] == "upload"
+                                  and a["status"] in ("queued", "transferring", "ready", "applying")),
         "in_flight_jobs": in_flight,
     }
 
@@ -232,6 +194,9 @@ def cancel_job(job_id: str) -> JobState:
             st.status = "failed"
             st.error = "Cancelled by user"
         st.updated_at = now_iso()
+        action_id = st.tonies_action_id
+    if action_id:
+        action_queue.cancel(action_id)  # only succeeds before the audio starts sending
     _emit_event("job_updated", job_id)
     _log(job_id, "Cancelled by user")
     return get_job(job_id)
@@ -334,27 +299,6 @@ def _probe_audio_duration_seconds(path: Path) -> float:
     return float(dur) if dur is not None else 0.0
 
 
-def _ensure_tonies_capacity(target_url: Optional[str], incoming_seconds: float) -> None:
-    if not target_url or incoming_seconds <= 0:
-        return
-    try:
-        content = get_tonies_content(target_url)
-    except Exception as e:
-        raise RuntimeError(f"Could not verify free minutes before upload: {e}") from e
-
-    free_seconds = content.get('free_seconds')
-    if free_seconds is None:
-        free_minutes = content.get('free_minutes')
-        if free_minutes is None:
-            raise RuntimeError('Could not verify free space before upload')
-        free_seconds = float(free_minutes) * 60.0
-    free_seconds = max(float(free_seconds), 0.0)
-    if incoming_seconds > free_seconds + 1.0:
-        need = incoming_seconds / 60.0
-        have = free_seconds / 60.0
-        raise RuntimeError(f"Not enough free space on selected Creative Tonie (need {need:.1f} min, have {have:.1f} min).")
-
-
 def _classify_download_error(err: Exception) -> str:
     msg = str(err).lower()
     if "not available" in msg or "video unavailable" in msg:
@@ -374,50 +318,49 @@ def _classify_download_error(err: Exception) -> str:
     return "Download failed"
 
 
-def _enqueue_upload(job_id: str, mp3_path: Path, target: Optional[str], target_url: Optional[str]):
+def _enqueue_upload(job_id: str, mp3_path: Path, target: Optional[str], target_url: Optional[str],
+                    position: Optional[dict] = None):
     _update(job_id, status="waiting_upload", output_file=str(mp3_path), target_url=target_url)
-    _log(job_id, "Waiting for Tonies uploader slot")
-    _upload_q.put({"job_id": job_id, "mp3_path": str(mp3_path), "target": target, "target_url": target_url})
+    _log(job_id, "Queued for Tonies")
+    url = resolve_upload_target(target, target_url)
+    action = action_queue.submit_upload(url, Path(mp3_path), upload_title(mp3_path), position,
+                                        on_change=lambda a: _on_upload_action(job_id, a))
+    _update(job_id, tonies_action_id=action.id, target_url=url)
 
 
-def _process_upload_item(item: dict[str, Any]) -> None:
-    job_id = item["job_id"]
-    if _is_cancelled(job_id) or get_job(job_id).status in {"done", "failed"}:
+def _on_upload_action(job_id: str, action) -> None:
+    """Mirror the queued upload's progress onto its job."""
+    job = get_job(job_id)
+    if job is None:
         return
-    try:
-        with _upload_lock:
-            if _is_cancelled(job_id):
-                _update(job_id, status="failed", error="Cancelled by user")
-                return
+    if action.status == "transferring":
+        if job.status == "waiting_upload":
             _update(job_id, status="uploading")
-            _log(job_id, "Uploading audio through Tonies API")
-            result = upload_to_tonies(Path(item["mp3_path"]), target_character_name=item.get("target"), target_url=item.get("target_url"))
-            if (not isinstance(result, dict) or not result.get("chapter_id")
-                    or not isinstance(result.get("content"), dict)
-                    or sum(row.get("chapter_id") == result["chapter_id"] for row in result["content"].get("chapters", [])) != 1):
-                raise RuntimeError("Tonies upload returned no confirmed chapter; refresh the library before retrying")
-            receipt = {"uploaded_chapter_id": result["chapter_id"], "tonies_content": result["content"], "target_url": result.get("target_url") or item.get("target_url")}
-            if get_job(job_id).status == "failed":
-                _update(job_id, **receipt)
-                _log(job_id, "Tonies accepted the upload after the job stopped; the recorded chapter is present. Do not upload it again.")
-                return
-            _update(job_id, status="done", error=None, **receipt)
-            _log(job_id, "Audio added to Tonies; processing continues in the library" if result["content"].get("processing") else "Completed")
-    except Exception as error:
-        _update(job_id, status="failed", error=str(error))
-        _log(job_id, f"Upload failed: {error}")
+        _log(job_id, "Sending audio to Tonies")
+    elif action.status == "ready":
+        _log(job_id, "Audio sent; adding it to the Tonie")
+    elif action.status == "failed":
+        if job.status not in {"done", "failed"}:
+            _update(job_id, status="failed", error=action.error)
+        _log(job_id, f"Upload failed: {action.error}")
+    elif action.status == "done":
+        content = action.content or {}
+        if not action.chapter_id or sum(row.get("chapter_id") == action.chapter_id
+                                        for row in content.get("chapters", [])) != 1:
+            _update(job_id, status="failed", error="Tonies upload returned no confirmed chapter; refresh the library before retrying")
+            return
+        receipt = {"uploaded_chapter_id": action.chapter_id, "tonies_content": content,
+                   "target_url": action.target_url, "upload_positioned": action.params.get("position") is not None}
+        if job.status == "failed":
+            _update(job_id, **receipt)
+            _log(job_id, "Tonies accepted the upload after the job stopped; the recorded chapter is present. Do not upload it again.")
+            return
+        _update(job_id, status="done", error=None, **receipt)
+        _log(job_id, "Audio added to Tonies; processing continues in the library" if content.get("processing") else "Completed")
 
 
-def upload_worker_loop():
-    while True:
-        item = _upload_q.get()
-        try:
-            _process_upload_item(item)
-        finally:
-            _upload_q.task_done()
-
-
-def select_candidate_and_continue(job_id: str, index: int, target_url: Optional[str] = None) -> str:
+def select_candidate_and_continue(job_id: str, index: int, target_url: Optional[str] = None,
+                                  position: Optional[dict] = None) -> str:
     with _lock:
         st = _jobs.get(job_id)
         if not st:
@@ -448,6 +391,7 @@ def select_candidate_and_continue(job_id: str, index: int, target_url: Optional[
                 candidates=st.candidates,
                 selected_candidate=selected,
                 target_url=target_url,
+                target_position=position,
                 logs=[f"Spawned from search job {job_id}", f"Selected candidate: {selected.get('title', 'unknown')}"]
             )
             _jobs[new_id] = new_state
@@ -455,6 +399,7 @@ def select_candidate_and_continue(job_id: str, index: int, target_url: Optional[
             st.selected_candidate = selected
             st.status = "queued_download"
             st.target_url = target_url
+            st.target_position = position
             st.updated_at = now_iso()
             new_id = None
 
@@ -462,15 +407,16 @@ def select_candidate_and_continue(job_id: str, index: int, target_url: Optional[
     if new_id:
         _emit_event("job_created", new_id)
         _emit_event("job_selected", new_id)
-        run_selected_candidate_async(new_id, selected, target_url)
+        run_selected_candidate_async(new_id, selected, target_url, position)
         return new_id
 
     _emit_event("job_selected", job_id)
-    run_selected_candidate_async(job_id, selected, target_url)
+    run_selected_candidate_async(job_id, selected, target_url, position)
     return job_id
 
 
-def run_selected_candidate_async(job_id: str, selected: dict, target_url: Optional[str] = None):
+def run_selected_candidate_async(job_id: str, selected: dict, target_url: Optional[str] = None,
+                                 position: Optional[dict] = None):
     def _runner():
         t0 = time.time()
         try:
@@ -494,8 +440,7 @@ def run_selected_candidate_async(job_id: str, selected: dict, target_url: Option
                 return
 
             target = (parsed.get("target_character_name") if isinstance(parsed, dict) else None)
-            _ensure_tonies_capacity(target_url, _probe_audio_duration_seconds(Path(mp3)))
-            _enqueue_upload(job_id, Path(mp3), target=target, target_url=target_url)
+            _enqueue_upload(job_id, Path(mp3), target=target, target_url=target_url, position=position)
             _log(job_id, f"Timing: total select->queued_upload in {time.time() - t0:.1f}s")
         except Exception as e:
             reason = _classify_download_error(e)
@@ -505,7 +450,8 @@ def run_selected_candidate_async(job_id: str, selected: dict, target_url: Option
     threading.Thread(target=_runner, daemon=True).start()
 
 
-def create_upload_only_job(file_path: str, note: str = "upload existing file", target_url: Optional[str] = None) -> JobState:
+def create_upload_only_job(file_path: str, note: str = "upload existing file", target_url: Optional[str] = None,
+                           position: Optional[dict] = None) -> JobState:
     # Prevent a second tap from queuing the same file while the first one is active.
     with _lock:
         for existing in _jobs.values():
@@ -521,6 +467,7 @@ def create_upload_only_job(file_path: str, note: str = "upload existing file", t
         logs=["Upload-only job created"],
         output_file=file_path,
         target_url=target_url,
+        target_position=position,
     )
     with _lock:
         _jobs[job_id] = st
@@ -545,8 +492,7 @@ def create_upload_only_job(file_path: str, note: str = "upload existing file", t
                 _update(job_id, status="failed", error="Cancelled by user")
                 return
 
-            _ensure_tonies_capacity(target_url, incoming_seconds)
-            _enqueue_upload(job_id, p, target=None, target_url=target_url)
+            _enqueue_upload(job_id, p, target=None, target_url=target_url, position=position)
             _log(job_id, f"Timing: total upload-only->queued_upload in {time.time() - t0:.1f}s")
         except Exception as e:
             reason = _classify_download_error(e)
@@ -562,7 +508,5 @@ def start_worker():
     _persist_jobs_state()
     t = threading.Thread(target=worker_loop, daemon=True)
     t.start()
-    u = threading.Thread(target=upload_worker_loop, daemon=True)
-    u.start()
     w = threading.Thread(target=watchdog_loop, daemon=True)
     w.start()

@@ -79,3 +79,61 @@ def test_failed_login_does_not_reset_another_active_api_session(monkeypatch):
     monkeypatch.setattr(main, 'reset_upload_session', reset, raising=False)
     assert not TestClient(app).post('/api/setup/login', json={'username': 'synthetic', 'app_password': 'wrong'}).json()['ok']
     reset.assert_not_called()
+
+
+def test_tonies_actions_endpoint_queues_edits_and_lists_them(monkeypatch):
+    from app.actions import ActionQueue
+    url = "https://my.tonies.com/creative-tonies/11111111-2222-4333-8444-555555555555/aBcD0123456789EF/edit"
+
+    class Fake:
+        def apply(self, target_url, ops):
+            return {"content": {"chapters": []}, "results": [{"error": None, "chapter_id": op.get("chapter_id")} for op in ops]}
+
+    queue = ActionQueue(lambda: Fake(), batch_window=0)
+    monkeypatch.setattr(main, "action_queue", queue)
+    client = TestClient(app)
+    r = client.post("/api/tonies-actions", json={"target_url": url, "actions": [
+        {"type": "delete", "chapter_id": "a"},
+        {"type": "move", "chapter_id": "b", "position": {"before": "c", "index": 2}},
+    ]})
+    assert r.status_code == 200
+    ids = [a["id"] for a in r.json()["actions"]]
+    for action_id in ids:
+        assert queue.wait(action_id, 5).status == "done"
+    listed = client.get("/api/tonies-actions", params={"target_url": url}).json()["actions"]
+    assert [a["id"] for a in listed] == ids and {a["status"] for a in listed} == {"done"}
+
+
+@pytest.mark.parametrize("body", [
+    {"actions": [{"type": "delete", "chapter_id": "a"}]},
+    {"target_url": "https://example.com/x", "actions": [{"type": "delete", "chapter_id": "a"}]},
+    {"target_url": "VALID", "actions": []},
+    {"target_url": "VALID", "actions": [{"type": "explode"}]},
+    {"target_url": "VALID", "actions": [{"type": "delete"}]},
+    {"target_url": "VALID", "actions": [{"type": "move", "chapter_id": "a", "position": {"edge": "middle"}}]},
+    {"target_url": "VALID", "actions": [{"type": "rename", "chapter_id": "a", "title": "  "}]},
+])
+def test_tonies_actions_endpoint_rejects_bad_requests(body):
+    url = "https://my.tonies.com/creative-tonies/11111111-2222-4333-8444-555555555555/aBcD0123456789EF/edit"
+    if body.get("target_url") == "VALID":
+        body = {**body, "target_url": url}
+    r = TestClient(app).post("/api/tonies-actions", json=body)
+    assert r.status_code in (400, 422)
+
+
+def test_upload_existing_passes_a_validated_position(monkeypatch, tmp_path):
+    monkeypatch.setattr(main.settings, 'data_dir', tmp_path)
+    (tmp_path / 'downloads').mkdir()
+    (tmp_path / 'downloads' / 'song.mp3').write_bytes(b'x')
+    seen = {}
+
+    def fake_job(path, note, target_url, position):
+        seen.update(position=position)
+        return Mock(id='job', status='queued_prepare')
+
+    monkeypatch.setattr(main, 'create_upload_only_job', fake_job)
+    client = TestClient(app)
+    ok = client.post('/api/upload-existing', json={'filename': 'song.mp3', 'position': {'before': 'abc', 'index': 3}})
+    assert ok.status_code == 200 and seen['position'] == {'before': 'abc', 'index': 3}
+    bad = client.post('/api/upload-existing', json={'filename': 'song.mp3', 'position': {'edge': 'sideways'}})
+    assert bad.status_code == 400
