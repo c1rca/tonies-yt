@@ -2,7 +2,7 @@
 import httpx
 import pytest
 
-from test_tonies_api import URL, chapter, cloud_api
+from tonies_fake import URL, chapter
 
 
 def test_upload_returns_identity_and_fresh_content_while_processing(cloud_api, tmp_path, monkeypatch):

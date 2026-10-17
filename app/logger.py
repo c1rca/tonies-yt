@@ -16,7 +16,8 @@ def setup_logging() -> None:
 
     # Avoid duplicate handlers when app reloads.
     for h in list(root.handlers):
-      root.removeHandler(h)
+        root.removeHandler(h)
+        h.close()
 
     fmt = logging.Formatter(
         "%(asctime)s | %(levelname)s | %(name)s | %(message)s",

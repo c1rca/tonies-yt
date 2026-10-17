@@ -2,11 +2,10 @@
 import argparse
 import json
 import os
-import re
 import subprocess
 import sys
 import time
-from urllib import error, parse, request
+from urllib import error, request
 
 # Log lines that mean an upload failed even when the job reported success.
 KNOWN_BAD = [
@@ -32,7 +31,7 @@ def api(base: str, path: str, method: str = "GET", data: dict | None = None, tim
             return json.loads(txt)
     except error.HTTPError as e:
         msg = e.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"HTTP {e.code} {path}: {msg[:300]}")
+        raise RuntimeError(f"HTTP {e.code} {path}: {msg[:300]}") from e
 
 
 def poll_job(base: str, job_id: str, timeout_s: int = 600):

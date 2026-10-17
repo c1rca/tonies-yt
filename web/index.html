@@ -832,7 +832,6 @@
       const toniesContentVersionByUrl = {};
       let toniesContentByUrlCache = {};
       const jobStatusById = {};
-      let focusedUploadFilename = '';
       let highlightedJobId = '';
       let highlightJobTimer = null;
       let recentUploadedChapterIds = {};
@@ -888,7 +887,6 @@
       let activeSearchRequestController = null;
       let activeSearchRequestSeq = 0;
       let lastSearchStartedAtMs = 0;
-      let showOtherActiveJobs = false;
 
       function esc(s) {
         return String(s ?? '')
@@ -897,13 +895,6 @@
           .replaceAll('>', '&gt;')
           .replaceAll('"', '&quot;')
           .replaceAll("'", '&#39;');
-      }
-
-      function fmtDate(iso) {
-        if (!iso) return '';
-        const d = new Date(iso);
-        if (Number.isNaN(d.getTime())) return '';
-        return d.toLocaleString();
       }
 
       function fmtDuration(sec) {
@@ -944,39 +935,6 @@
 
       function getJobStatus(jobOrStatus) {
         return String(typeof jobOrStatus === 'string' ? jobOrStatus : (jobOrStatus?.status || ''));
-      }
-
-      function getJobStatusMeta(jobOrStatus) {
-        const status = getJobStatus(jobOrStatus);
-        const labelMap = {
-          queued: 'Queued',
-          parsing: 'Parsing',
-          searching: 'Searching',
-          awaiting_selection: 'Pick a result',
-          queued_download: 'Queued',
-          downloading: 'Downloading',
-          queued_prepare: 'Queued',
-          preparing: 'Preparing',
-          waiting_upload: 'Queued upload',
-          uploading: 'Uploading',
-          done: 'Done',
-          failed: 'Failed',
-        };
-        const classMap = {
-          queued_download: 'downloading',
-          queued_prepare: 'preparing',
-          waiting_upload: 'waiting_upload',
-        };
-        return {
-          status,
-          label: labelMap[status] || uiText(status || 'pending'),
-          className: classMap[status] || status || 'searching',
-        };
-      }
-
-      function renderJobStatusBadge(jobOrStatus) {
-        const meta = getJobStatusMeta(jobOrStatus);
-        return `<span class="status ${esc(meta.className)}">${esc(meta.label)}</span>`;
       }
 
       function getSelectedCandidateIndex(jobId) {
@@ -1441,14 +1399,6 @@
         return roots.slice().sort((a, b) => getJobCreatedAtMs(b) - getJobCreatedAtMs(a))[0] || null;
       }
 
-      function getRootForJob(job, sourceJobs = []) {
-        if (!job) return null;
-        if (hasCandidateList(job)) return job;
-        const sameQueryRoots = sourceJobs.filter((j) => hasCandidateList(j) && (j.user_message || '') === (job.user_message || ''));
-        if (!sameQueryRoots.length) return null;
-        return sameQueryRoots.slice().sort((a, b) => getJobCreatedAtMs(b) - getJobCreatedAtMs(a))[0] || null;
-      }
-
       function filterToLatestSearchAndActive(sourceJobs = []) {
         if (!sourceJobs.length) return [];
 
@@ -1588,11 +1538,6 @@
         } catch (e) {
           showToast(`Cancel failed: ${e?.message || e}`, 'err', 2500);
         }
-      }
-
-      function toggleOtherActiveJobs() {
-        showOtherActiveJobs = !showOtherActiveJobs;
-        renderJobs();
       }
 
       function hasToniesUploadBusy() {
@@ -2026,7 +1971,6 @@
       }
 
       function focusUploadInLibrary(filename) {
-        focusedUploadFilename = filename || '';
         renderFiles();
         const key = encodeURIComponent(filename || '');
         const el = document.querySelector(`.file[data-file-key="${key}"]`);
@@ -2207,7 +2151,6 @@
           if ((!meta || !Array.isArray(meta.chapters)) && selectedToniesUrl === t.edit_url) {
             meta = toniesContentCache || {};
           }
-          const syncing = toniesStatsSyncing.has(t.edit_url) || !Array.isArray(meta.chapters);
           const tracks = Array.isArray(meta.chapters) ? meta.chapters.length : 'syncing…';
           const total = Number(meta.total_minutes ?? 90);
           const freeNum = Number(meta.free_minutes);
@@ -3708,7 +3651,6 @@
       let sseBackoffMs = 1000;
       let sseLastEventId = 0;
       let sseRefreshTimer = null;
-      let sseLastSeenAt = 0;
       let lastSseRefreshAt = 0;
       let lastJobsReconcileAt = Date.now();
 
@@ -3742,13 +3684,11 @@
 
         es.onopen = () => {
           sseConnected = true;
-          sseLastSeenAt = Date.now();
           sseBackoffMs = 1000;
           renderRealtimeStatus();
         };
 
         es.onmessage = (ev) => {
-          sseLastSeenAt = Date.now();
           const idNum = Number(ev.lastEventId || 0);
           if (Number.isFinite(idNum) && idNum > 0) sseLastEventId = idNum;
 

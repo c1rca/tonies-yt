@@ -13,6 +13,12 @@ def test_health_endpoint():
     assert r.json()['status'] == 'ok'
 
 
+def test_favicon_is_served():
+    r = TestClient(app).get('/favicon.ico')
+    assert r.status_code == 200
+    assert r.content == open('web/favicon.ico', 'rb').read()
+
+
 def test_chat_creates_job_and_job_is_fetchable():
     client = TestClient(app)
     r = client.post('/api/chat', json={'message': 'find lullabies'})

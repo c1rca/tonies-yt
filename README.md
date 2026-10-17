@@ -4,20 +4,23 @@ Fast web app for managing Creative Tonies audio.
 
 ![Tonies-YT app screenshot](docs/assets/app-screenshot.png)
 
-## API-only branch
-
-This checkout (`feat/http-api-transport`) replaces Tonies browser automation with direct OAuth and HTTP API calls through `httpx`. It does not require Playwright, Chromium, browser cookies or a persisted browser session. This describes the branch, not an already-deployed production migration.
-
-Tonies account credentials still come from the app's encrypted local vault (normal setup) or the existing `TONIES_EMAIL` / `TONIES_PASSWORD` environment variables. OAuth access/refresh tokens and renewal state live in memory, not in a browser-state file. After restart, unlock the app vault again when prompted; the next Tonies operation obtains fresh tokens using the available account credentials.
-
 ## What it does
 - Search YouTube, pick a result and download audio
 - Upload audio to Creative Tonies through the Tonies cloud API
 - Manage Tonies tracks: rename, reorder, delete, **delete all content with confirmation**
 - Maintain a Local MP3 Library for drag/drop or upload-to-Tonies flows
 - Queue multiple local uploads sequentially, with queued-state highlighting
-- Import local audio using **Browse** and normalize it to Tonies-friendly MP3
+- Import local audio using **Browse**; it is converted to a Tonies-friendly MP3 once, on import
 - Right-click local files on desktop for upload / upload to top / upload to bottom
+
+## How it talks to Tonies
+
+The app calls the Tonies cloud directly over HTTPS (`httpx`): OAuth login at `login.tonies.com`, then the same API the my.tonies.com web app uses. There is no browser, Playwright or Chromium involved.
+
+- Every change (upload, rename, reorder, delete) re-reads the Tonie first, writes the full chapter list by exact chapter ID, then reads it back. If the Tonie changed in between, the app refuses instead of guessing.
+- A write whose outcome is unknown (for example a timeout) is never retried automatically; the app asks you to refresh first.
+- Uploads go straight to Tonies' storage with a presigned form; your login token is never sent there.
+- OAuth tokens live in memory only and renew automatically. After a restart you unlock the app again and the next Tonies action signs in fresh.
 
 ## Main UI
 - App: `http://localhost:8090`
@@ -34,16 +37,14 @@ Tonies account credentials still come from the app's encrypted local vault (norm
 - Built-in logs viewer + export
 
 ## Stack
-- FastAPI + `httpx` for direct Tonies OAuth/API requests
-- `cryptography` for the existing encrypted app vault
-- `yt-dlp`, `ffmpeg` and Deno for YouTube/audio processing
-- Lean `python:3.12-slim` container + Docker Compose
-
-Deno remains required for yt-dlp's JavaScript extraction support. Removing the Tonies browser runtime does not remove the YouTube/audio tools or change the existing yt-dlp upgrade workflow.
+- FastAPI + `httpx` for the Tonies OAuth/API client (`app/tonies_api.py`)
+- `cryptography` for the encrypted app vault
+- `yt-dlp`, `ffmpeg` and Deno for YouTube/audio processing (Deno is yt-dlp's JavaScript runtime)
+- `python:3.12-slim` container (about 1.1 GB) + Docker Compose
 
 ## Quick start (recommended)
 
-From this branch's checkout, use Docker Compose on Linux or Docker Desktop with Linux containers on Windows.
+Docker Compose on Linux, or Docker Desktop with Linux containers on Windows.
 
 Linux:
 ```bash
@@ -57,27 +58,33 @@ Copy-Item .env.example .env
 docker compose up -d --build
 ```
 
-Open `http://localhost:8090`, then complete setup/login. Normal setup stores Tonies credentials in the app vault; no credentials need to be added to `.env`.
+Open `http://localhost:8090` and complete first-run setup: choose an app username and password, then enter your Tonies email and password. They are stored encrypted in `data/secrets/`; nothing needs to go in `.env`.
 
-Compose keeps its existing `8090:8080` port mapping and relative `./data:/app/data` mount. Back up `data/` and `.env`; do not commit either. Container Uvicorn still listens on port 8080.
+Compose maps host port 8090 to container port 8080 and mounts `./data` at `/app/data`. Back up `data/` and `.env`; do not commit either.
 
 ## Native setup (without Docker)
 
-See [Quick Start](docs/QUICKSTART.md) for Python 3.12 instructions on Linux and Windows. Install ffmpeg and Deno on the host, then install `requirements.txt`; no browser installation is needed.
+See [Quick Start](docs/QUICKSTART.md) for Python 3.12 instructions on Linux and Windows. Install ffmpeg and Deno on the host, then install `requirements.txt`.
 
-**Do not use the legacy `scripts/setup-windows.ps1` to evaluate this branch.** It targets `main` and resets its checkout; browser installation has been removed, but it would still switch an evaluation checkout away from this branch. Use Compose or the manual native steps instead.
+On Windows, `scripts/setup-windows.ps1` installs the prerequisites and checks out `main`. It runs `git reset --hard origin/main`, so do not run it in a checkout with local changes.
 
 ## Optional config
 - `LOG_LEVEL`
 - `LOG_FILE` (the Compose example uses `/app/data/logs/toni-auto.log`)
 - `DATA_DIR` (`/app/data` under Compose; use `./data` for native runs)
-- `TONIES_EMAIL` / `TONIES_PASSWORD` (legacy environment credentials override the vault; keep them private)
+- `TONIES_EMAIL` / `TONIES_PASSWORD`: when both are set they override the vault and the app needs no unlock. Keep them private.
+- `TONIES_CREATIVE_UPLOAD_URL` or `TONIES_CHARACTER_NAME`: default target Tonie (edit URL or name) when a job doesn't pick one.
 
-Browser selector overrides and `TONIES_STORAGE_STATE_FILE` are obsolete. Existing `tonies-storage-state.json` files are not used by this branch; do not delete the whole data directory to troubleshoot login.
+## Upgrading from the browser-automation version
 
-## Validation boundaries
+Earlier versions drove my.tonies.com with Playwright. When upgrading:
+- Keep your `data/` directory; the vault, job history and library carry over.
+- `TONIES_STORAGE_STATE_FILE`, `TONIES_APP_URL`, `TONIES_LOGIN_URL` and the `TONIES_*_SELECTOR` settings are ignored and can be removed from `.env`.
+- `data/tonies-storage-state.json` is no longer read. It holds an old browser session, so delete it or keep it private.
 
-Prior standalone HTTP acceptance exercised disposable upload, processing, rename, reorder and exact-ID deletion with original content preserved. It did not deploy this app branch or revalidate full-length YouTube downloads. **Live clear-to-empty was explicitly excluded to preserve existing libraries**; the confirmed delete-all feature remains, but is not claimed as a live acceptance pass. Test it only on an authorized empty/spare target, never a populated library merely for coverage.
+## Forgot the app password?
+
+It cannot be recovered: the vault is encrypted with it. To start over, stop the app, move `data/secrets/vault-meta.json` and `data/secrets/vault-credentials.enc` somewhere safe, start the app and complete first-run setup again. Job history and the local library are unaffected. See [Operations](docs/OPERATIONS.md#reset-a-forgotten-app-password).
 
 ## Docs
 - Quick start: [`docs/QUICKSTART.md`](docs/QUICKSTART.md)

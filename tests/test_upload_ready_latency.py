@@ -1,5 +1,5 @@
 """Persisted API readback is immediate; no page-ready stabilization waits."""
-from test_tonies_api import URL, cloud_api
+from tonies_fake import URL
 
 
 def test_upload_never_sleeps_once_authoritative_attachment_is_visible(cloud_api, tmp_path, monkeypatch):

@@ -1,7 +1,7 @@
 """Refreshes are cheap HTTP reads, never a stale/browser-backed cache."""
 from concurrent.futures import ThreadPoolExecutor
 
-from test_tonies_api import URL, chapter, cloud_api
+from tonies_fake import URL, chapter
 
 
 def test_concurrent_refreshes_share_auth_but_each_read_is_fresh(cloud_api):

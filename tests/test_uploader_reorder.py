@@ -5,7 +5,7 @@ import copy
 import pytest
 
 from app import uploader
-from test_tonies_api import URL, chapter, cloud_api
+from tonies_fake import URL, chapter
 
 
 def test_upload_from_running_event_loop_needs_no_thread_handoff(monkeypatch):

@@ -1,9 +1,10 @@
 from __future__ import annotations
+import os
+import tempfile
 import threading
 import queue
 import uuid
 import subprocess
-
 import time
 import json
 from datetime import datetime, timezone
@@ -24,6 +25,7 @@ _q: queue.Queue[str] = queue.Queue()
 _upload_q: queue.Queue[dict[str, Any]] = queue.Queue()
 _lock = threading.Lock()
 _upload_lock = threading.Lock()
+_persist_lock = threading.Lock()
 _event_cond = threading.Condition()
 _event_seq = 0
 _events: list[dict[str, Any]] = []
@@ -53,7 +55,7 @@ _MAX_PERSISTED_JOBS = 200
 
 
 def now_iso() -> str:
-    return datetime.utcnow().isoformat() + "Z"
+    return datetime.now(timezone.utc).replace(tzinfo=None).isoformat() + "Z"
 
 
 def _emit_event(kind: str, job_id: Optional[str] = None):
@@ -109,16 +111,31 @@ def get_queue_stats() -> dict[str, int]:
 
 
 def _persist_jobs_state() -> None:
+    """Atomically write the newest job snapshot.
+
+    Workers persist concurrently. One writer at a time (snapshot taken inside the same
+    lock) keeps an older snapshot from replacing a newer one, and a unique temp file per
+    write keeps two writers from renaming the same temp path.
+    """
+    tmp: Path | None = None
     try:
-        with _lock:
-            ordered = sorted(_jobs.values(), key=lambda j: j.created_at, reverse=True)[:_MAX_PERSISTED_JOBS]
-            payload = [j.model_dump() for j in ordered]
-        _JOBS_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-        tmp = _JOBS_STATE_FILE.with_suffix('.json.tmp')
-        tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding='utf-8')
-        tmp.replace(_JOBS_STATE_FILE)
+        with _persist_lock:
+            with _lock:
+                ordered = sorted(_jobs.values(), key=lambda j: j.created_at, reverse=True)[:_MAX_PERSISTED_JOBS]
+                payload = [j.model_dump() for j in ordered]
+            _JOBS_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+            fd, name = tempfile.mkstemp(prefix=_JOBS_STATE_FILE.name + '.', suffix='.tmp', dir=_JOBS_STATE_FILE.parent)
+            tmp = Path(name)
+            with os.fdopen(fd, 'w', encoding='utf-8') as f:
+                json.dump(payload, f, ensure_ascii=False, indent=2)
+            os.chmod(tmp, 0o644)
+            tmp.replace(_JOBS_STATE_FILE)
+            tmp = None
     except Exception as e:
         logger.warning('persist_jobs_state failed: %s', e)
+    finally:
+        if tmp is not None:
+            tmp.unlink(missing_ok=True)
 
 
 def _load_jobs_state() -> None:
@@ -323,7 +340,7 @@ def _ensure_tonies_capacity(target_url: Optional[str], incoming_seconds: float) 
     try:
         content = get_tonies_content(target_url)
     except Exception as e:
-        raise RuntimeError(f"Could not verify free minutes before upload: {e}")
+        raise RuntimeError(f"Could not verify free minutes before upload: {e}") from e
 
     free_seconds = content.get('free_seconds')
     if free_seconds is None:

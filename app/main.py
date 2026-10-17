@@ -39,6 +39,11 @@ def _nocache_file(path: str):
     })
 
 
+@app.get('/favicon.ico', include_in_schema=False)
+def favicon():
+    return FileResponse('web/favicon.ico', media_type='image/x-icon')
+
+
 class Health(BaseModel):
     status: str
 
