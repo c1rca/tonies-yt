@@ -1,7 +1,7 @@
 FROM python:3.12-slim
 
 LABEL org.opencontainers.image.title="Tonies-YT" \
-      org.opencontainers.image.version="2.0.0" \
+      org.opencontainers.image.version="3.0.0" \
       org.opencontainers.image.source="https://github.com/c1rca/tonies-yt" \
       org.opencontainers.image.licenses="MIT"
 
