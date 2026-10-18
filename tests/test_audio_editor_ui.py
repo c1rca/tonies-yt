@@ -56,6 +56,8 @@ assert.deepEqual(editorNudge({start: 10, end: 60}, 'start', 'ArrowRight', false,
 assert.deepEqual(editorNudge({start: 10, end: 60}, 'end', 'ArrowLeft', true, 120), {start: 10, end: 50});
 assert.deepEqual(editorNudge({start: 10, end: 60}, 'start', 'Home', false, 120), {start: 0, end: 60});
 assert.deepEqual(editorNudge({start: 10, end: 60}, 'end', 'End', false, 120), {start: 10, end: 120});
+assert.deepEqual(editorNudge({start: 10, end: 60}, 'end', 'PageDown', false, 120), {start: 10, end: 50});
+assert.deepEqual(editorNudge({start: 10, end: 60}, 'start', 'PageUp', false, 120), {start: 20, end: 60});
 assert.equal(editorNudge({start: 10, end: 60}, 'end', 'a', false, 120), null);
 """)
 
@@ -177,5 +179,110 @@ def test_editor_markup_is_an_accessible_native_dialog():
         assert f'<label for="{field}"' in dialog and f'id="{field}"' in dialog
     assert 'id="editor-error"' in dialog and 'role="alert"' in dialog
     assert '<button type="button" id="editor-cancel"' in dialog, "Enter must not cancel"
+    assert 'type="submit"' not in dialog and dialog.count("<button") == dialog.count('<button type="button"'), \
+        "Enter in a time field must never add or save"
     assert 'inputmode="decimal"' not in dialog
     assert 'id="trim-dialog"' not in html and "workspace-trim.js" not in html
+
+
+def test_enter_in_a_time_field_applies_the_time_and_adds_nothing():
+    run_js(SETUP + """
+await openAudioEditorForFile('Twinkle.mp3');
+const start = document.getElementById('editor-start'), end = document.getElementById('editor-end');
+start.value = '0:05'; end.value = '0:15';
+end.focus();
+let prevented = false;
+editor.onsubmit({preventDefault() { prevented = true; }});
+assert.equal(prevented, true);
+assert.deepEqual(editorState.selection, {start: 5, end: 15});
+assert.equal(posts.some(p => p.url.endsWith('/clip')), false);
+assert.deepEqual(uploads, []);
+assert.equal(editor.open, true);
+start.value = '0:07';
+let stopped = false;
+start.dispatchEvent({type: 'keydown', key: 'Enter', preventDefault() { stopped = true; }});
+assert.equal(stopped, true);
+assert.deepEqual(editorState.selection, {start: 7, end: 15}, 'Return on a phone keyboard applies the time');
+""")
+
+
+def test_a_finishing_add_never_closes_an_editor_opened_since():
+    run_js(SETUP + """
+await openAudioEditorForFile('Twinkle.mp3');
+setEditorSelection({start: 5, end: 15});
+let release;
+const slow = new Promise(resolve => { release = resolve; });
+uploadExisting = async () => { await slow; };
+const adding = editorAddToTonie();
+editor.close();
+await openAudioEditorForFile('Other.mp3');
+release();
+await adding;
+assert.equal(editor.open, true);
+assert.equal(editorState.filename, 'Other.mp3');
+assert.equal(document.getElementById('editor-error').textContent, '');
+""")
+
+
+def test_escape_is_ignored_while_a_clip_is_being_saved():
+    run_js(SETUP + """
+await openAudioEditorForFile('Twinkle.mp3');
+editorState.busy = true;
+let prevented = false;
+editor.dispatchEvent({type: 'cancel', preventDefault() { prevented = true; }});
+assert.equal(prevented, true);
+editorState.busy = false;
+prevented = false;
+editor.dispatchEvent({type: 'cancel', preventDefault() { prevented = true; }});
+assert.equal(prevented, false);
+""")
+
+
+def test_server_errors_read_as_plain_sentences():
+    run_js(SETUP + """
+assert.equal(editorErrorText(Error('HTTP 422: {"detail":"The clip must end after it starts"}')), 'The clip must end after it starts');
+assert.equal(editorErrorText(Error('HTTP 502: Bad gateway')), 'Bad gateway');
+assert.equal(editorErrorText(Error('Choose a Tonie first.')), 'Choose a Tonie first.');
+await openAudioEditorForFile('Twinkle.mp3');
+setEditorSelection({start: 5, end: 15});
+api = async () => { throw Error('HTTP 429: {"detail":"The editor is busy; try again in a moment"}'); };
+await editorSaveClip();
+assert.equal(document.getElementById('editor-error').textContent, 'The editor is busy; try again in a moment');
+""")
+
+
+def test_handles_on_the_same_spot_move_towards_the_side_pressed():
+    run_js("""
+const together = {start: 50, end: 50.5};
+assert.equal(editorPickHandle('end', 49, together, 2), 'start');
+assert.equal(editorPickHandle('end', 52, together, 2), 'end');
+assert.equal(editorPickHandle('start', 51, together, 2), 'end');
+assert.equal(editorPickHandle('end', 49, {start: 10, end: 60}, 2), 'end', 'apart: the handle pressed');
+""")
+
+
+def test_waveform_requests_allow_for_long_tracks_and_stale_zooms_are_dropped():
+    run_js(SETUP + """
+const timeouts = [];
+const realApi = api;
+api = async (url, options, timeout) => { timeouts.push([url, timeout]); return realApi(url, options); };
+await openAudioEditorForFile('Twinkle.mp3');
+assert.ok(timeouts.find(([u]) => u.includes('/waveform'))[1] >= 180000);
+let release;
+api = async () => { await new Promise(r => { release = r; }); return {seconds: 120, start: 0, end: 10, peaks: []}; };
+const zoom = toggleEditorZoom();
+editorState.request += 1;
+release();
+await zoom;
+assert.equal(document.getElementById('editor-zoom').getAttribute('aria-pressed'), 'false');
+""")
+
+
+def test_start_handle_range_ends_at_the_end_handle():
+    run_js(SETUP + """
+await openAudioEditorForFile('Twinkle.mp3');
+setEditorSelection({start: 5, end: 15});
+const start = document.getElementById('editor-handle-start'), end = document.getElementById('editor-handle-end');
+assert.deepEqual([start.getAttribute('aria-valuemin'), start.getAttribute('aria-valuemax')], ['0', '15']);
+assert.deepEqual([end.getAttribute('aria-valuemin'), end.getAttribute('aria-valuemax')], ['5', '120']);
+""")

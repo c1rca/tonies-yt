@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 from collections import deque
@@ -510,9 +511,11 @@ def select_candidate(job_id: str, req: SelectionRequest):
 
 
 @app.post("/api/jobs/{job_id}/fetch")
-def fetch_candidate_to_library(job_id: str, req: FetchRequest):
+async def fetch_candidate_to_library(job_id: str, req: FetchRequest):
+    # Awaited, not blocked on: a long queue of downloads must not tie up a server thread.
     try:
-        return {"filename": fetch_candidate(job_id, req.index).name}
+        path = await asyncio.wrap_future(fetch_candidate(job_id, req.index))
+        return {"filename": Path(path).name}
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from None
     except RuntimeError:

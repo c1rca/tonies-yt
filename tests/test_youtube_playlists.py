@@ -85,7 +85,7 @@ def playlist_job(monkeypatch, tmp_path):
     state = {"enqueued": [], "running": 0, "peak": 0, "slow": set(), "fail": set()}
     lock = threading.Lock()
 
-    def fake_download(url, out_dir: Path, preferred_title=None, trim=None):
+    def fake_download(url, out_dir: Path, preferred_title=None):
         with lock:
             state["running"] += 1
             state["peak"] = max(state["peak"], state["running"])
@@ -157,8 +157,8 @@ def test_adding_to_the_top_downloads_in_hand_over_order(playlist_job):
     job_id, state = playlist_job
     started = []
     original = jobs.download_mp3
-    monkeypatch_download = lambda url, out_dir, preferred_title=None, trim=None: (  # noqa: E731
-        started.append(preferred_title) or original(url, out_dir, preferred_title, trim))
+    monkeypatch_download = lambda url, out_dir, preferred_title=None: (  # noqa: E731
+        started.append(preferred_title) or original(url, out_dir, preferred_title))
     jobs.download_mp3 = monkeypatch_download
     try:
         _wait_done(jobs.select_candidates_and_continue(job_id, [0, 1, 2, 3], "tonie", {"edge": "start"}))
@@ -172,7 +172,7 @@ def test_a_job_that_failed_while_queued_never_downloads(playlist_job, monkeypatc
     gate = threading.Event()
     blocked = []
 
-    def slow(url, out_dir, preferred_title=None, trim=None):
+    def slow(url, out_dir, preferred_title=None):
         blocked.append(preferred_title)
         gate.wait(5)
         path = out_dir / f"{preferred_title}.mp3"
@@ -197,7 +197,7 @@ def test_a_track_whose_turn_never_comes_fails_instead_of_landing_out_of_order(pl
     monkeypatch.setattr(attach_order, "TURN_TIMEOUT_SEC", 0.2)
     release = threading.Event()
 
-    def download(url, out_dir, preferred_title=None, trim=None):
+    def download(url, out_dir, preferred_title=None):
         if preferred_title == "Song 1":
             release.wait(5)
         path = out_dir / f"{preferred_title}.mp3"

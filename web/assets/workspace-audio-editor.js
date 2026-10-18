@@ -2,6 +2,7 @@
 const CLOCK = /^(?:(\d+):)?(?:(\d+):)?(\d+(?:[.,]\d+)?)$/;
 const EDITOR_MIN_CLIP = 0.5;
 const EDITOR_POINTS = 1000;
+const EDITOR_WAVEFORM_TIMEOUT_MS = 180000;
 const editorState = {filename: '', seconds: 0, selection: {start: 0, end: 0}, view: {start: 0, end: 0},
   peaks: [], dragging: null, clipPlayback: false, busy: false, ready: false, request: 0, session: 0};
 
@@ -44,9 +45,9 @@ function editorFraction(time, view) {
 
 /** New selection for a key on a handle, or null when the key isn't handled. */
 function editorNudge(selection, which, key, shift, seconds) {
-  const step = shift ? 10 : 1;
-  const value = {ArrowLeft: selection[which] - step, ArrowDown: selection[which] - step,
-    ArrowRight: selection[which] + step, ArrowUp: selection[which] + step, Home: 0, End: seconds}[key];
+  const step = shift ? 10 : 1, at = selection[which];
+  const value = {ArrowLeft: at - step, ArrowDown: at - step, ArrowRight: at + step, ArrowUp: at + step,
+    PageDown: at - 10, PageUp: at + 10, Home: 0, End: seconds}[key];
   return value === undefined ? null : editorClamp({...selection, [which]: value}, seconds, which);
 }
 
@@ -56,6 +57,25 @@ function readClipWindow(startText, endText, seconds) {
   if (start >= seconds) return {start: 0, end: seconds, error: 'Start must be before the end of the track.'};
   if (end <= start) return {start: 0, end: seconds, error: 'End must be after the start.'};
   return {start, end: Math.min(end, seconds), error: ''};
+}
+
+/** Which handle a press on `pressed` moves: when both sit on the same spot, the side pressed decides. */
+function editorPickHandle(pressed, time, selection, closeSeconds) {
+  if (selection.end - selection.start > closeSeconds) return pressed;
+  return time < (selection.start + selection.end) / 2 ? 'start' : 'end';
+}
+
+/** "HTTP 422: {"detail":"…"}" -> "…": the message a person should read. */
+function editorErrorText(error) {
+  const text = String(error?.message || error);
+  const body = /^HTTP \d+: (.*)$/s.exec(text)?.[1];
+  if (!body) return text;
+  try {
+    const detail = JSON.parse(body)?.detail;
+    return typeof detail === 'string' ? detail : text;
+  } catch {
+    return body;
+  }
 }
 
 function isWholeTrack({start, end}, seconds) {
@@ -84,8 +104,9 @@ function renderEditorControls() {
     const handle = editorEl(`editor-handle-${which}`);
     handle.style.left = `${Math.min(100, Math.max(0, editorFraction(selection[which], editorState.view) * 100))}%`;
     handle.hidden = !ready || selection[which] < editorState.view.start || selection[which] > editorState.view.end;
-    handle.setAttribute('aria-valuemin', '0');
-    handle.setAttribute('aria-valuemax', String(Math.round(editorState.seconds)));
+    // Each handle can move up to the other one.
+    handle.setAttribute('aria-valuemin', String(Math.round(which === 'start' ? 0 : selection.start)));
+    handle.setAttribute('aria-valuemax', String(Math.round(which === 'start' ? selection.end : editorState.seconds)));
     handle.setAttribute('aria-valuenow', String(Math.round(selection[which])));
     handle.setAttribute('aria-valuetext', formatClock(selection[which]));
   }
@@ -96,7 +117,8 @@ function drawEditorWaveform() {
   const canvas = editorEl('editor-canvas');
   const context = canvas.getContext?.('2d');
   if (!context) return;
-  const ratio = window.devicePixelRatio || 1, width = canvas.clientWidth * ratio, height = canvas.clientHeight * ratio;
+  const ratio = window.devicePixelRatio || 1;
+  const width = Math.round(canvas.clientWidth * ratio), height = Math.round(canvas.clientHeight * ratio);
   if (canvas.width !== width || canvas.height !== height) Object.assign(canvas, {width, height});
   const style = getComputedStyle(canvas);
   const {peaks, view, selection} = editorState;
@@ -129,14 +151,17 @@ function ensureEditorSession(session) {
   if (session !== editorState.session) throw new EditorClosed();
 }
 
+/** Load the outline for `view`; false when a newer request or a close made this one stale. */
 async function loadEditorWaveform(view) {
   const request = ++editorState.request;
   const range = view.start > 0 || view.end < editorState.seconds ? `&start=${view.start}&end=${view.end}` : '';
-  const outline = await api(`/api/files/${encodeURIComponent(editorState.filename)}/waveform?points=${EDITOR_POINTS}${range}`);
-  if (request !== editorState.request) return;
+  const outline = await api(`/api/files/${encodeURIComponent(editorState.filename)}/waveform?points=${EDITOR_POINTS}${range}`,
+    {}, EDITOR_WAVEFORM_TIMEOUT_MS);
+  if (request !== editorState.request) return false;
   editorState.seconds = outline.seconds;
   editorState.view = {start: outline.start, end: outline.end};
   editorState.peaks = outline.peaks;
+  return true;
 }
 
 async function loadEditorFile(filename, session) {
@@ -175,7 +200,7 @@ async function openAudioEditorForFile(filename) {
   try {
     await loadEditorFile(filename, session);
   } catch (error) {
-    if (!(error instanceof EditorClosed)) setEditorStatus('', `Could not open this file: ${error?.message || error}`);
+    if (!(error instanceof EditorClosed)) setEditorStatus('', `Could not open this file: ${editorErrorText(error)}`);
   }
 }
 
@@ -194,7 +219,7 @@ async function openAudioEditorForCandidate(jobId, index) {
     setEditorStatus(`Saved to Local files as ${filename}`);
   } catch (error) {
     if (error instanceof EditorClosed) return;
-    setEditorStatus('', String(error?.message || error));
+    setEditorStatus('', editorErrorText(error));
     renderEditorControls();
   }
 }
@@ -212,16 +237,19 @@ async function editorClipFile() {
 
 async function runEditorAction(action) {
   if (editorState.busy || !editorState.ready) return;
+  const session = editorState.session;
   editorState.busy = true;
   renderEditorControls();
   try {
     await action();
-    editorEl('audio-editor').close();
+    if (session === editorState.session) editorEl('audio-editor').close();
   } catch (error) {
-    editorEl('editor-error').textContent = String(error?.message || error);
+    if (session === editorState.session) editorEl('editor-error').textContent = editorErrorText(error);
   } finally {
-    editorState.busy = false;
-    renderEditorControls();
+    if (session === editorState.session) {
+      editorState.busy = false;
+      renderEditorControls();
+    }
   }
 }
 
@@ -246,10 +274,11 @@ async function toggleEditorZoom() {
   const {start, end} = editorState.selection;
   const pad = Math.max(1, (end - start) * 0.1);
   try {
-    await loadEditorWaveform(zoomed ? {start: 0, end: editorState.seconds}
+    const fresh = await loadEditorWaveform(zoomed ? {start: 0, end: editorState.seconds}
       : {start: Math.max(0, start - pad), end: Math.min(editorState.seconds, end + pad)});
+    if (!fresh) return;
   } catch (error) {
-    editorEl('editor-error').textContent = String(error?.message || error);
+    editorEl('editor-error').textContent = editorErrorText(error);
     return;
   }
   editorEl('editor-zoom').setAttribute('aria-pressed', String(!zoomed));
@@ -265,6 +294,13 @@ function editorPlay(fromClipStart) {
   audio.play().catch(() => { editorEl('editor-error').textContent = 'Could not play this file.'; });
 }
 
+/** Apply the typed Start and End (on change, or Enter in either field). */
+function applyTypedClip(moved) {
+  const typed = readClipWindow(editorEl('editor-start').value, editorEl('editor-end').value, editorState.seconds);
+  if (typed.error) editorEl('editor-error').textContent = typed.error;
+  else setEditorSelection(typed, moved);
+}
+
 function editorPointerTime(event) {
   const box = editorEl('editor-wave').getBoundingClientRect();
   return editorTimeAt((event.clientX - box.left) / box.width, editorState.view);
@@ -277,7 +313,14 @@ function initAudioEditor() {
   editorEl('editor-play').onclick = () => editorPlay(false);
   editorEl('editor-play-clip').onclick = () => editorPlay(true);
   editorEl('editor-zoom').onclick = () => void toggleEditorZoom();
-  dialog.onsubmit = event => { event.preventDefault(); void editorAddToTonie(); };
+  editorEl('editor-add').onclick = () => void editorAddToTonie();
+  // Enter in a time field only applies the times; adding always takes a deliberate tap.
+  dialog.onsubmit = event => {
+    event.preventDefault();
+    if (editorState.ready) applyTypedClip(document.activeElement === editorEl('editor-start') ? 'start' : 'end');
+  };
+  // Escape can't close the editor while a clip is being saved or added.
+  dialog.addEventListener('cancel', event => { if (editorState.busy) event.preventDefault(); });
   dialog.onclose = () => {
     editorState.request += 1;
     editorState.session += 1;
@@ -286,32 +329,42 @@ function initAudioEditor() {
     audio.removeAttribute('src');
     audio.load();
   };
-  const frame = () => {
+  const stopAtClipEnd = () => {
     if (editorState.clipPlayback && audio.currentTime >= editorState.selection.end) audio.pause();
+  };
+  const frame = () => {
+    stopAtClipEnd();
     drawEditorWaveform();
     if (!audio.paused) requestAnimationFrame(frame);
   };
+  // Animation frames pause in background tabs; timeupdate still stops the clip there.
+  audio.addEventListener('timeupdate', stopAtClipEnd);
   audio.addEventListener('play', () => { renderEditorControls(); requestAnimationFrame(frame); });
   audio.addEventListener('pause', () => { editorState.clipPlayback = false; renderEditorControls(); });
   for (const which of ['start', 'end']) {
     const handle = editorEl(`editor-handle-${which}`);
     handle.addEventListener('pointerdown', event => {
       event.stopPropagation();
-      editorState.dragging = which;
+      const pixelSeconds = (editorState.view.end - editorState.view.start) / wave.getBoundingClientRect().width;
+      editorState.dragging = editorPickHandle(which, editorPointerTime(event), editorState.selection, 24 * pixelSeconds);
       handle.setPointerCapture(event.pointerId);
     });
     handle.addEventListener('pointermove', event => {
-      if (editorState.dragging === which) setEditorSelection({...editorState.selection, [which]: editorPointerTime(event)}, which);
+      const moving = editorState.dragging;
+      if (moving) setEditorSelection({...editorState.selection, [moving]: editorPointerTime(event)}, moving);
     });
-    handle.addEventListener('pointerup', () => { editorState.dragging = null; });
+    for (const end of ['pointerup', 'pointercancel', 'lostpointercapture']) {
+      handle.addEventListener(end, () => { editorState.dragging = null; });
+    }
     handle.addEventListener('keydown', event => {
       const next = editorNudge(editorState.selection, which, event.key, event.shiftKey, editorState.seconds);
       if (next) { event.preventDefault(); setEditorSelection(next, which); }
     });
-    editorEl(`editor-${which}`).addEventListener('change', () => {
-      const typed = readClipWindow(editorEl('editor-start').value, editorEl('editor-end').value, editorState.seconds);
-      if (typed.error) editorEl('editor-error').textContent = typed.error;
-      else setEditorSelection(typed, which);
+    const field = editorEl(`editor-${which}`);
+    field.addEventListener('change', () => applyTypedClip(which));
+    // Not every phone keyboard fires change on Return; apply it directly.
+    field.addEventListener('keydown', event => {
+      if (event.key === 'Enter') { event.preventDefault(); applyTypedClip(which); }
     });
   }
   wave.addEventListener('pointerdown', event => {

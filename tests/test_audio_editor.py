@@ -1,5 +1,6 @@
 """Audio editor backend: waveform outline, lossless clips of library files, YouTube to library."""
 import subprocess
+import threading
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -110,8 +111,14 @@ def test_clip_endpoint_refuses_bad_windows(library, client, body):
 
 
 @pytest.fixture
-def searched(monkeypatch, tmp_path, library):
+def downloads():
+    return []
+
+
+@pytest.fixture
+def searched(monkeypatch, tmp_path, library, downloads):
     def fake_download(url, out_dir: Path, preferred_title=None):
+        downloads.append(url)
         path = out_dir / f"{preferred_title}.mp3"
         path.write_bytes((library / "Song.mp3").read_bytes())
         return path
@@ -120,6 +127,7 @@ def searched(monkeypatch, tmp_path, library):
     monkeypatch.setattr(jobs, "search_youtube", lambda _q, limit=5: [
         {"title": "Twinkle", "url": "https://www.youtube.com/watch?v=AbCdEf_12-3", "duration": 10}])
     monkeypatch.setattr(jobs, "download_mp3", fake_download)
+    monkeypatch.setattr(jobs, "_fetches", {})
     job = jobs.create_job("song")
     jobs.run_job(job.id)
     return job.id
@@ -135,3 +143,42 @@ def test_a_youtube_result_can_be_fetched_into_the_library_for_editing(searched, 
 @pytest.mark.parametrize("body", [{"index": 3}, {"index": -1}, {"index": True}])
 def test_fetch_refuses_unknown_results(searched, client, body):
     assert client.post(f"/api/jobs/{searched}/fetch", json=body).status_code == 422
+
+
+def test_editing_the_same_video_again_reuses_its_file(searched, client, library, downloads):
+    first = client.post(f"/api/jobs/{searched}/fetch", json={"index": 0}).json()
+    again = client.post(f"/api/jobs/{searched}/fetch", json={"index": 0}).json()
+    assert first == again == {"filename": "Twinkle.mp3"}
+    assert len(downloads) == 1
+    (library / "Twinkle.mp3").unlink()
+    assert client.post(f"/api/jobs/{searched}/fetch", json={"index": 0}).json() == {"filename": "Twinkle.mp3"}
+    assert len(downloads) == 2, "a deleted copy is downloaded again"
+
+
+def test_two_edits_while_downloading_share_one_download(searched, library, downloads, monkeypatch):
+    gate = threading.Event()
+    real = jobs.download_mp3
+    monkeypatch.setattr(jobs, "download_mp3", lambda *a: gate.wait(5) and real(*a))
+    first, second = jobs.fetch_candidate(searched, 0), jobs.fetch_candidate(searched, 0)
+    assert first is second
+    gate.set()
+    assert first.result(5).name == "Twinkle.mp3" and len(downloads) == 1
+
+
+def test_a_video_already_added_is_not_downloaded_again(searched, client, library, downloads):
+    added = library / "Added.mp3"
+    added.write_bytes((library / "Song.mp3").read_bytes())
+    with jobs._lock:
+        job = jobs._jobs[searched]
+        job.selected_candidate = dict(job.candidates[0])
+        job.output_file = str(added)
+    assert client.post(f"/api/jobs/{searched}/fetch", json={"index": 0}).json() == {"filename": "Added.mp3"}
+    assert downloads == []
+
+
+def test_editor_ffmpeg_work_is_limited_to_two_at_a_time(library, client, monkeypatch):
+    monkeypatch.setattr(media_files, "_EDITOR_SLOTS", threading.BoundedSemaphore(0))
+    busy = client.get("/api/files/Song.mp3/waveform")
+    assert busy.status_code == 429 and busy.headers["retry-after"] == "3"
+    assert client.post("/api/files/Song.mp3/clip", json={"start": 1, "end": 2}).status_code == 429
+    assert [p.name for p in library.iterdir()] == ["Song.mp3"], "no clip or temp file is left behind"

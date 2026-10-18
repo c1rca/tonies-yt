@@ -4,7 +4,7 @@ import math
 import os
 import tempfile
 import threading
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 import queue
 import uuid
 import time
@@ -490,17 +490,45 @@ def select_candidates_and_continue(job_id: str, indexes: list[int], target_url: 
     return [job.id for job in spawned]
 
 
-def fetch_candidate(job_id: str, index: int) -> Path:
-    """Download one result into the local library (for the editor) without adding it anywhere."""
+_fetches: dict[str, Future] = {}  # video URL -> download for the editor (in flight or done)
+
+
+def _library_copy(url: str) -> Optional[Path]:
+    """A file already downloaded for this video (by an add or an earlier edit), if still there. Holds _lock."""
+    done = _fetches.get(url)
+    if done is not None and done.done() and not done.exception() and Path(done.result()).is_file():
+        return Path(done.result())
+    for st in _jobs.values():
+        if (st.selected_candidate or {}).get("url") == url and st.output_file and Path(st.output_file).is_file():
+            return Path(st.output_file)
+    return None
+
+
+def fetch_candidate(job_id: str, index: int) -> Future:
+    """Download one result into the local library (for the editor) without adding it anywhere.
+
+    Reuses a copy the library already has, and joins a download already running for the
+    same video, so opening Edit twice never makes a second file.
+    """
     with _lock:
         st = _jobs.get(job_id)
         if not st or not 0 <= index < len(st.candidates):
             raise ValueError("That video is no longer in the results; search again")
         selected = dict(st.candidates[index])
-    title = selected.get("title") or (st.parsed or {}).get("preferred_title")
-    # Same FIFO pool as adds, so the editor never runs more than three downloads at once.
-    future = _downloads.submit(download_mp3, selected["url"], settings.data_dir / "downloads", title)
-    return Path(future.result())
+        url = selected["url"]
+        existing = _library_copy(url)
+        if existing is not None:
+            ready: Future = Future()
+            ready.set_result(existing)
+            return ready
+        running = _fetches.get(url)
+        if running is not None and not running.done():
+            return running
+        title = selected.get("title") or (st.parsed or {}).get("preferred_title")
+        # Same FIFO pool as adds, so the editor never runs more than three downloads at once.
+        future = _downloads.submit(download_mp3, url, settings.data_dir / "downloads", title)
+        _fetches[url] = future
+    return future
 
 
 def run_selected_candidate_async(job_id: str, selected: dict, target_url: Optional[str] = None,

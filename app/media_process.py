@@ -36,9 +36,9 @@ class Trim:
     def validate(self) -> "Trim":
         values = [self.start] + ([] if self.end is None else [self.end])
         if not all(isinstance(v, (int, float)) and math.isfinite(v) and 0 <= v <= _MAX_SECONDS for v in values):
-            raise ValueError("Trim times must be between 0 and 24 hours")
+            raise ValueError("Clip times must be between 0 and 24 hours")
         if self.end is not None and self.end <= self.start:
-            raise ValueError("Trim end must be after the start")
+            raise ValueError("The clip must end after it starts")
         return self
 
     @property
@@ -77,7 +77,7 @@ def _trimmed_seconds(source: Path, trim: Trim | None) -> float | None:
     if trim is None:
         return total
     if trim.start >= total:
-        raise TrimOutsideAudio("Trim starts after the end of the audio")
+        raise TrimOutsideAudio("The clip starts after the end of the audio")
     return min(total, trim.end if trim.end is not None else total) - trim.start
 
 

@@ -21,6 +21,8 @@ CHUNK_BYTES = 64 * 1024
 _WAVEFORM_CACHE_SIZE = 16
 _waveforms: OrderedDict[tuple, dict] = OrderedDict()
 _waveforms_lock = threading.Lock()
+# Waveforms and clips each run ffmpeg; a couple at a time is plenty for one household.
+_EDITOR_SLOTS = threading.BoundedSemaphore(2)
 
 
 def library_file(filename: str) -> Path:
@@ -112,6 +114,18 @@ def _editor_error(error: Exception) -> HTTPException:
     return HTTPException(status_code=400, detail="This audio file can't be read")
 
 
+class _editor_slot:
+    """Hold one of the editor's ffmpeg slots, or answer 429 when they are all busy."""
+
+    def __enter__(self):
+        if not _EDITOR_SLOTS.acquire(blocking=False):
+            raise HTTPException(status_code=429, detail="The editor is busy; try again in a moment",
+                                headers={"Retry-After": "3"})
+
+    def __exit__(self, *_):
+        _EDITOR_SLOTS.release()
+
+
 def clear_waveform_cache() -> None:
     with _waveforms_lock:
         _waveforms.clear()
@@ -128,7 +142,8 @@ def library_waveform(filename: str, *, start: float, end: float | None, points: 
             return _waveforms[key]
     window = None if start == 0 and end is None else Trim(start=start, end=end)
     try:
-        outline = waveform(path, window=window, points=points)
+        with _editor_slot():
+            outline = waveform(path, window=window, points=points)
     except (ValueError, RuntimeError) as error:
         raise _editor_error(error) from None
     with _waveforms_lock:
@@ -157,7 +172,8 @@ async def clip_library_file(filename: str, start: float, end: float) -> dict:
     os.close(fd)
     temporary = Path(name)
     try:
-        await run_in_threadpool(cut_mp3, source, temporary, trim)
+        with _editor_slot():
+            await run_in_threadpool(cut_mp3, source, temporary, trim)
         final = downloads / f"{base}.mp3"
         try:
             os.link(temporary, final)  # exclusive: never overwrite another file
