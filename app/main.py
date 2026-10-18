@@ -17,7 +17,7 @@ from .config import settings
 from .credentials import setup_status, initialize_vault, login_unlock, lock_runtime, get_credentials, change_app_password, update_tonies_credentials, vault_configured, VaultError
 from .media_files import clip_library_file, library_file, library_files, library_waveform, store_upload
 from .downloader import PLAYLIST_MAX, clear_search_cache
-from .jobs import create_job, get_job, list_jobs, start_worker, select_candidate_and_continue, select_candidates_and_continue, fetch_candidate, create_upload_only_job, get_events_since, get_event_stats, get_queue_stats, cancel_job
+from .job_store import create_job, get_job, list_jobs, get_events_since, get_event_stats, get_queue_stats, cancel_job; from .job_pipeline import start_worker, select_candidate_and_continue, select_candidates_and_continue, fetch_candidate; from .job_upload import create_upload_only_job
 from .logger import setup_logging
 from .models import ChatRequest
 from .subprocess_runner import run_bounded

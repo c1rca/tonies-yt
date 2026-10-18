@@ -1,4 +1,4 @@
-from app.jobs import create_job, get_job, list_jobs
+from app.job_store import create_job, get_job, list_jobs
 
 
 def test_create_and_get_job():

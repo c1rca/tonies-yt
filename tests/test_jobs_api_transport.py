@@ -4,7 +4,7 @@ import time
 
 import pytest
 
-from app import jobs
+from app import job_store as jobs, job_upload, uploader
 from app.actions import ActionQueue
 
 
@@ -41,9 +41,9 @@ class FakeTonies:
 @pytest.fixture
 def cloud(monkeypatch):
     fake = FakeTonies()
-    monkeypatch.setattr(jobs, "action_queue", ActionQueue(lambda: fake, batch_window=0.05))
-    monkeypatch.setattr(jobs, "resolve_upload_target", lambda target, url: url or "synthetic-target")
-    monkeypatch.setattr(jobs, "upload_title", lambda path: f"{path.stem} [oc:abc123]")
+    monkeypatch.setattr(uploader, "action_queue", ActionQueue(lambda: fake, batch_window=0.05))
+    monkeypatch.setattr(uploader, "resolve_upload_target", lambda target, url: url or "synthetic-target")
+    monkeypatch.setattr(uploader, "upload_title", lambda path: f"{path.stem} [oc:abc123]")
     return fake
 
 
@@ -51,7 +51,7 @@ def upload_job(tmp_path, name="track", position=None):
     path = tmp_path / f"{name}.mp3"
     path.write_bytes(b"synthetic-audio")
     state = jobs.create_job(f"synthetic {name}")
-    jobs._enqueue_upload(state.id, path, target=None, target_url="synthetic-target", position=position)
+    job_upload._enqueue_upload(state.id, path, target=None, target_url="synthetic-target", position=position)
     return state.id
 
 
@@ -115,5 +115,5 @@ def test_many_uploads_transfer_in_parallel_and_attach_in_queued_order(cloud, tmp
 
 def test_upload_queue_does_not_hold_credentials(cloud, tmp_path):
     job = wait_for(upload_job(tmp_path))
-    action = jobs.action_queue.get(job.tonies_action_id)
+    action = uploader.action_queue.get(job.tonies_action_id)
     assert not {"tonies_email", "tonies_password", "email", "password"} & set(action.params)

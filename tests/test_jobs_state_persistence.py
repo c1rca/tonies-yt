@@ -1,7 +1,7 @@
 import json
 import threading
 
-from app import jobs
+from app import job_store as jobs
 from app.models import JobState
 
 

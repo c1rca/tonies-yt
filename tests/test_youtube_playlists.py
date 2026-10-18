@@ -7,7 +7,7 @@ import time
 from fastapi.testclient import TestClient
 import pytest
 
-from app import attach_order, downloader, jobs, main
+from app import attach_order, downloader, job_pipeline as jobs, job_store, job_upload, main
 from app.models import ParseIntent
 from app.youtube_source import is_playlist_url, normalize_youtube_input
 
@@ -102,29 +102,29 @@ def playlist_job(monkeypatch, tmp_path):
 
     def fake_enqueue(job_id, path, **kwargs):
         state["enqueued"].append((Path(path).stem, kwargs.get("position")))
-        jobs._update(job_id, status="done", output_file=str(path))
+        job_store._update(job_id, status="done", output_file=str(path))
 
     monkeypatch.setattr(jobs, "parse_request", lambda _m: ParseIntent(youtube_query=PLAYLIST))
     monkeypatch.setattr(jobs, "search_youtube", lambda _q, limit=5: [
         {"title": f"Song {n}", "url": f"https://www.youtube.com/watch?v=Video00000{n}", "duration": 60}
         for n in range(1, 5)])
     monkeypatch.setattr(jobs, "download_mp3", fake_download)
-    monkeypatch.setattr(jobs, "_enqueue_upload", fake_enqueue)
-    job = jobs.create_job(PLAYLIST)
+    monkeypatch.setattr(job_upload, "_enqueue_upload", fake_enqueue)
+    job = job_store.create_job(PLAYLIST)
     jobs.run_job(job.id)
     return job.id, state
 
 
 def _wait_done(ids):
     deadline = time.time() + 5
-    while time.time() < deadline and any(jobs.get_job(i).status not in ("done", "failed") for i in ids):
+    while time.time() < deadline and any(job_store.get_job(i).status not in ("done", "failed") for i in ids):
         time.sleep(0.02)
 
 
 def test_a_listed_playlist_is_marked_as_one(playlist_job):
     job_id, _state = playlist_job
-    assert jobs.get_job(job_id).playlist is True
-    assert len(jobs.get_job(job_id).candidates) == 4
+    assert job_store.get_job(job_id).playlist is True
+    assert len(job_store.get_job(job_id).candidates) == 4
 
 
 def test_adding_several_videos_attaches_them_in_list_order_at_the_end(playlist_job):
@@ -133,7 +133,7 @@ def test_adding_several_videos_attaches_them_in_list_order_at_the_end(playlist_j
     ids = jobs.select_candidates_and_continue(job_id, [0, 1, 2, 3], "tonie", {"edge": "end"})
     _wait_done(ids)
     assert [stem for stem, _ in state["enqueued"]] == ["Song 1", "Song 2", "Song 3", "Song 4"]
-    assert jobs.get_job(job_id).status == "awaiting_selection", "the list stays available"
+    assert job_store.get_job(job_id).status == "awaiting_selection", "the list stays available"
 
 
 def test_adding_several_to_the_top_keeps_the_first_video_on_top(playlist_job):
@@ -150,7 +150,7 @@ def test_one_failed_download_does_not_stall_the_rest(playlist_job):
     ids = jobs.select_candidates_and_continue(job_id, [0, 1, 2], "tonie", {"edge": "end"})
     _wait_done(ids)
     assert [stem for stem, _ in state["enqueued"]] == ["Song 1", "Song 3"]
-    assert [jobs.get_job(i).status for i in ids] == ["done", "failed", "done"]
+    assert [job_store.get_job(i).status for i in ids] == ["done", "failed", "done"]
 
 
 def test_adding_to_the_top_downloads_in_hand_over_order(playlist_job):
@@ -184,11 +184,11 @@ def test_a_job_that_failed_while_queued_never_downloads(playlist_job, monkeypatc
     deadline = time.time() + 2
     while len(blocked) < 3 and time.time() < deadline:
         time.sleep(0.01)
-    jobs.expire_job(ids[3], "Timed out in state 'queued_download'")
+    job_store.expire_job(ids[3], "Timed out in state 'queued_download'")
     gate.set()
     _wait_done(ids)
     assert "Song 4" not in blocked
-    assert jobs.get_job(ids[3]).status == "failed"
+    assert job_store.get_job(ids[3]).status == "failed"
     assert [stem for stem, _ in state["enqueued"]] == ["Song 1", "Song 2", "Song 3"]
 
 
@@ -207,12 +207,12 @@ def test_a_track_whose_turn_never_comes_fails_instead_of_landing_out_of_order(pl
     monkeypatch.setattr(jobs, "download_mp3", download)
     ids = jobs.select_candidates_and_continue(job_id, [0, 1], "tonie", {"edge": "end"})
     deadline = time.time() + 3
-    while jobs.get_job(ids[1]).status != "failed" and time.time() < deadline:
+    while job_store.get_job(ids[1]).status != "failed" and time.time() < deadline:
         time.sleep(0.02)
     release.set()
     _wait_done(ids)
-    assert jobs.get_job(ids[1]).status == "failed"
-    assert "add it again" in jobs.get_job(ids[1]).error
+    assert job_store.get_job(ids[1]).status == "failed"
+    assert "add it again" in job_store.get_job(ids[1]).error
     assert [stem for stem, _ in state["enqueued"]] == ["Song 1"]
 
 
