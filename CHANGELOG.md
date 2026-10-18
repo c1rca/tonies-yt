@@ -5,6 +5,7 @@ All notable changes to Tonies-YT. Versions follow [Semantic Versioning](https://
 ## [Unreleased]
 
 ### Added
+- Settings, Logs, Sign-in and Setup now share the workspace's look, header and light/dark/system appearance (shared `theme.css`/`theme.js`, `pages.css`).
 - One-level per-Tonie server-owned Undo for guarded Rename/Move/new-upload inverses, with expiry, account reset invalidation and a five-second pre-commit cancellation window for removals. No pretend recovery after committed deletion/Clear all; uncertain inverses are never replayed.
 - Selected-Tonie-first Audio Workspace: desktop Tonie rail with adjacent Tracks and Add audio panes; mobile Tracks / Add audio / Activity navigation and a sticky target/capacity header.
 - YouTube / Local source tabs preserve in-session searches and filters. Local multi-selection adds to the captured destination; native local preview remains mounted across all workspace views.

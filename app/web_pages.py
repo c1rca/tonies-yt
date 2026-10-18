@@ -8,7 +8,7 @@ from fastapi.responses import HTMLResponse
 def page_response(path: str, *, version: str) -> HTMLResponse:
     """Add one consistent footer without JavaScript or a version-network probe."""
     content = Path(path).read_text(encoding="utf-8")
-    stylesheet = '<link rel="stylesheet" href="/static/assets/page-footer.css">'
+    stylesheet = '<link rel="stylesheet" href="/static/assets/page-footer.css?v=2">'
     footer = (
         '<footer class="app-version-footer" aria-label="Application version">'
         '<a href="https://github.com/c1rca/tonies-yt" target="_blank" '

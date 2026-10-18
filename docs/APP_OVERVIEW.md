@@ -89,7 +89,9 @@ flowchart LR
 - `web/assets/session.js`: sends the browser to sign-in when its session ends
 - `web/assets/workspace-*.js`: focused navigation, source, track, Activity and dialog behavior
 - `web/assets/local-preview.js`: one persistent authenticated local player
-- `web/assets/workspace.css`: responsive light/dark workspace styles
+- `web/assets/theme.css`, `theme.js`: shared theme tokens, base controls and app header for every page
+- `web/assets/workspace.css`: responsive workspace layout
+- `web/assets/pages.css`: Settings, Logs, Sign-in and Setup layouts
 
 ## Important data
 

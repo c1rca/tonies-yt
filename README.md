@@ -62,7 +62,9 @@ No framework, build step or external frontend dependency is required. The page l
 - `workspace-activity.js`: in-session job/action presentation and dismissible feedback; never mutation replay or client-side recovery history.
 - `workspace-dialogs.js`: confirmation ownership, keyboard focus and safe initial action.
 - `local-preview.js`: persistent native local playback, source switching and cleanup.
-- `workspace.css`: readable theme tokens, shell, source/track/player components and explicit touch-layout rules.
+- `theme.css` + `theme.js`: theme tokens (light, dark, system), base controls and the app header, shared by every page; the saved appearance is applied before first paint.
+- `workspace.css`: workspace shell, source/track/player components and explicit touch-layout rules.
+- `pages.css`: Settings, Logs, Sign-in and Setup layouts in the same style.
 
 The existing queue, receipt reconciliation, caching, drag/drop and SSE/polling domain controller remains in `index.html`; this change does not claim a wholesale legacy-controller refactor. Feature modules call those established boundaries rather than wrapping or replacing them. Frontend contract tests evaluate the actual local scripts in page order and fail if an async contract never reaches its final assertion.
 

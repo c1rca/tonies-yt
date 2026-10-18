@@ -4,52 +4,24 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Tonies-YT Settings</title>
-    <style>
-      :root { color-scheme: dark; }
-      body { margin:0; font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial; background:#0b1220; color:#e9efff; }
-      .wrap { max-width:720px; margin:40px auto; padding:0 16px; }
-      .card { background:linear-gradient(180deg,#111b30 0%,#0f182b 100%); border:1px solid #263a5f; border-radius:14px; padding:16px; margin-bottom:12px; box-shadow: 0 6px 18px #00000022; }
-      h1 { margin:0 0 6px; font-size:22px; letter-spacing:.2px; }
-      h2 { margin:0; font-size:15px; color:#e6efff; }
-      .muted { color:#9eb1dc; font-size:14px; }
-      .desc { color:#98abd3; font-size:13px; margin-top:4px; }
-      .grid { display:grid; gap:10px; margin-top:14px; }
-      label { font-size:13px; color:#b8c8ea; }
-      input, select { width:100%; box-sizing:border-box; background:#0a1328; color:#e9efff; border:1px solid #385082; border-radius:10px; padding:9px 10px; }
-      .field-row { display:flex; gap:8px; align-items:center; }
-      .field-row input { flex:1; }
-      button { margin-top:12px; background:#3f75ff; color:white; border:0; border-radius:10px; padding:10px 12px; cursor:pointer; font-weight:600; }
-      button.secondary { background:#1f2f4d; border:1px solid #385082; }
-      button.ghosty { background:#16233c; border:1px solid #385082; color:#cfe0ff; padding:8px 10px; margin-top:0; font-weight:500; }
-      button:disabled { opacity:.65; cursor:not-allowed; }
-      .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
-      .status { margin-top:10px; font-size:13px; color:#9eb1dc; min-height:18px; }
-      .ok { color:#bcf4e0; }
-      .err { color:#ffc9d6; }
-      .warn { color:#ffd79b; }
-      .hint { margin-top:6px; color:#8da3cf; font-size:12px; }
-      .chip { border:1px solid #2f456f; border-radius:999px; padding:4px 9px; font-size:12px; color:#c4d6ff; text-decoration:none; }
-      .kv { display:flex; justify-content:space-between; align-items:center; gap:12px; padding:8px 2px; border:0; border-bottom:1px solid #243552; background:transparent; border-radius:0; }
-      .kv:last-of-type { border-bottom:0; }
-      .kv .k { color:#a9bddf; font-size:13px; }
-      .kv .v { color:#f0f5ff; font-size:13px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; text-align:right; line-height:1.3; word-break:break-word; overflow-wrap:anywhere; }
-      .pill-ok { color:#9cefc5; border:1px solid #2f6b4a; background:#133524; border-radius:999px; padding:3px 9px; font-size:12px; }
-      .pill-warn { color:#ffd79b; border:1px solid #7b5a21; background:#34270f; border-radius:999px; padding:3px 9px; font-size:12px; }
-    </style>
+    <script src="/static/assets/theme.js?v=1"></script>
+    <link rel="stylesheet" href="/static/assets/theme.css?v=1" />
+    <link rel="stylesheet" href="/static/assets/pages.css?v=1" />
   </head>
   <body>
-    <div class="wrap">
-      <div class="row" style="justify-content:space-between;margin-bottom:10px;">
-        <h1 style="margin:0;">Settings</h1>
-        <a href="/" class="chip">← Back</a>
-      </div>
+    <div class="page">
+      <header class="app-header">
+        <a class="app-brand" href="/" aria-label="Tonies-YT home"><img src="/static/assets/tonie-box-icon.webp?v=1" alt="" width="34" height="34" /><span>Tonies-YT <small>Audio workspace</small></span></a>
+        <a href="/" class="back-link">← Back to workspace</a>
+      </header>
+      <div class="page-heading"><h1>Settings</h1></div>
 
       <div class="card">
         <h2>Search defaults</h2>
         <div class="desc">Set how many YouTube results to show per search.</div>
         <div class="grid">
           <div>
-            <label>YouTube search results</label>
+            <label for="search-limit">YouTube search results</label>
             <select id="search-limit">
               <option value="5">5</option>
               <option value="10">10</option>
@@ -58,7 +30,7 @@
             </select>
           </div>
         </div>
-        <button id="save-search">Save search settings</button>
+        <div class="actions"><button id="save-search">Save search settings</button></div>
         <div id="status-search" class="status"></div>
       </div>
 
@@ -69,7 +41,6 @@
           <div class="kv"><span class="k">Tonies-YT</span><span id="ver-app" class="v">loading…</span></div>
           <div class="kv"><span class="k">yt-dlp installed</span><span id="ver-ytdlp" class="v">loading…</span></div>
           <div class="kv"><span class="k">Deno runtime</span><span id="ver-deno" class="v">loading…</span></div>
-
         </div>
         <div id="status-ytdlp" class="status">To update yt-dlp in Docker, rebuild the image and recreate the container. Native installs: update yt-dlp in the app's Python environment, then restart the app.</div>
       </div>
@@ -79,29 +50,29 @@
         <div class="desc">Change the password used to unlock this local app.</div>
         <div class="grid">
           <div>
-            <label>Current app password</label>
+            <label for="current">Current app password</label>
             <div class="field-row">
               <input id="current" type="password" autocomplete="current-password" />
-              <button class="ghosty" id="toggle-current" type="button">Show</button>
+              <button class="ghost" id="toggle-current" type="button">Show</button>
             </div>
           </div>
           <div>
-            <label>New app password</label>
+            <label for="next">New app password</label>
             <div class="field-row">
               <input id="next" type="password" autocomplete="new-password" />
-              <button class="ghosty" id="toggle-next" type="button">Show</button>
+              <button class="ghost" id="toggle-next" type="button">Show</button>
             </div>
           </div>
           <div>
-            <label>Confirm new app password</label>
+            <label for="next-confirm">Confirm new app password</label>
             <div class="field-row">
               <input id="next-confirm" type="password" autocomplete="new-password" />
-              <button class="ghosty" id="toggle-next-confirm" type="button">Show</button>
+              <button class="ghost" id="toggle-next-confirm" type="button">Show</button>
             </div>
 
           </div>
         </div>
-        <button id="save">Update password</button>
+        <div class="actions"><button id="save">Update password</button></div>
         <div id="status" class="status"></div>
       </div>
 
@@ -109,11 +80,11 @@
         <h2>Tonies account</h2>
         <div class="desc">Update stored credentials for my.tonies.com uploads.</div>
         <div class="grid">
-          <div><label>App password</label><input id="cred-app-password" type="password" autocomplete="current-password" /></div>
-          <div><label>Tonies email</label><input id="tonies-email" type="email" autocomplete="username" placeholder="you@example.com" /></div>
-          <div><label>my.tonies.com password</label><input id="tonies-password" type="password" autocomplete="new-password" placeholder="••••••••" /></div>
+          <div><label for="cred-app-password">App password</label><input id="cred-app-password" type="password" autocomplete="current-password" /></div>
+          <div><label for="tonies-email">Tonies email</label><input id="tonies-email" type="email" autocomplete="username" placeholder="you@example.com" /></div>
+          <div><label for="tonies-password">my.tonies.com password</label><input id="tonies-password" type="password" autocomplete="new-password" placeholder="••••••••" /></div>
         </div>
-        <button id="save-tonies">Update Tonies credentials</button>
+        <div class="actions"><button id="save-tonies">Update Tonies credentials</button></div>
         <div id="status-tonies" class="status"></div>
       </div>
     </div>

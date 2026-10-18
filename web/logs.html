@@ -4,72 +4,40 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Tonies-YT Logs</title>
-    <style>
-      :root { color-scheme: dark; }
-      body {
-        margin: 0;
-        font-family: Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial;
-        background: #0b1220;
-        color: #e9efff;
-      }
-      .wrap { max-width: 1100px; margin: 24px auto; padding: 0 16px 24px; }
-      .top { display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom: 12px; }
-      .card { background:#101a2d; border:1px solid #233555; border-radius: 12px; padding: 12px; }
-      .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
-      .chip { border:1px solid #2f456f; border-radius:999px; padding:5px 10px; font-size:12px; color:#c4d6ff; }
-      .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
-      select, button {
-        background:#0a1328; color:#e9efff; border:1px solid #385082; border-radius:8px; padding:6px 10px;
-      }
-      button { cursor:pointer; }
-      pre {
-        margin: 0;
-        min-height: 60vh;
-        max-height: 72vh;
-        overflow: auto;
-        background:#0a1224;
-        border:1px solid #223557;
-        border-radius:10px;
-        padding:12px;
-        line-height:1.45;
-        font-size:12px;
-        white-space: pre-wrap;
-        word-break: break-word;
-      }
-      a { color: #9ed0ff; text-decoration: none; }
-    </style>
+    <script src="/static/assets/theme.js?v=1"></script>
+    <link rel="stylesheet" href="/static/assets/theme.css?v=1" />
+    <link rel="stylesheet" href="/static/assets/pages.css?v=1" />
   </head>
   <body>
-    <div class="wrap">
-      <div class="top">
-        <div>
-          <h1 style="margin:0 0 4px; font-size:20px;">Application Logs</h1>
-          <div style="color:#9eb1dc;font-size:13px;">Persistent logs from the server (file-backed)</div>
-        </div>
-        <a href="/" class="chip">← Back to app</a>
+    <div class="page wide">
+      <header class="app-header">
+        <a class="app-brand" href="/" aria-label="Tonies-YT home"><img src="/static/assets/tonie-box-icon.webp?v=1" alt="" width="34" height="34" /><span>Tonies-YT <small>Audio workspace</small></span></a>
+        <a href="/" class="back-link">← Back to workspace</a>
+      </header>
+      <div class="page-heading">
+        <h1>Application logs</h1>
+        <p class="desc">Recent server log lines, newest last.</p>
       </div>
 
-      <div class="card" style="margin-bottom:10px;">
-        <div class="row" style="justify-content:space-between;">
-          <div class="row">
-            <span class="chip mono" id="log-file">file: -</span>
-            <span class="chip" id="log-level">level: -</span>
-          </div>
-          <div class="row">
-            <label for="line-count" style="font-size:13px;color:#b8c8ea;">Lines</label>
-            <select id="line-count">
-              <option>200</option>
-              <option selected>500</option>
-              <option>1000</option>
-              <option>2000</option>
-            </select>
-            <button id="refresh">Refresh</button>
-            <button id="export">Export .txt</button>
-          </div>
+      <div class="card log-toolbar">
+        <div class="row">
+          <span class="chip mono" id="log-file">file: -</span>
+          <span class="chip" id="log-level">level: -</span>
+        </div>
+        <div class="row">
+          <label for="line-count">Lines</label>
+          <select id="line-count">
+            <option>200</option>
+            <option selected>500</option>
+            <option>1000</option>
+            <option>2000</option>
+          </select>
+          <button id="refresh" class="ghost">Refresh</button>
+          <button id="export" class="ghost">Export .txt</button>
         </div>
       </div>
 
-      <pre id="log-output" class="mono">Loading logs…</pre>
+      <pre id="log-output" class="log-output">Loading logs…</pre>
     </div>
 
     <script src="/static/assets/session.js?v=1"></script>
