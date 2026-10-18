@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from app import auth, main
+from app.routes import setup
 
 
 def fake_tool(tmp_path, script: str) -> str:
@@ -18,22 +19,22 @@ def fake_tool(tmp_path, script: str) -> str:
 
 def test_version_probe_never_reflects_stderr(tmp_path):
     tool = fake_tool(tmp_path, "echo 'private-diagnostic token=abc' >&2\nexit 1\n")
-    assert main._cmd_version([tool, "--version"]) == "unknown"
+    assert setup._cmd_version([tool, "--version"]) == "unknown"
     tool = fake_tool(tmp_path, "echo 'private-diagnostic' >&2\necho 'tool 1.2.3'\n")
-    assert main._cmd_version([tool, "--version"]) == "tool 1.2.3"
+    assert setup._cmd_version([tool, "--version"]) == "tool 1.2.3"
 
 
 def test_version_probe_output_is_bounded(tmp_path):
     tool = fake_tool(tmp_path, "head -c 100000 /dev/zero | tr '\\0' x\n")
-    assert main._cmd_version([tool, "--version"]) == "unknown"
+    assert setup._cmd_version([tool, "--version"]) == "unknown"
 
 
 def test_version_probe_timeout_kills_descendants(tmp_path, monkeypatch):
-    monkeypatch.setattr(main, "VERSION_PROBE_TIMEOUT_SEC", 0.3)
+    monkeypatch.setattr(setup, "VERSION_PROBE_TIMEOUT_SEC", 0.3)
     pid_file = tmp_path / "child.pid"
     tool = fake_tool(tmp_path, f"sleep 30 &\necho $! > {pid_file}\nsleep 30\n")
     started = time.monotonic()
-    assert main._cmd_version([tool, "--version"]) == "unknown"
+    assert setup._cmd_version([tool, "--version"]) == "unknown"
     assert time.monotonic() - started < 5
     pid = int(pid_file.read_text())
     stat = Path(f"/proc/{pid}/stat")

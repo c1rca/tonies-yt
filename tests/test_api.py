@@ -4,7 +4,7 @@ import pytest
 
 from app import main
 from app.main import app
-from app.routes import files
+from app.routes import files, setup, tonies
 
 
 def test_health_endpoint():
@@ -113,8 +113,8 @@ def test_upload_existing_rejects_path_outside_library(monkeypatch, tmp_path):
 def test_rename_and_reorder_forward_expected_chapter_identity(monkeypatch):
     rename = Mock(return_value={'chapters': []})
     reorder = Mock(return_value={'chapters': []})
-    monkeypatch.setattr(main, 'rename_tonies_chapter', rename)
-    monkeypatch.setattr(main, 'reorder_tonies_chapter', reorder)
+    monkeypatch.setattr(tonies, 'rename_tonies_chapter', rename)
+    monkeypatch.setattr(tonies, 'reorder_tonies_chapter', reorder)
     client = TestClient(app)
     assert client.post('/api/tonies-content/rename', json={'target_url': 'synthetic', 'index': 2, 'title': 'New', 'chapter_id': 'expected-id'}).json() == {'chapters': []}
     assert rename.call_args.kwargs.get('chapter_id') == 'expected-id'
@@ -129,17 +129,17 @@ def test_rename_and_reorder_forward_expected_chapter_identity(monkeypatch):
     ('/api/setup/update-tonies-credentials', 'update_tonies_credentials', {'username': 'synthetic', 'app_password': 'synthetic', 'tonies_email': 'replacement@example.invalid', 'tonies_password': 'replacement'})
 ])
 def test_credential_lifecycle_invalidates_warm_api_client(monkeypatch, route, operation, payload):
-    monkeypatch.setattr(main, operation, Mock(return_value={'ok': True}))
+    monkeypatch.setattr(setup, operation, Mock(return_value={'ok': True}))
     reset = Mock()
-    monkeypatch.setattr(main, 'reset_upload_session', reset, raising=False)
+    monkeypatch.setattr(setup, 'reset_upload_session', reset, raising=False)
     assert TestClient(app).post(route, json=payload).json()['ok']
     reset.assert_called_once()
 
 
 def test_failed_login_does_not_reset_another_active_api_session(monkeypatch):
-    monkeypatch.setattr(main, 'login_unlock', Mock(return_value={'ok': False, 'error': 'Invalid username or password'}))
+    monkeypatch.setattr(setup, 'login_unlock', Mock(return_value={'ok': False, 'error': 'Invalid username or password'}))
     reset = Mock()
-    monkeypatch.setattr(main, 'reset_upload_session', reset, raising=False)
+    monkeypatch.setattr(setup, 'reset_upload_session', reset, raising=False)
     assert not TestClient(app).post('/api/setup/login', json={'username': 'synthetic', 'app_password': 'wrong'}).json()['ok']
     reset.assert_not_called()
 
@@ -156,7 +156,7 @@ def test_tonies_actions_endpoint_queues_edits_and_lists_them(monkeypatch):
 
     fake = Fake()  # The queue intentionally pins one stable account session.
     queue = ActionQueue(lambda: fake, batch_window=0)
-    monkeypatch.setattr(main, "action_queue", queue)
+    monkeypatch.setattr(tonies, "action_queue", queue)
     client = TestClient(app)
     r = client.post("/api/tonies-actions", json={"target_url": url, "actions": [
         {"type": "delete", "chapter_id": "a"},
@@ -197,7 +197,7 @@ def test_upload_existing_passes_a_validated_position(monkeypatch, tmp_path):
         seen.update(position=position)
         return Mock(id='job', status='queued_prepare')
 
-    monkeypatch.setattr(main, 'create_upload_only_job', fake_job)
+    monkeypatch.setattr(files, 'create_upload_only_job', fake_job)
     client = TestClient(app)
     ok = client.post('/api/upload-existing', json={'filename': 'song.mp3', 'position': {'before': 'abc', 'index': 3}})
     assert ok.status_code == 200 and seen['position'] == {'before': 'abc', 'index': 3}
@@ -211,7 +211,7 @@ def undo_client(cloud_api, monkeypatch):
     _, api = cloud_api
     queue = ActionQueue(lambda: api, batch_window=0)
     monkeypatch.setattr(queue, "_ensure_worker", lambda target: None)
-    monkeypatch.setattr(main, "action_queue", queue)
+    monkeypatch.setattr(tonies, "action_queue", queue)
     yield TestClient(app), queue
     queue._transfers.shutdown(wait=True)
 
@@ -300,8 +300,8 @@ def test_account_routes_revoke_real_queue_capabilities_and_unapplied_work(undo_c
     pending = queue.submit(URL.replace('/aBcD0123456789EF/', '/0000000000000001/'),
                            [{"type": "delete", "chapter_id": "one"}])[0]
     assert completed.public()["undo_available"] and pending.public()["undo_available"]
-    monkeypatch.setattr(main, operation, Mock(return_value={'ok': True}))
-    monkeypatch.setattr(main, 'reset_upload_session', uploader.reset_upload_session)
+    monkeypatch.setattr(setup, operation, Mock(return_value={'ok': True}))
+    monkeypatch.setattr(setup, 'reset_upload_session', uploader.reset_upload_session)
     monkeypatch.setattr(uploader, 'action_queue', queue)
     monkeypatch.setattr(uploader, '_api_client', api)
     monkeypatch.setattr(uploader, '_account_fingerprint', b'synthetic')

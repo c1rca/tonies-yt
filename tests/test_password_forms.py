@@ -16,6 +16,7 @@ from fastapi.testclient import TestClient
 import pytest
 
 from app import credentials, main
+from app.routes import setup
 
 pytestmark = pytest.mark.real_auth
 USER, PASSWORD = "synthetic", "synthetic app password"
@@ -27,8 +28,8 @@ def isolated(tmp_path, monkeypatch):
     monkeypatch.setattr(main.settings, "data_dir", tmp_path)
     monkeypatch.setattr(main.settings, "tonies_email", "")
     monkeypatch.setattr(main.settings, "tonies_password", "")
-    monkeypatch.setattr(main, "reset_upload_session", lambda: None)
-    monkeypatch.setattr(main, "_cmd_version", lambda cmd: "offline-synthetic")
+    monkeypatch.setattr(setup, "reset_upload_session", lambda: None)
+    monkeypatch.setattr(setup, "_cmd_version", lambda cmd: "offline-synthetic")
     def forbidden(*args, **kwargs):
         pytest.fail("Provider/network connections and workers are forbidden")
     monkeypatch.setattr(socket.socket, "connect", forbidden)

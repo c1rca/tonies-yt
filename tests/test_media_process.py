@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 import pytest
 
 from app import credentials, main
+from app.routes import setup
 from tonies_fake import URL
 
 PROBE_BUDGET = 64 * 1024
@@ -24,8 +25,8 @@ def isolated(tmp_path, monkeypatch):
     monkeypatch.setattr(main.settings, "data_dir", tmp_path)
     monkeypatch.setattr(main.settings, "tonies_email", "")
     monkeypatch.setattr(main.settings, "tonies_password", "")
-    monkeypatch.setattr(main, "reset_upload_session", lambda: None)
-    monkeypatch.setattr(main, "_cmd_version", lambda _: "offline")
+    monkeypatch.setattr(setup, "reset_upload_session", lambda: None)
+    monkeypatch.setattr(setup, "_cmd_version", lambda _: "offline")
 
     def forbidden(*args, **kwargs):
         pytest.fail("Real network/worker activity forbidden")

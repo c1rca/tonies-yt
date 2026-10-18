@@ -3,6 +3,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app import auth, credentials, main
+from app.routes import setup, tonies
 
 pytestmark = pytest.mark.real_auth
 
@@ -15,8 +16,8 @@ def vault(tmp_path, monkeypatch):
     monkeypatch.setattr(credentials.settings, "data_dir", tmp_path)
     monkeypatch.setattr(credentials.settings, "tonies_email", "")
     monkeypatch.setattr(credentials.settings, "tonies_password", "")
-    monkeypatch.setattr(main, "reset_upload_session", lambda: None)
-    monkeypatch.setattr(main, "_cmd_version", lambda cmd: "test")
+    monkeypatch.setattr(setup, "reset_upload_session", lambda: None)
+    monkeypatch.setattr(setup, "_cmd_version", lambda cmd: "test")
     credentials.initialize_vault(USER, PASSWORD, "kid@example.invalid", "tonies-secret")
     credentials.lock_runtime()
     yield
@@ -150,7 +151,7 @@ def test_setup_cannot_overwrite_an_existing_vault(vault):
 
 def test_first_run_setup_signs_the_creator_in(tmp_path, monkeypatch):
     monkeypatch.setattr(credentials.settings, "data_dir", tmp_path)
-    monkeypatch.setattr(main, "reset_upload_session", lambda: None)
+    monkeypatch.setattr(setup, "reset_upload_session", lambda: None)
     c = client()
     r = c.post("/api/setup/init", json={
         "username": USER, "app_password": PASSWORD, "tonies_email": "a@b.c", "tonies_password": "y"})
@@ -162,7 +163,7 @@ def test_env_tonies_account_still_needs_an_app_login(tmp_path, monkeypatch):
     monkeypatch.setattr(credentials.settings, "data_dir", tmp_path)
     monkeypatch.setattr(credentials.settings, "tonies_email", "env@example.invalid")
     monkeypatch.setattr(credentials.settings, "tonies_password", "env-secret")
-    monkeypatch.setattr(main, "reset_upload_session", lambda: None)
+    monkeypatch.setattr(setup, "reset_upload_session", lambda: None)
     assert client().get("/api/jobs").status_code == 401
     c = client()
     assert c.post("/api/setup/init", json={"username": USER, "app_password": PASSWORD}).json()["ok"]
@@ -216,7 +217,7 @@ def test_undo_is_authenticated_and_cross_site_safe_with_real_queue(vault, cloud_
     cloud, api = cloud_api
     queue = ActionQueue(lambda: api, batch_window=0)
     monkeypatch.setattr(queue, "_ensure_worker", lambda target: None)
-    monkeypatch.setattr(main, "action_queue", queue)
+    monkeypatch.setattr(tonies, "action_queue", queue)
     c = client()
     try:
         sign_in(c)
