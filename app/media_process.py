@@ -43,9 +43,18 @@ class Trim:
         return self.start > 0 or self.end is not None
 
 
-def run_conversion(cmd: list[str]) -> None:
+class TrimOutsideAudio(RuntimeError):
+    """The trim window starts at or after the end of the audio."""
+
+
+def _work_timeout(seconds: float | None) -> float:
+    # Decoding runs far faster than real time; allow a quarter of the length on slow hosts.
+    return 240 + min(seconds or 0.0, _MAX_SECONDS) / 4
+
+
+def run_conversion(cmd: list[str], *, timeout: float = 240) -> None:
     # Conversion diagnostics and stdout have no consumer; never retain them.
-    run_bounded(cmd, operation="Audio conversion", timeout=240)
+    run_bounded(cmd, operation="Audio conversion", timeout=timeout)
 
 
 def _trimmed_input(source: Path, trim: Trim | None) -> list[str]:
@@ -58,36 +67,40 @@ def _trimmed_input(source: Path, trim: Trim | None) -> list[str]:
 
 
 def _trimmed_seconds(source: Path, trim: Trim | None) -> float | None:
+    """Length of the (trimmed) audio; None when unknown. Raises TrimOutsideAudio."""
     total = probe_duration(source, timeout=30)
     if total is None or not math.isfinite(total) or total <= 0:
         return None
     if trim is None:
         return total
     if trim.start >= total:
-        raise RuntimeError("Trim starts after the end of the audio")
+        raise TrimOutsideAudio("Trim starts after the end of the audio")
     return min(total, trim.end if trim.end is not None else total) - trim.start
 
 
-def measure_loudness(source: Path, *, trim: Trim | None = None) -> float | None:
-    """Integrated loudness (LUFS) of the (trimmed) audio; None when it can't be measured.
-
-    ebur128 reports a running value per 100 ms frame; only the final frames are
-    printed so the captured output stays a few hundred bytes for any length.
-    """
+def _measure(source: Path, trim: Trim | None, seconds: float) -> float | None:
+    # ebur128 reports a running value per 100 ms frame; only the final frames are
+    # printed so the captured output stays a few hundred bytes for any length.
+    tail = f"{max(0.0, seconds - 0.5):.3f}"
     try:
-        seconds = _trimmed_seconds(source, trim)
-        if seconds is None:
-            return None
-        tail = f"{max(0.0, seconds - 0.5):.3f}"
         output = run_bounded([
             "ffmpeg", "-nostdin", "-v", "error", *_trimmed_input(source, trim), "-map", "0:a:0",
             "-af", f"ebur128=metadata=1,aselect=gte(t\\,{tail}),ametadata=mode=print:key=lavfi.r128.I:file=-",
             "-f", "null", "-",
-        ], operation="Loudness measurement", timeout=240, max_output_bytes=PROBE_OUTPUT_BYTES)
+        ], operation="Loudness measurement", timeout=_work_timeout(seconds), max_output_bytes=PROBE_OUTPUT_BYTES)
     except RuntimeError:
         return None
     values = _LOUDNESS.findall(output)
     return float(values[-1]) if values else None
+
+
+def measure_loudness(source: Path, *, trim: Trim | None = None) -> float | None:
+    """Integrated loudness (LUFS) of the (trimmed) audio; None when it can't be measured."""
+    try:
+        seconds = _trimmed_seconds(source, trim)
+    except RuntimeError:
+        return None
+    return None if seconds is None else _measure(source, trim, seconds)
 
 
 def _level_filter(loudness: float | None) -> list[str]:
@@ -98,16 +111,25 @@ def _level_filter(loudness: float | None) -> list[str]:
 
 
 def convert_to_mp3(source: Path, destination: Path, *, max_bytes: int, trim: Trim | None = None) -> None:
-    """Convert any supported audio to a levelled 128 kbps stereo MP3, trimmed if asked."""
+    """Convert any supported audio to a levelled 128 kbps stereo MP3, trimmed if asked.
+
+    Without a known length the audio is converted without levelling.
+    """
     if trim is not None:
         trim.validate()
-        _trimmed_seconds(source, trim)  # refuse a window that starts after the audio
+    try:
+        seconds = _trimmed_seconds(source, trim)
+    except TrimOutsideAudio:
+        raise
+    except RuntimeError:
+        seconds = None
+    loudness = None if seconds is None else _measure(source, trim, seconds)
     run_conversion([
         "ffmpeg", "-nostdin", "-v", "error", "-y", *_trimmed_input(source, trim),
-        "-map", "0:a:0", "-vn", *_level_filter(measure_loudness(source, trim=trim)),
+        "-map", "0:a:0", "-vn", *_level_filter(loudness),
         "-ar", "44100", "-ac", "2", "-codec:a", "libmp3lame", "-b:a", "128k", "-fs", str(max_bytes),
         "-f", "mp3", str(destination),
-    ])
+    ], timeout=_work_timeout(seconds))
 
 
 def probe_duration(path: Path, *, timeout: float) -> float | None:

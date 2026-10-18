@@ -70,17 +70,17 @@
       </section>
       <nav class="workspace-nav" aria-label="Workspace"><button id="nav-tracks" aria-current="page" onclick="setWorkspaceView('tracks', true)"><span aria-hidden="true">≡</span>Tracks</button><button id="nav-add" onclick="setWorkspaceView('add', true)"><span aria-hidden="true">+</span>Add audio</button><button id="nav-activity" onclick="setWorkspaceView('activity', true)"><span aria-hidden="true">↗</span>Activity</button></nav>
     </div>
-    <dialog id="trim-dialog" class="modal trim-dialog" aria-labelledby="trim-title">
+    <dialog id="trim-dialog" class="modal trim-dialog" aria-labelledby="trim-title" aria-describedby="trim-length">
       <form method="dialog">
         <h3 id="trim-title">Trim</h3>
         <p id="trim-length" class="tiny"></p>
         <div class="trim-fields">
-          <div><label for="trim-start" class="field-label">Start</label><input id="trim-start" inputmode="decimal" placeholder="0:00" autocomplete="off" /></div>
-          <div><label for="trim-end" class="field-label">End</label><input id="trim-end" inputmode="decimal" autocomplete="off" /></div>
+          <div><label for="trim-start" class="field-label">Start</label><input id="trim-start" placeholder="0:00" autocomplete="off" /></div>
+          <div><label for="trim-end" class="field-label">End</label><input id="trim-end" autocomplete="off" /></div>
         </div>
         <p id="trim-error" class="trim-error" role="alert"></p>
         <div class="modal-actions">
-          <button value="cancel" class="ghost" formnovalidate>Cancel</button>
+          <button type="button" id="trim-cancel" class="ghost">Cancel</button>
           <button value="add" class="good">Add trimmed</button>
         </div>
       </form>
@@ -120,8 +120,8 @@
     <script src="/static/assets/workspace-navigation.js?v=1"></script>
     <script src="/static/assets/workspace-sources.js?v=3"></script>
     <script src="/static/assets/workspace-source-selection.js?v=2"></script>
-    <script src="/static/assets/workspace-trim.js?v=1"></script>
-    <script src="/static/assets/workspace-youtube-selection.js?v=1"></script>
+    <script src="/static/assets/workspace-trim.js?v=2"></script>
+    <script src="/static/assets/workspace-youtube-selection.js?v=2"></script>
     <script src="/static/assets/workspace-tracks.js?v=1"></script>
     <script src="/static/assets/local-preview.js?v=1"></script>
     <script src="/static/assets/workspace-activity.js?v=1"></script>
@@ -2699,6 +2699,7 @@
         const emptyStateHtml = getResultsEmptyStateHtml(renderState);
         if (emptyStateHtml !== null) {
           jobsEl.innerHTML = emptyStateHtml;
+          syncYoutubeSelection(null);
           return;
         }
 
@@ -2706,16 +2707,13 @@
           ? [renderState.views[0]]
           : renderState.views;
         if (searchLimitLabelEl) searchLimitLabelEl.textContent = youtubeResultsLabel(singleCardViews[0]?.job) || `Top ${searchLimit} results`;
+        syncYoutubeSelection(singleCardViews[0]?.job?.id || null);
         jobsEl.innerHTML = renderSearchJobCardsHtml(singleCardViews);
         for (const button of jobsEl.querySelectorAll('.candidate-add')) button.addEventListener('click', () => {
           void pickCandidate(button.getAttribute('data-job-id'), Number(button.getAttribute('data-candidate-index')));
         });
-        for (const button of jobsEl.querySelectorAll('.candidate-trim')) button.addEventListener('click', () => {
-          openTrimDialog(button.getAttribute('data-job-id'), Number(button.getAttribute('data-candidate-index')));
-        });
-        for (const box of jobsEl.querySelectorAll('.candidate-pick')) box.addEventListener('change', () => {
-          toggleYoutubeSelection(box.getAttribute('data-job-id'), Number(box.getAttribute('data-candidate-index')), box.checked);
-        });
+        bindCandidateTrim(jobsEl);
+        bindCandidatePicks(jobsEl);
       }
 
       async function refreshFiles() {

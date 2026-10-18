@@ -4,6 +4,7 @@ import math
 import os
 import tempfile
 import threading
+from concurrent.futures import ThreadPoolExecutor
 import queue
 import uuid
 import time
@@ -35,13 +36,14 @@ _lock = threading.Lock()
 _persist_lock = threading.Lock()
 _upload_mirror_lock = threading.Lock()
 MAX_PARALLEL_DOWNLOADS = 3
-_download_slots = threading.BoundedSemaphore(MAX_PARALLEL_DOWNLOADS)
+# First in, first out: picks start downloading in the order they were added.
+_downloads = ThreadPoolExecutor(max_workers=MAX_PARALLEL_DOWNLOADS, thread_name_prefix="youtube-download")
 _STAGE_TIMEOUT_SEC: dict[str, int] = {
     "parsing": 90,
     "searching": 180,
-    # Waiting for one of MAX_PARALLEL_DOWNLOADS slots when several videos are added at once.
-    "queued_download": 1800,
-    "downloading": 900,
+    # "queued_download" waits in the FIFO download pool and has no limit: every download
+    # ahead of it is itself bounded. Download+retry+levelling of long audio can take a while.
+    "downloading": 3600,
     "queued_prepare": 120,
     "preparing": 900,
     # Uploads wait in the action queue behind others; each step there refreshes the job.
@@ -263,6 +265,21 @@ def _parse_iso(ts: str) -> datetime:
     return dt.astimezone(timezone.utc)
 
 
+def expire_job(job_id: str, error: str, *, only_if_status: Optional[str] = None) -> bool:
+    """Fail a job and stop its worker from carrying on (it checks the cancel flag)."""
+    with _lock:
+        cur = _jobs.get(job_id)
+        if not cur or cur.status in TERMINAL_STATUSES or (only_if_status and cur.status != only_if_status):
+            return False
+        cur.status = "failed"
+        cur.error = error
+        cur.cancel_requested = True
+        cur.updated_at = now_iso()
+    _persist_jobs_state()
+    _emit_event("job_updated", job_id)
+    return True
+
+
 def watchdog_loop():
     while True:
         time_now = datetime.now(timezone.utc)
@@ -282,17 +299,8 @@ def watchdog_loop():
                     timed_out.append((jid, status, age))
 
         for jid, status, age in timed_out:
-            with _lock:
-                cur = _jobs.get(jid)
-                if not cur:
-                    continue
-                if cur.status != status:
-                    continue
-                cur.status = "failed"
-                cur.error = f"Timed out in state '{status}' after {age}s"
-                cur.updated_at = now_iso()
-            _emit_event("job_updated", jid)
-            _log(jid, f"Failed (watchdog timeout): state={status} age={age}s")
+            if expire_job(jid, f"Timed out in state '{status}' after {age}s", only_if_status=status):
+                _log(jid, f"Failed (watchdog timeout): state={status} age={age}s")
 
         threading.Event().wait(5.0)
 
@@ -477,9 +485,10 @@ def select_candidates_and_continue(job_id: str, indexes: list[int], target_url: 
         spawned = [_spawn_selection_job(st, st.candidates[i], target_url, position) for i in indexes]
     _persist_jobs_state()
     # Each one lands at the chosen edge, so adding to the top hands them over last-first.
+    # They also start downloading in hand-over order, so the first to finish goes first.
     hand_over = spawned[::-1] if (position or {}).get("edge") == "start" else spawned
     order = AttachOrder([job.id for job in hand_over])
-    for job in spawned:
+    for job in hand_over:
         _emit_event("job_created", job.id)
         run_selected_candidate_async(job.id, job.selected_candidate, target_url, position, order=order)
     return [job.id for job in spawned]
@@ -488,38 +497,44 @@ def select_candidates_and_continue(job_id: str, indexes: list[int], target_url: 
 def run_selected_candidate_async(job_id: str, selected: dict, target_url: Optional[str] = None,
                                  position: Optional[dict] = None, trim: Optional[Trim] = None,
                                  order: Optional[AttachOrder] = None):
+    """Download on the shared FIFO pool, wait for its turn in a batch, then queue the upload."""
+    def _stopped() -> bool:
+        job = get_job(job_id)
+        if job is None or job.status in TERMINAL_STATUSES:  # e.g. failed by the watchdog
+            return True
+        if _cancel_requested(job_id):
+            _update(job_id, status="failed", error="Canceled by user")
+            return True
+        return False
+
     def _runner():
         t0 = time.time()
         try:
-            if _cancel_requested(job_id):
-                _update(job_id, status="failed", error="Canceled by user")
+            if _stopped():
                 return
             _log(job_id, f"Selected candidate: {selected.get('title', 'unknown')}")
             parsed = _jobs[job_id].parsed or {}
             preferred_title = selected.get("title") or parsed.get("preferred_title")
 
-            with _download_slots:
-                if _cancel_requested(job_id):
-                    _update(job_id, status="failed", error="Canceled by user")
-                    return
-                _update(job_id, status="downloading")
-                _log(job_id, f"Downloading selected URL only: {selected.get('url')}")
-                dl_started = time.time()
-                if trim is not None:
-                    _log(job_id, f"Trimming to {trim.start:g}s–{'end' if trim.end is None else f'{trim.end:g}s'}")
-                mp3 = download_mp3(selected["url"], settings.data_dir / "downloads", preferred_title, trim=trim)
-                _log(job_id, f"Timing: download+extract completed in {time.time() - dl_started:.1f}s")
+            _update(job_id, status="downloading")
+            _log(job_id, f"Downloading selected URL only: {selected.get('url')}")
+            dl_started = time.time()
+            if trim is not None:
+                _log(job_id, f"Trimming to {trim.start:g}s–{'end' if trim.end is None else f'{trim.end:g}s'}")
+            mp3 = download_mp3(selected["url"], settings.data_dir / "downloads", preferred_title, trim=trim)
+            _log(job_id, f"Timing: download+extract completed in {time.time() - dl_started:.1f}s")
+            if _stopped():
+                return
 
             if order is not None:
                 _update(job_id, status="waiting_upload")
                 _log(job_id, "Waiting for the tracks before it to be handed over")
-                order.wait_turn(job_id)
-
-            if _cancel_requested(job_id):
-                _update(job_id, status="failed", error="Canceled by user")
-                return
-            if get_job(job_id).status in {"done", "failed"}:
-                return
+                if not order.wait_turn(job_id):
+                    _update(job_id, status="failed",
+                            error="An earlier track in this batch didn't finish in time; add it again")
+                    return
+                if _stopped():
+                    return
 
             target = (parsed.get("target_character_name") if isinstance(parsed, dict) else None)
             _enqueue_upload(job_id, Path(mp3), target=target, target_url=target_url, position=position)
@@ -532,7 +547,7 @@ def run_selected_candidate_async(job_id: str, selected: dict, target_url: Option
             if order is not None:
                 order.done(job_id)
 
-    threading.Thread(target=_runner, daemon=True).start()
+    _downloads.submit(_runner)
 
 
 def create_upload_only_job(file_path: str, note: str = "upload existing file", target_url: Optional[str] = None,

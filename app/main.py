@@ -9,14 +9,14 @@ from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StrictInt
 
 from . import __version__, auth
 from .config import settings
 from .credentials import setup_status, initialize_vault, login_unlock, lock_runtime, get_credentials, change_app_password, update_tonies_credentials, vault_configured, VaultError
 from .media_files import library_file, library_files, store_upload
 from .media_process import Trim
-from .downloader import clear_search_cache
+from .downloader import PLAYLIST_MAX, clear_search_cache
 from .jobs import create_job, get_job, list_jobs, start_worker, select_candidate_and_continue, select_candidates_and_continue, create_upload_only_job, get_events_since, get_event_stats, get_queue_stats, cancel_job
 from .logger import setup_logging
 from .models import ChatRequest
@@ -81,7 +81,7 @@ class SelectionRequest(BaseModel):
 
 
 class MultiSelectionRequest(BaseModel):
-    indexes: list[int]
+    indexes: list[StrictInt] = Field(min_length=1, max_length=PLAYLIST_MAX)
     target_url: str = None
     position: Optional[dict] = None
 
@@ -494,6 +494,7 @@ def select_candidate(job_id: str, req: SelectionRequest):
             trim = Trim(start=req.trim.start, end=req.trim.end).validate()
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from None
+        trim = trim if trim.active else None
     try:
         selected_job_id = select_candidate_and_continue(job_id, req.index, req.target_url,
                                                         clean_position(req.position), trim=trim)

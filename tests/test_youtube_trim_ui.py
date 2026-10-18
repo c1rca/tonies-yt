@@ -8,6 +8,7 @@ assert.equal(parseClock('90'), 90);
 assert.equal(parseClock('1:30'), 90);
 assert.equal(parseClock(' 1:02:03 '), 3723);
 assert.equal(parseClock('0:07.5'), 7.5);
+assert.equal(parseClock('0:07,5'), 7.5, 'comma decimals, as typed in many locales');
 assert.equal(parseClock(''), null);
 for (const bad of ['1:', ':30', '1:60', 'abc', '-5', '1:2:3:4', '1e3']) assert.ok(Number.isNaN(parseClock(bad)), bad);
 """)
@@ -66,3 +67,7 @@ def test_trim_dialog_is_a_native_modal_with_labelled_fields():
         assert f'<label for="{field}"' in dialog and f'id="{field}"' in dialog
     assert 'id="trim-error"' in dialog and 'role="alert"' in dialog
     assert 'method="dialog"' in dialog
+    assert 'aria-describedby="trim-length"' in html[html.index('<dialog id="trim-dialog"'):]
+    # Enter in a field must submit "Add trimmed": Cancel is not a submit button.
+    assert '<button type="button" id="trim-cancel"' in dialog
+    assert 'inputmode="decimal"' not in dialog, "phone decimal keypads have no colon"

@@ -7,7 +7,7 @@ import time
 from fastapi.testclient import TestClient
 import pytest
 
-from app import downloader, jobs, main
+from app import attach_order, downloader, jobs, main
 from app.models import ParseIntent
 from app.youtube_source import is_playlist_url, normalize_youtube_input
 
@@ -153,6 +153,69 @@ def test_one_failed_download_does_not_stall_the_rest(playlist_job):
     assert [jobs.get_job(i).status for i in ids] == ["done", "failed", "done"]
 
 
+def test_adding_to_the_top_downloads_in_hand_over_order(playlist_job):
+    job_id, state = playlist_job
+    started = []
+    original = jobs.download_mp3
+    monkeypatch_download = lambda url, out_dir, preferred_title=None, trim=None: (  # noqa: E731
+        started.append(preferred_title) or original(url, out_dir, preferred_title, trim))
+    jobs.download_mp3 = monkeypatch_download
+    try:
+        _wait_done(jobs.select_candidates_and_continue(job_id, [0, 1, 2, 3], "tonie", {"edge": "start"}))
+    finally:
+        jobs.download_mp3 = original
+    assert started[:3] == ["Song 4", "Song 3", "Song 2"], "the first to hand over downloads first"
+
+
+def test_a_job_that_failed_while_queued_never_downloads(playlist_job, monkeypatch):
+    job_id, state = playlist_job
+    gate = threading.Event()
+    blocked = []
+
+    def slow(url, out_dir, preferred_title=None, trim=None):
+        blocked.append(preferred_title)
+        gate.wait(5)
+        path = out_dir / f"{preferred_title}.mp3"
+        path.write_bytes(b"audio")
+        return path
+
+    monkeypatch.setattr(jobs, "download_mp3", slow)
+    ids = jobs.select_candidates_and_continue(job_id, [0, 1, 2, 3], "tonie", {"edge": "end"})
+    deadline = time.time() + 2
+    while len(blocked) < 3 and time.time() < deadline:
+        time.sleep(0.01)
+    jobs.expire_job(ids[3], "Timed out in state 'queued_download'")
+    gate.set()
+    _wait_done(ids)
+    assert "Song 4" not in blocked
+    assert jobs.get_job(ids[3]).status == "failed"
+    assert [stem for stem, _ in state["enqueued"]] == ["Song 1", "Song 2", "Song 3"]
+
+
+def test_a_track_whose_turn_never_comes_fails_instead_of_landing_out_of_order(playlist_job, monkeypatch):
+    job_id, state = playlist_job
+    monkeypatch.setattr(attach_order, "TURN_TIMEOUT_SEC", 0.2)
+    release = threading.Event()
+
+    def download(url, out_dir, preferred_title=None, trim=None):
+        if preferred_title == "Song 1":
+            release.wait(5)
+        path = out_dir / f"{preferred_title}.mp3"
+        path.write_bytes(b"audio")
+        return path
+
+    monkeypatch.setattr(jobs, "download_mp3", download)
+    ids = jobs.select_candidates_and_continue(job_id, [0, 1], "tonie", {"edge": "end"})
+    deadline = time.time() + 3
+    while jobs.get_job(ids[1]).status != "failed" and time.time() < deadline:
+        time.sleep(0.02)
+    release.set()
+    _wait_done(ids)
+    assert jobs.get_job(ids[1]).status == "failed"
+    assert "add it again" in jobs.get_job(ids[1]).error
+    assert [stem for stem, _ in state["enqueued"]] == ["Song 1"]
+
+
 def test_downloads_run_at_most_three_at_a_time(playlist_job):
     job_id, state = playlist_job
     state["slow"] = {"Song 1", "Song 2", "Song 3", "Song 4"}
@@ -195,3 +258,9 @@ def test_select_many_endpoint_refuses_bad_requests(client, monkeypatch):
     monkeypatch.setattr(main, "select_candidates_and_continue", select)
     assert client.post("/api/jobs/j1/select-many", json={"indexes": [0, 0]}).status_code == 422
     assert client.post("/api/jobs/j1/select-many", json={"indexes": "x"}).status_code == 422
+
+
+@pytest.mark.parametrize("indexes", [[True], ["1"], [1.0], [], list(range(51))])
+def test_select_many_refuses_non_integer_or_oversized_lists_before_any_work(client, monkeypatch, indexes):
+    monkeypatch.setattr(main, "select_candidates_and_continue", lambda *_a, **_kw: pytest.fail("must not run"))
+    assert client.post("/api/jobs/j1/select-many", json={"indexes": indexes}).status_code == 422

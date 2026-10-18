@@ -32,7 +32,8 @@ def test_images_are_published_only_for_version_tags(workflow):
     triggers = workflow[True]  # YAML 1.1 reads the "on" key as True
     assert triggers["push"] == {"tags": ["v*"]}
     assert set(triggers) <= {"push", "workflow_dispatch"}
-    assert workflow["permissions"] == {"contents": "read", "packages": "write"}
+    assert workflow["permissions"] == {"contents": "read"}
+    assert workflow["jobs"]["image"]["permissions"] == {"contents": "read", "packages": "write"}
     steps = workflow["jobs"]["image"]["steps"]
     build = next(step for step in steps if step.get("name") == "Build and push")
     assert build["with"]["push"] == "${{ github.event_name == 'push' }}"
@@ -51,3 +52,10 @@ def test_images_cover_pcs_and_raspberry_pis(workflow):
 def test_release_image_is_smoke_tested_before_it_is_pushed(workflow):
     names = [step.get("name", "") for step in workflow["jobs"]["image"]["steps"]]
     assert names.index("Smoke test") < names.index("Build and push")
+
+
+def test_publishing_actions_are_pinned_to_commits(workflow):
+    for step in workflow["jobs"]["image"]["steps"]:
+        if "uses" in step:
+            ref = step["uses"].split("@", 1)[1]
+            assert len(ref) == 40 and all(c in "0123456789abcdef" for c in ref), step["uses"]

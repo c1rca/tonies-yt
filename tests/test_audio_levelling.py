@@ -75,7 +75,7 @@ def test_trim_starting_after_the_audio_is_refused(tmp_path):
 
 def test_unmeasurable_audio_is_still_converted_unchanged(tmp_path, monkeypatch):
     source = _source(tmp_path, "plain", -30)
-    monkeypatch.setattr(media_process, "measure_loudness", lambda *_a, **_kw: None)
+    monkeypatch.setattr(media_process, "_measure", lambda *_a, **_kw: None)
     output = _converted(tmp_path, source)
     assert measure_loudness(output) == pytest.approx(measure_loudness(source), abs=1.0)
 
@@ -120,7 +120,7 @@ def _flaky_provider(monkeypatch, source, failures):
     def fake_ytdlp(cmd, **_kwargs):
         calls.append(cmd)
         if len(calls) <= failures:
-            raise RuntimeError("YouTube download failed")
+            raise downloader.ChildFailed("YouTube download failed")
         Path(cmd[cmd.index("-o") + 1].replace("%(ext)s", "webm")).write_bytes(source.read_bytes())
         return b""
 
@@ -140,6 +140,20 @@ def test_a_failed_youtube_download_is_tried_once_more(tmp_path, monkeypatch):
 def test_a_download_that_fails_twice_reports_the_failure(tmp_path, monkeypatch):
     calls = _flaky_provider(monkeypatch, _source(tmp_path, "src", -10, seconds=2), failures=2)
     with pytest.raises(RuntimeError, match="YouTube download failed"):
+        downloader.download_mp3("https://youtu.be/AbCdEf_12-3", tmp_path, "Song")
+    assert len(calls) == 2
+
+
+def test_the_retry_is_decided_by_failure_type_not_message(tmp_path, monkeypatch):
+    calls = []
+
+    def renamed(cmd, **_kwargs):
+        calls.append(cmd)
+        raise downloader.ChildFailed("some other wording")
+
+    monkeypatch.setattr(downloader, "_run_ytdlp", renamed)
+    monkeypatch.setattr(downloader, "_RETRY_DELAY_SEC", 0)
+    with pytest.raises(RuntimeError):
         downloader.download_mp3("https://youtu.be/AbCdEf_12-3", tmp_path, "Song")
     assert len(calls) == 2
 

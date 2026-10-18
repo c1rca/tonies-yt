@@ -115,7 +115,7 @@ The queue client, receipt reconciliation, caching, drag/drop and SSE/polling con
 
 ## Run from a checkout
 
-Use this to run or change the source. Compose builds this checkout when you pass `--build`; without it, it pulls the published image.
+Use this to run or change the source. Compose builds this checkout when you pass `--build`; without it, it pulls the published image. A local build is tagged with the published name, so a later `pull` replaces it; set `TONIES_IMAGE_TAG=local` in `.env` to keep your own build separate.
 
 Linux:
 ```bash

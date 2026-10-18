@@ -11,7 +11,7 @@ from threading import Lock
 from uuid import uuid4
 
 from .media_process import Trim, convert_to_mp3
-from .subprocess_runner import run_ytdlp as _run_ytdlp
+from .subprocess_runner import ChildFailed, run_ytdlp as _run_ytdlp
 from .youtube_source import is_playlist_url, normalize_youtube_input, parse_candidates
 
 _SEARCH_TIMEOUT_SEC = 60
@@ -22,10 +22,9 @@ _MAX_DOWNLOAD_BYTES = 512 * 1024 * 1024
 _MIN_YTDLP_SEARCH_SPACING_SEC = 0.0
 _MIN_YTDLP_DOWNLOAD_SPACING_SEC = 0.0
 # YouTube occasionally refuses one of several parallel downloads; a download has no side
-# effects, so a plain failure (not a timeout or size limit) is tried once more.
+# effects, so a plain failure (ChildFailed, not a timeout or size limit) is tried once more.
 _DOWNLOAD_ATTEMPTS = 2
 _RETRY_DELAY_SEC = 3.0
-_RETRYABLE = "YouTube download failed"
 _search_cache: dict[str, tuple[float, list[dict]]] = {}
 _last_ytdlp_call_at = 0.0
 _call_lock = Lock()
@@ -119,8 +118,8 @@ def download_mp3(youtube_query_or_url: str, out_dir: Path, preferred_title: str 
     for attempt in range(1, _DOWNLOAD_ATTEMPTS + 1):
         try:
             return _download_once(target, out_dir, base, trim)
-        except RuntimeError as error:
-            if str(error) != _RETRYABLE or attempt == _DOWNLOAD_ATTEMPTS:
+        except ChildFailed:
+            if attempt == _DOWNLOAD_ATTEMPTS:
                 raise
             logger.info("yt_download retry attempt=%d", attempt + 1)
             time.sleep(_RETRY_DELAY_SEC)
@@ -150,7 +149,10 @@ def _download_once(target: str, out_dir: Path, base: str, trim: Trim | None) -> 
             if len(matches) != 1 or matches[0].stat().st_size == 0:
                 raise RuntimeError("Download command finished but no audio file found") from None
             converted = directory / ".converted.mp3"
-            convert_to_mp3(matches[0], converted, max_bytes=_MAX_DOWNLOAD_BYTES, trim=trim)
+            try:
+                convert_to_mp3(matches[0], converted, max_bytes=_MAX_DOWNLOAD_BYTES, trim=trim)
+            except ChildFailed:
+                raise RuntimeError("Audio conversion failed") from None  # deterministic: not retried
             return _publish_audio(converted, out_dir, base)
     except OSError:
-        raise RuntimeError(_RETRYABLE) from None
+        raise ChildFailed("YouTube download failed") from None

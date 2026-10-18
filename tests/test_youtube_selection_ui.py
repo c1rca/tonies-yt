@@ -25,7 +25,8 @@ toggleYoutubeSelection('job', 2, true);
 toggleYoutubeSelection('job', 0, true);
 assert.equal(document.getElementById('youtube-selection-bar').hidden, false);
 assert.equal(document.getElementById('youtube-selection-count').textContent, '2 selected');
-assert.match(document.getElementById('add-selected-youtube').getAttribute('aria-label'), /Add 2 videos to/);
+assert.equal(document.getElementById('add-selected-youtube').textContent, 'Add 2 to Blue');
+assert.match(document.getElementById('add-selected-youtube').getAttribute('aria-label'), /^Add 2 to Blue/);
 toggleYoutubeSelection('job', 2, false);
 toggleYoutubeSelection('job', 0, false);
 assert.equal(document.getElementById('youtube-selection-bar').hidden, true);
@@ -81,3 +82,21 @@ def test_selection_bar_markup_sits_with_the_youtube_results():
     for part in ('id="youtube-selection-bar"', 'id="youtube-selection-count"', 'id="add-selected-youtube"',
                  'id="select-all-youtube"', 'id="clear-youtube-selection"'):
         assert part in youtube
+
+
+def test_selection_is_dropped_when_another_search_is_shown():
+    run_js(SETUP + """
+toggleYoutubeSelection('job', 1, true);
+syncYoutubeSelection('job');
+assert.equal(youtubeSelectionSize(), 1, 'same results on screen: keep it');
+syncYoutubeSelection('newer-search');
+assert.equal(youtubeSelectionSize(), 0);
+assert.equal(document.getElementById('youtube-selection-bar').hidden, true);
+""")
+
+
+def test_results_rendering_keeps_the_selection_bar_in_step():
+    html = HTML.read_text(encoding="utf-8")
+    render = html[html.index("function renderJobs()"):html.index("async function refreshFiles()")]
+    assert "syncYoutubeSelection(" in render
+    assert "bindCandidatePicks(jobsEl)" in render and "bindCandidateTrim(jobsEl)" in render

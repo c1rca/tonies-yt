@@ -8,6 +8,10 @@ from collections.abc import Callable
 from typing import Literal
 
 
+class ChildFailed(RuntimeError):
+    """The child could not start or exited non-zero (not a timeout or a resource limit)."""
+
+
 def _stop_process_group(proc: subprocess.Popen) -> None:
     """Reap the direct child and terminate ffmpeg/JS descendants as well."""
     try:
@@ -57,10 +61,10 @@ def run_bounded(
                 time.sleep(0.05)
             if proc.poll() is not None and not selector.get_map():
                 if proc.returncode != 0:
-                    raise RuntimeError(f"{operation} failed") from None
+                    raise ChildFailed(f"{operation} failed") from None
                 return bytes(output)
     except OSError:
-        raise RuntimeError(f"{operation} failed") from None
+        raise ChildFailed(f"{operation} failed") from None
     finally:
         selector.close()
         if proc is not None:

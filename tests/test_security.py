@@ -306,7 +306,7 @@ def test_upload_stream_limit_cleanup_and_unique_names(monkeypatch, tmp_path):
 def test_upload_conversion_forbids_network_and_playlist_demuxers(monkeypatch, tmp_path):
     c = signed_client()
     commands = []
-    def run(cmd):
+    def run(cmd, **_kw):
         commands.append(cmd)
         # Simulate converter output only; actual ffmpeg positive control is separate.
         from pathlib import Path

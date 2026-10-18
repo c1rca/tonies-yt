@@ -23,9 +23,24 @@ function renderYoutubeSelection() {
   document.getElementById('youtube-selection-bar').hidden = !count;
   document.getElementById('youtube-selection-count').textContent = `${count} selected`;
   const add = document.getElementById('add-selected-youtube');
-  add.textContent = `Add to ${workspaceTargetName()}`;
-  add.setAttribute('aria-label', `Add ${count} ${count === 1 ? 'video' : 'videos'} to ${workspaceTargetName()}`);
+  add.textContent = `Add ${count} to ${workspaceTargetName()}`;
+  add.setAttribute('aria-label', `Add ${count} to ${workspaceTargetName()} (${count === 1 ? 'video' : 'videos'})`);
   add.disabled = youtubeSelectionSubmitting || !selectedToniesUrl;
+}
+
+/** Called on every results render: a selection belongs to the results on screen. */
+function syncYoutubeSelection(visibleJobId) {
+  if (!youtubeSelectionSubmitting && youtubeSelection.jobId !== visibleJobId) {
+    youtubeSelection.jobId = visibleJobId;
+    youtubeSelection.indexes.clear();
+  }
+  renderYoutubeSelection();
+}
+
+function bindCandidatePicks(root) {
+  for (const box of root.querySelectorAll('.candidate-pick')) box.addEventListener('change', () => {
+    toggleYoutubeSelection(box.getAttribute('data-job-id'), Number(box.getAttribute('data-candidate-index')), box.checked);
+  });
 }
 
 function toggleYoutubeSelection(jobId, index, checked) {

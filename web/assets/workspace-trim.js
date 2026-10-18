@@ -1,5 +1,5 @@
 /** Trim a YouTube result before adding it. The server re-validates every window. */
-const CLOCK = /^(?:(\d+):)?(?:(\d+):)?(\d+(?:\.\d+)?)$/;
+const CLOCK = /^(?:(\d+):)?(?:(\d+):)?(\d+(?:[.,]\d+)?)$/;
 
 /** "90", "1:30", "1:02:03" or "0:07.5" -> seconds; '' -> null; anything else -> NaN. */
 function parseClock(text) {
@@ -8,7 +8,7 @@ function parseClock(text) {
   const match = CLOCK.exec(value);
   if (!match) return NaN;
   const [hours, minutes] = match[2] === undefined ? [0, match[1]] : [match[1], match[2]];
-  const seconds = Number(match[3]);
+  const seconds = Number(match[3].replace(',', '.'));
   if ((minutes !== undefined && seconds >= 60) || (match[2] !== undefined && Number(minutes) >= 60)) return NaN;
   return Number(hours || 0) * 3600 + Number(minutes || 0) * 60 + seconds;
 }
@@ -26,6 +26,18 @@ function readTrimWindow(startText, endText, duration) {
   return {trim:{start, end}, error:''};
 }
 
+function bindCandidateTrim(root) {
+  for (const button of root.querySelectorAll('.candidate-trim')) button.addEventListener('click', () => {
+    openTrimDialog(button.getAttribute('data-job-id'), Number(button.getAttribute('data-candidate-index')));
+  });
+}
+
+function focusAfterTrim(jobId, index) {
+  // Results re-render while the dialog is open; focus the current button, not a detached one.
+  const selector = `.candidate-trim[data-job-id="${CSS.escape(jobId)}"][data-candidate-index="${index}"]`;
+  (document.querySelector(selector) || document.getElementById('query-input'))?.focus();
+}
+
 function openTrimDialog(jobId, index) {
   const candidate = getJobById(jobId)?.candidates?.[index];
   const dialog = document.getElementById('trim-dialog');
@@ -41,8 +53,9 @@ function openTrimDialog(jobId, index) {
   end.value = '';
   end.placeholder = candidate.duration ? fmtDuration(candidate.duration) : 'end';
   error.textContent = '';
+  document.getElementById('trim-cancel').onclick = () => dialog.close();
+  dialog.onclose = () => focusAfterTrim(jobId, index);
   dialog.onsubmit = event => {
-    if (event.submitter?.value !== 'add') return;
     const chosen = readTrimWindow(start.value, end.value, candidate.duration);
     if (chosen.error) {
       event.preventDefault();

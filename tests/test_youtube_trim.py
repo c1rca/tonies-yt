@@ -77,6 +77,15 @@ def test_invalid_trims_are_refused_before_anything_runs(client, monkeypatch, tri
     assert response.status_code == 422
 
 
+def test_a_trim_that_keeps_everything_is_no_trim(client, monkeypatch):
+    seen = {}
+    monkeypatch.setattr(main, "select_candidate_and_continue",
+                        lambda job_id, index, target_url=None, position=None, trim="unset": seen.update(trim=trim) or job_id)
+    monkeypatch.setattr(main, "get_job", lambda _id: None)
+    client.post("/api/jobs/j1/select", json={"index": 0, "trim": {"start": 0}})
+    assert seen == {"trim": None}
+
+
 def test_valid_trim_is_passed_to_the_job(client, monkeypatch):
     seen = {}
 
