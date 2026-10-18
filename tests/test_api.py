@@ -4,6 +4,7 @@ import pytest
 
 from app import main
 from app.main import app
+from app.routes import files
 
 
 def test_health_endpoint():
@@ -95,8 +96,8 @@ def test_library_media_validates_basename_before_file_access(monkeypatch, tmp_pa
     monkeypatch.setattr(main.settings, 'data_dir', tmp_path)
     (tmp_path / 'downloads').mkdir()
     (tmp_path / 'secret.mp3').write_bytes(b'private')
-    with pytest.raises(main.HTTPException) as error:
-        main.download_file(filename)
+    with pytest.raises(files.HTTPException) as error:
+        files.download_file(filename)
     assert error.value.status_code == 404
 
 

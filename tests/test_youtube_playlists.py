@@ -9,6 +9,7 @@ import pytest
 
 from app import attach_order, downloader, job_pipeline as jobs, job_store, job_upload, main
 from app.models import ParseIntent
+from app.routes import jobs as job_routes
 from app.youtube_source import is_playlist_url, normalize_youtube_input
 
 LIST_ID = "PLAbCdEfGhIjKlMnOpQrStUv_0123456-x"
@@ -244,7 +245,7 @@ def test_select_many_endpoint_returns_the_new_jobs(client, monkeypatch):
         seen.update(job_id=job_id, indexes=indexes, target_url=target_url, position=position)
         return ["a", "b"]
 
-    monkeypatch.setattr(main, "select_candidates_and_continue", select)
+    monkeypatch.setattr(job_routes, "select_candidates_and_continue", select)
     response = client.post("/api/jobs/j1/select-many",
                            json={"indexes": [2, 0], "target_url": "t", "position": {"edge": "end"}})
     assert response.status_code == 200 and response.json() == {"job_ids": ["a", "b"]}
@@ -255,12 +256,12 @@ def test_select_many_endpoint_refuses_bad_requests(client, monkeypatch):
     def select(*_a, **_kw):
         raise ValueError("Choose between 1 and 50 different videos")
 
-    monkeypatch.setattr(main, "select_candidates_and_continue", select)
+    monkeypatch.setattr(job_routes, "select_candidates_and_continue", select)
     assert client.post("/api/jobs/j1/select-many", json={"indexes": [0, 0]}).status_code == 422
     assert client.post("/api/jobs/j1/select-many", json={"indexes": "x"}).status_code == 422
 
 
 @pytest.mark.parametrize("indexes", [[True], ["1"], [1.0], [], list(range(51))])
 def test_select_many_refuses_non_integer_or_oversized_lists_before_any_work(client, monkeypatch, indexes):
-    monkeypatch.setattr(main, "select_candidates_and_continue", lambda *_a, **_kw: pytest.fail("must not run"))
+    monkeypatch.setattr(job_routes, "select_candidates_and_continue", lambda *_a, **_kw: pytest.fail("must not run"))
     assert client.post("/api/jobs/j1/select-many", json={"indexes": indexes}).status_code == 422

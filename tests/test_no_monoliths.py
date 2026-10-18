@@ -25,7 +25,6 @@ ALLOWED = {
     "web/assets/workspace.css": 1516,
     # T9
     # T10
-    "app/main.py": 619,
     # T11
 }
 
