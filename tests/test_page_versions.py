@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 import pytest
 
 from app import __version__, main
+from app.routes import pages
 
 
 class FooterReader(HTMLParser):
@@ -29,8 +30,8 @@ class FooterReader(HTMLParser):
 @pytest.mark.parametrize("route", ["/", "/settings", "/logs", "/login", "/setup"])
 def test_every_page_footer_uses_running_version(monkeypatch, route):
     # Exercise each page handler, not redirects to a different page.
-    monkeypatch.setattr(main, "vault_configured", lambda: route == "/login")
-    monkeypatch.setattr(main, "setup_status", lambda: {"configured": route == "/login", "unlocked": route != "/login"})
+    monkeypatch.setattr(pages, "vault_configured", lambda: route == "/login")
+    monkeypatch.setattr(pages, "setup_status", lambda: {"configured": route == "/login", "unlocked": route != "/login"})
     monkeypatch.setattr(main, "start_worker", lambda: None)
     with TestClient(main.app, follow_redirects=False) as client:
         first = client.get(route)
@@ -41,7 +42,7 @@ def test_every_page_footer_uses_running_version(monkeypatch, route):
         parsed.feed(first.text)
         assert parsed.versions == [f"v{__version__}"]
         # Version changes at the same source as status/startup, never an HTML pin.
-        monkeypatch.setattr(main, "__version__", "99.8.7")
+        monkeypatch.setattr(pages, "__version__", "99.8.7")
         changed = client.get(route)
         parsed = FooterReader()
         parsed.feed(changed.text)

@@ -23,7 +23,6 @@ ALLOWED = {
     # T8
     # T9
     # T10
-    "app/main.py": 619,
     # T11
 }
 
