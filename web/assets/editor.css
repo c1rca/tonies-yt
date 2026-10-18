@@ -1,0 +1,102 @@
+/* Audio editor dialog and clip controls. */
+/* Native <dialog>: the browser handles focus, Escape and the top layer. */
+.audio-editor {
+  width:min(760px, calc(100vw - 24px));
+  max-width:none;
+  margin:auto;
+  color:var(--text);
+}
+
+.audio-editor::backdrop {
+  background:#090e18a6;
+}
+
+.editor-wave {
+  position:relative;
+  height:128px;
+  margin-top:12px;
+  border:1px solid var(--border);
+  border-radius:10px;
+  background:var(--surface-2, transparent);
+  cursor:pointer;
+  touch-action:none;
+}
+
+.editor-wave canvas {
+  display:block;
+  width:100%;
+  height:100%;
+}
+
+.editor-handle {
+  position:absolute;
+  top:-6px;
+  bottom:-6px;
+  width:24px;
+  margin-left:-12px;
+  cursor:ew-resize;
+  touch-action:none;
+}
+
+.editor-handle::before {
+  content:"";
+  position:absolute;
+  inset:0 10px;
+  border-radius:2px;
+  background:var(--accent);
+}
+
+.editor-handle::after {
+  content:"";
+  position:absolute;
+  top:50%;
+  left:4px;
+  width:16px;
+  height:28px;
+  margin-top:-14px;
+  border-radius:6px;
+  background:var(--accent);
+}
+
+.editor-handle:focus-visible {
+  outline:2px solid var(--text);
+  outline-offset:2px;
+  border-radius:6px;
+}
+
+.editor-transport {
+  display:flex;
+  flex-wrap:wrap;
+  align-items:center;
+  gap:8px;
+  margin-top:12px;
+}
+
+.editor-transport .tiny {
+  margin-left:auto;
+  font-variant-numeric:tabular-nums;
+}
+
+.editor-fields {
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:12px;
+  margin-top:12px;
+}
+
+.editor-fields input {
+  width:100%;
+}
+
+.modal .editor-error {
+  min-height:18px;
+  margin-top:6px;
+  color:var(--danger);
+}
+
+.modal-actions {
+  display:flex;
+  justify-content:flex-end;
+  gap:10px;
+  margin-top:24px;
+}

@@ -1,0 +1,56 @@
+/* Tonie artwork and selector presentation. */
+/* Target artwork is the personality; surrounding chrome stays quiet. */
+.tonie-row-copy {
+  min-width: 0;
+}
+.tonie-row-copy > span {
+  display: block;
+}
+.tonie-row-copy > .truncate {
+  font-weight: 650;
+}
+.tonie-art-fallback {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 48px;
+  color: var(--muted);
+  font-size: 24px;
+}
+.file {
+  grid-template-columns: 44px minmax(0, 1fr);
+}
+.file-select-label,
+.track-select-label {
+  min-width: 44px;
+  min-height: 44px;
+}
+.tonies-item:has(.track-select) {
+  grid-template-columns: 44px minmax(0, 1fr) auto;
+}
+.target-change {
+  min-height: 44px;
+}
+.activity-dismiss {
+  margin-top: 10px;
+  font-size: 11px;
+}
+
+.workspace-undo {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 12px;
+}
+.workspace-undo span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.workspace-undo button {
+  flex: none;
+}
