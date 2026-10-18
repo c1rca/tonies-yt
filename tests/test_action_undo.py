@@ -183,6 +183,54 @@ def test_upload_undo_deletes_only_confirmed_permanent_id(queue, cloud_api, monke
     assert len(cloud.patches) == 2
 
 
+@pytest.mark.parametrize("finished", [False, True])
+def test_upload_undo_still_works_after_tonies_processes_the_audio(queue, cloud_api, monkeypatch, finished):
+    """Tonies rewrites a new chapter's file reference and duration while processing it;
+    that is not a library change by someone else and must not block Undo."""
+    cloud, _ = cloud_api
+    monkeypatch.setattr(queue, "_transfer", lambda action: None)
+    action = queue.submit_upload(URL, Path("unused.mp3"), "New")
+    queue._transfers.shutdown(wait=True)
+    action.status = "ready"
+    action.params.update(file_id="staging", seconds=1)
+    apply_ready(queue)
+    assert action.chapter_id == "permanent"
+    uploaded = cloud.chapters[-1]
+    uploaded.update(file="final-audio-reference", seconds=187.4)
+    if finished:
+        uploaded["transcoding"] = False
+    queue.undo(action.id)
+    assert [c["id"] for c in cloud.chapters] == ["one", "two"]
+    assert action.status == "undone"
+
+
+def test_rename_undo_still_works_while_an_earlier_upload_finishes_processing(queue, cloud_api, monkeypatch):
+    cloud, _ = cloud_api
+    monkeypatch.setattr(queue, "_transfer", lambda action: None)
+    upload = queue.submit_upload(URL, Path("unused.mp3"), "New")
+    queue._transfers.shutdown(wait=True)
+    upload.status = "ready"
+    upload.params.update(file_id="staging", seconds=1)
+    apply_ready(queue)
+    rename = queue.submit(URL, [{"type": "rename", "chapter_id": "one", "title": "Renamed"}])[0]
+    apply_ready(queue)
+    cloud.chapters[-1].update(file="final-audio-reference", seconds=187.4, transcoding=False)
+    queue.undo(rename.id)
+    assert cloud.chapters[0]["title"] == "Same" and rename.status == "undone"
+    assert [c["id"] for c in cloud.chapters] == ["one", "two", "permanent"]
+
+
+def test_undo_still_refuses_when_another_device_edits_a_title(queue, cloud_api):
+    cloud, _ = cloud_api
+    action = queue.submit(URL, [{"type": "rename", "chapter_id": "one", "title": "Renamed"}])[0]
+    apply_ready(queue)
+    cloud.chapters[1]["title"] = "Changed elsewhere"
+    patches = len(cloud.patches)
+    with pytest.raises(RuntimeError):
+        queue.undo(action.id)
+    assert len(cloud.patches) == patches
+
+
 @pytest.mark.parametrize("failure", ["timeout", "readback"])
 def test_failed_inverse_is_consumed_and_never_retried(queue, cloud_api, failure):
     cloud, api = cloud_api

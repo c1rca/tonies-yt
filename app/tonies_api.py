@@ -386,7 +386,8 @@ class ToniesAPI:
                     ids, expected, processing_ids=processing_ids, with_snapshot=True))
             except RuntimeError:
                 raise UnconfirmedWriteError(results, attachment_receipt) from None
-            receipt = UndoReceipt(self, ids, _writable(confirmed), inverse_steps(chapters, ops, results))
+            receipt = UndoReceipt(self, ids, _writable(confirmed), inverse_steps(chapters, ops, results),
+                                  processing_ids=frozenset(processing_ids))
             return {"content": content, "results": results, "_undo": receipt}
 
     def undo(self, target_url: str, receipt: UndoReceipt, indices: list[int]) -> dict:
@@ -400,7 +401,7 @@ class ToniesAPI:
             raise RuntimeError("Undo account session changed; refresh the library")
         with self._target_lock(ids):
             before, config = self._snapshot(ids)
-            if _writable(before["chapters"]) != receipt.expected:
+            if not _matches_chapters(before["chapters"], receipt.expected, receipt.processing_ids):
                 raise RuntimeError("Undo inventory changed; refresh the library")
             steps = [receipt.steps[index] for index in reversed(indices) if receipt.steps[index] is not None]
             if not steps or len(steps) != len(indices):
@@ -410,7 +411,8 @@ class ToniesAPI:
                 return _content(before, config)
             self._api("PATCH", f"/households/{ids[0]}/creativetonies/{ids[1]}", {"chapters": _writable(desired)})
             try:
-                return cast(dict, self._readback(ids, desired, processing_ids=set()))
+                still_processing = {c["id"] for c in before["chapters"] if _processing(c.get("transcoding"))}
+                return cast(dict, self._readback(ids, desired, processing_ids=set(receipt.processing_ids) | still_processing))
             except RuntimeError:
                 raise UnconfirmedWriteError([], None) from None
 

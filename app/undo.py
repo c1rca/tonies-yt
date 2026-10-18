@@ -35,6 +35,9 @@ class UndoReceipt:
     target: tuple[str, str]
     expected: list[dict]
     steps: list[dict | None]
+    # Chapters Tonies was still processing: their file reference and duration may change
+    # on their own afterwards, which is not an edit by someone else.
+    processing_ids: frozenset[str] = frozenset()
 
 
 @dataclass
