@@ -16,7 +16,7 @@ def test_run_job_success(monkeypatch, tmp_path):
     def fake_search(query: str, limit: int = 5):
         return [{"title": "Candidate 1", "url": "https://youtube.com/watch?v=abc"}]
 
-    def fake_download(query: str, out_dir: Path, preferred_title: str | None = None):
+    def fake_download(query: str, out_dir: Path, preferred_title: str | None = None, trim=None):
         p = out_dir / 'track.mp3'
         p.write_bytes(b'fake')
         return p
@@ -70,7 +70,7 @@ def test_failed_job_cannot_enqueue_upload_after_download_returns(monkeypatch, tm
     release = threading.Event()
     uploads = []
 
-    def blocked_download(_url, out_dir, _title):
+    def blocked_download(_url, out_dir, _title, trim=None):
         started.set()
         release.wait(2)
         path = out_dir / 'late.mp3'

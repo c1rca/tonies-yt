@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Optional, Any
 
-from .media_process import probe_duration
+from .media_process import Trim, probe_duration
 from .models import JobState
 from .ai import parse_request
 from .downloader import download_mp3, search_youtube
@@ -391,7 +391,7 @@ def _accepted_attachment(action) -> dict | None:
 
 
 def select_candidate_and_continue(job_id: str, index: int, target_url: Optional[str] = None,
-                                  position: Optional[dict] = None) -> str:
+                                  position: Optional[dict] = None, trim: Optional[Trim] = None) -> str:
     with _lock:
         st = _jobs.get(job_id)
         if not st:
@@ -400,10 +400,12 @@ def select_candidate_and_continue(job_id: str, index: int, target_url: Optional[
             raise RuntimeError("Invalid candidate index")
 
         selected = st.candidates[index]
+        trim_state = None if trim is None else {"start": trim.start, "end": trim.end}
 
         # Idempotent re-select: if same candidate is already in-flight/done, no-op.
         in_flight_states = {"queued_download", "downloading", "queued_prepare", "preparing", "waiting_upload", "uploading", "done"}
-        already_same = bool(st.selected_candidate and st.selected_candidate.get("url") == selected.get("url"))
+        already_same = bool(st.selected_candidate and st.selected_candidate.get("url") == selected.get("url")
+                            and st.trim == trim_state)
         if st.status in in_flight_states and already_same:
             return job_id
 
@@ -423,6 +425,7 @@ def select_candidate_and_continue(job_id: str, index: int, target_url: Optional[
                 selected_candidate=selected,
                 target_url=target_url,
                 target_position=position,
+                trim=trim_state,
                 logs=[f"Spawned from search job {job_id}", f"Selected candidate: {selected.get('title', 'unknown')}"]
             )
             _jobs[new_id] = new_state
@@ -431,6 +434,7 @@ def select_candidate_and_continue(job_id: str, index: int, target_url: Optional[
             st.status = "queued_download"
             st.target_url = target_url
             st.target_position = position
+            st.trim = trim_state
             st.updated_at = now_iso()
             new_id = None
 
@@ -438,16 +442,16 @@ def select_candidate_and_continue(job_id: str, index: int, target_url: Optional[
     if new_id:
         _emit_event("job_created", new_id)
         _emit_event("job_selected", new_id)
-        run_selected_candidate_async(new_id, selected, target_url, position)
+        run_selected_candidate_async(new_id, selected, target_url, position, trim)
         return new_id
 
     _emit_event("job_selected", job_id)
-    run_selected_candidate_async(job_id, selected, target_url, position)
+    run_selected_candidate_async(job_id, selected, target_url, position, trim)
     return job_id
 
 
 def run_selected_candidate_async(job_id: str, selected: dict, target_url: Optional[str] = None,
-                                 position: Optional[dict] = None):
+                                 position: Optional[dict] = None, trim: Optional[Trim] = None):
     def _runner():
         t0 = time.time()
         try:
@@ -461,7 +465,9 @@ def run_selected_candidate_async(job_id: str, selected: dict, target_url: Option
             _update(job_id, status="downloading")
             _log(job_id, f"Downloading selected URL only: {selected.get('url')}")
             dl_started = time.time()
-            mp3 = download_mp3(selected["url"], settings.data_dir / "downloads", preferred_title)
+            if trim is not None:
+                _log(job_id, f"Trimming to {trim.start:g}s–{'end' if trim.end is None else f'{trim.end:g}s'}")
+            mp3 = download_mp3(selected["url"], settings.data_dir / "downloads", preferred_title, trim=trim)
             _log(job_id, f"Timing: download+extract completed in {time.time() - dl_started:.1f}s")
 
             if _cancel_requested(job_id):

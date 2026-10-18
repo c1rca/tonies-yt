@@ -54,10 +54,13 @@ function renderCandidateCard(parentJob, candidate, index) {
   const receiptLabel = attempt?.stage === 'Sending selection' ? 'Sending selection…' : 'Check Activity before adding again';
   const metadata = esc(uiText(candidate.uploader || 'YouTube')) +
     (candidate.duration ? ` · ${fmtDuration(candidate.duration)}` : '');
+  const disabled = !selectedToniesUrl ? 'disabled' : '';
   const add = awaitingReceipt ? `<span class="tiny">${receiptLabel}</span>` : view.isSelected ? '<span class="tiny">Added to queue</span>' : `
+    <button class="ghost candidate-trim" data-job-id="${esc(parentJob.id)}" data-candidate-index="${index}"
+      aria-label="Trim ${title} before adding" ${disabled}>Trim</button>
     <button class="good candidate-add" data-job-id="${esc(parentJob.id)}"
       data-candidate-index="${index}" aria-label="Add ${title} to ${esc(workspaceTargetName())}"
-      ${!selectedToniesUrl ? 'disabled' : ''}>Add</button>`;
+      ${disabled}>Add</button>`;
   return `<article class="candidate-card ${view.isSelected ? 'selected' : ''}">
     ${view.progressHtml}
     <div class="candidate-heading">

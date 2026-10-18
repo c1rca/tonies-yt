@@ -6,7 +6,7 @@
     <title>Tonies-YT</title>
     <script src="/static/assets/theme.js?v=1"></script>
     <link rel="stylesheet" href="/static/assets/theme.css?v=1" />
-    <link rel="stylesheet" href="/static/assets/workspace.css?v=2" />
+    <link rel="stylesheet" href="/static/assets/workspace.css?v=3" />
   </head>
   <body>
     <div class="workspace" data-view="tracks" id="workspace">
@@ -68,6 +68,21 @@
       </section>
       <nav class="workspace-nav" aria-label="Workspace"><button id="nav-tracks" aria-current="page" onclick="setWorkspaceView('tracks', true)"><span aria-hidden="true">≡</span>Tracks</button><button id="nav-add" onclick="setWorkspaceView('add', true)"><span aria-hidden="true">+</span>Add audio</button><button id="nav-activity" onclick="setWorkspaceView('activity', true)"><span aria-hidden="true">↗</span>Activity</button></nav>
     </div>
+    <dialog id="trim-dialog" class="modal trim-dialog" aria-labelledby="trim-title">
+      <form method="dialog">
+        <h3 id="trim-title">Trim</h3>
+        <p id="trim-length" class="tiny"></p>
+        <div class="trim-fields">
+          <div><label for="trim-start" class="field-label">Start</label><input id="trim-start" inputmode="decimal" placeholder="0:00" autocomplete="off" /></div>
+          <div><label for="trim-end" class="field-label">End</label><input id="trim-end" inputmode="decimal" autocomplete="off" /></div>
+        </div>
+        <p id="trim-error" class="trim-error" role="alert"></p>
+        <div class="modal-actions">
+          <button value="cancel" class="ghost" formnovalidate>Cancel</button>
+          <button value="add" class="good">Add trimmed</button>
+        </div>
+      </form>
+    </dialog>
     <div id="confirm-modal" class="modal-backdrop" aria-hidden="true">
       <div class="modal" role="dialog" aria-modal="true" aria-labelledby="confirm-title">
         <h3 id="confirm-title">Confirm action</h3>
@@ -101,8 +116,9 @@
 
     <script src="/static/assets/session.js?v=1"></script>
     <script src="/static/assets/workspace-navigation.js?v=1"></script>
-    <script src="/static/assets/workspace-sources.js?v=1"></script>
-    <script src="/static/assets/workspace-source-selection.js?v=1"></script>
+    <script src="/static/assets/workspace-sources.js?v=2"></script>
+    <script src="/static/assets/workspace-source-selection.js?v=2"></script>
+    <script src="/static/assets/workspace-trim.js?v=1"></script>
     <script src="/static/assets/workspace-tracks.js?v=1"></script>
     <script src="/static/assets/local-preview.js?v=1"></script>
     <script src="/static/assets/workspace-activity.js?v=1"></script>
@@ -1241,10 +1257,12 @@
         clearSelectedCandidateIndex(jobId);
       }
 
-      function getCandidateSelectionPayload(index) {
+      function getCandidateSelectionPayload(index, trim = null) {
         // YouTube picks land at the visual top; the server places them there directly.
         const position = selectedToniesUrl ? { edge: toniesReverseView ? 'end' : 'start' } : null;
-        return { index, target_url: selectedToniesUrl || null, position };
+        const payload = { index, target_url: selectedToniesUrl || null, position };
+        if (trim) payload.trim = trim;
+        return payload;
       }
 
       function hasSelectionAdvanced(job) {
@@ -2687,6 +2705,9 @@
         jobsEl.innerHTML = renderSearchJobCardsHtml(singleCardViews);
         for (const button of jobsEl.querySelectorAll('.candidate-add')) button.addEventListener('click', () => {
           void pickCandidate(button.getAttribute('data-job-id'), Number(button.getAttribute('data-candidate-index')));
+        });
+        for (const button of jobsEl.querySelectorAll('.candidate-trim')) button.addEventListener('click', () => {
+          openTrimDialog(button.getAttribute('data-job-id'), Number(button.getAttribute('data-candidate-index')));
         });
       }
 

@@ -15,6 +15,7 @@ from . import __version__, auth
 from .config import settings
 from .credentials import setup_status, initialize_vault, login_unlock, lock_runtime, get_credentials, change_app_password, update_tonies_credentials, vault_configured, VaultError
 from .media_files import library_file, library_files, store_upload
+from .media_process import Trim
 from .downloader import clear_search_cache
 from .jobs import create_job, get_job, list_jobs, start_worker, select_candidate_and_continue, create_upload_only_job, get_events_since, get_event_stats, get_queue_stats, cancel_job
 from .logger import setup_logging
@@ -67,10 +68,16 @@ class Health(BaseModel):
     status: str
 
 
+class TrimRequest(BaseModel):
+    start: float = Field(default=0, ge=0, le=86400)
+    end: Optional[float] = Field(default=None, gt=0, le=86400)
+
+
 class SelectionRequest(BaseModel):
     index: int
     target_url: str = None
     position: Optional[dict] = None
+    trim: Optional[TrimRequest] = None
 
 
 class UploadExistingRequest(BaseModel):
@@ -475,8 +482,15 @@ def delete_file(filename: str):
 
 @app.post("/api/jobs/{job_id}/select")
 def select_candidate(job_id: str, req: SelectionRequest):
+    trim = None
+    if req.trim is not None:
+        try:
+            trim = Trim(start=req.trim.start, end=req.trim.end).validate()
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from None
     try:
-        selected_job_id = select_candidate_and_continue(job_id, req.index, req.target_url, clean_position(req.position))
+        selected_job_id = select_candidate_and_continue(job_id, req.index, req.target_url,
+                                                        clean_position(req.position), trim=trim)
         j = get_job(selected_job_id)
         return j.model_dump() if j else {"error": "not_found"}
     except Exception:

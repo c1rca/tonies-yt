@@ -35,6 +35,7 @@ class JobState(BaseModel):
     logs: list[str] = []
     output_file: Optional[str] = None
     target_position: Optional[dict] = None
+    trim: Optional[dict] = None  # {"start": seconds, "end": seconds | None}
     tonies_action_id: Optional[str] = None
     upload_positioned: bool = False
     uploaded_chapter_id: Optional[str] = None
