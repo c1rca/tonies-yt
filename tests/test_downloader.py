@@ -29,5 +29,5 @@ def test_download_mp3_does_not_return_preexisting_same_prefix_file(monkeypatch, 
     stale.write_bytes(b"old")
     monkeypatch.setattr(downloader, "_run_ytdlp", lambda *_a, **_kw: b"")
 
-    with pytest.raises(RuntimeError, match="no MP3 file found"):
+    with pytest.raises(RuntimeError, match="no audio file found"):
         downloader.download_mp3("https://www.youtube.com/watch?v=AbCdEf_12-3", tmp_path, "Song")

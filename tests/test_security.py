@@ -12,7 +12,7 @@ from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 import pytest
 
-from app import auth, credentials, main, media_files
+from app import auth, credentials, main, media_files, media_process
 
 pytestmark = pytest.mark.real_auth
 USER, PASSWORD = "synthetic", "synthetic app password"
@@ -285,7 +285,7 @@ def test_upload_size_limit_applies_before_multipart_buffering(monkeypatch):
     c = signed_client()
     monkeypatch.setattr(main.settings, "max_upload_bytes", 16, raising=False)
     conversion = Mock()
-    monkeypatch.setattr(media_files, "run_conversion", conversion)
+    monkeypatch.setattr(media_process, "run_conversion", conversion)
     # Exceed both file cap and permitted multipart overhead.
     r = c.post("/api/files/upload", files={"file": ("a.wav", b"x" * (1024 * 1024 + 100), "audio/wav")})
     assert r.status_code == 413
@@ -296,7 +296,7 @@ def test_upload_stream_limit_cleanup_and_unique_names(monkeypatch, tmp_path):
     c = signed_client()
     monkeypatch.setattr(main.settings, "max_upload_bytes", 16, raising=False)
     run = Mock()
-    monkeypatch.setattr(media_files, "run_conversion", run)
+    monkeypatch.setattr(media_process, "run_conversion", run)
     r = c.post("/api/files/upload", files={"file": ("a.wav", b"x" * 17, "audio/wav")})
     assert r.status_code == 413
     run.assert_not_called()
@@ -311,7 +311,7 @@ def test_upload_conversion_forbids_network_and_playlist_demuxers(monkeypatch, tm
         # Simulate converter output only; actual ffmpeg positive control is separate.
         from pathlib import Path
         Path(cmd[-1]).write_bytes(b"synthetic converted audio")
-    monkeypatch.setattr(media_files, "run_conversion", run)
+    monkeypatch.setattr(media_process, "run_conversion", run)
     names = []
     for _ in range(2):
         r = c.post("/api/files/upload", files={"file": ("same.wav", b"synthetic", "audio/wav")})

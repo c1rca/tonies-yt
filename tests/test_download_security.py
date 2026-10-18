@@ -30,6 +30,9 @@ def child(monkeypatch):
         return proc
 
     monkeypatch.setattr(subprocess, "Popen", launch)
+    # The provider stand-in writes opaque bytes; real encoding is covered in test_audio_levelling.
+    monkeypatch.setattr(downloader, "convert_to_mp3",
+                        lambda source, destination, **_kw: destination.write_bytes(source.read_bytes()))
     return state
 
 
@@ -140,7 +143,7 @@ def test_deadline_kills_and_reaps_child(child, monkeypatch, tmp_path, operation)
 
 
 def test_download_search_is_single_result_with_size_limit_and_clean_template(child, tmp_path):
-    with pytest.raises(RuntimeError, match="no MP3 file found"):
+    with pytest.raises(RuntimeError, match="no audio file found"):
         downloader.download_mp3("bedtime story", tmp_path, "../../ %(title)s")
     cmd, kwargs = child["calls"][0]
     assert cmd[-2:] == ["--", "ytsearch1:bedtime story"]

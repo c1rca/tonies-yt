@@ -10,6 +10,7 @@ import time
 from threading import Lock
 from uuid import uuid4
 
+from .media_process import Trim, convert_to_mp3
 from .subprocess_runner import run_ytdlp as _run_ytdlp
 from .youtube_source import normalize_youtube_input, parse_candidates
 
@@ -97,7 +98,9 @@ def _publish_audio(source: Path, out_dir: Path, base: str) -> Path:
     return destination
 
 
-def download_mp3(youtube_query_or_url: str, out_dir: Path, preferred_title: str | None = None) -> Path:
+def download_mp3(youtube_query_or_url: str, out_dir: Path, preferred_title: str | None = None,
+                 trim: Trim | None = None) -> Path:
+    """Download the original audio, then encode it once: levelled, trimmed if asked, MP3."""
     text = normalize_youtube_input(youtube_query_or_url)
     target = text if text.startswith("https://") else f"ytsearch1:{text}"
     base = sanitize_filename(preferred_title or "audio")
@@ -108,7 +111,7 @@ def download_mp3(youtube_query_or_url: str, out_dir: Path, preferred_title: str 
             output_template = str(directory / f"{base}.%(ext)s")
             cmd = [
                 *_base_command(), "-x", "--format", "bestaudio/best",
-                "--concurrent-fragments", "4", "--audio-format", "mp3",
+                "--concurrent-fragments", "4",
                 "--socket-timeout", "20", "--js-runtimes", "deno",
                 "--max-filesize", str(_MAX_DOWNLOAD_BYTES), "-o", output_template,
                 "--", target,
@@ -119,9 +122,11 @@ def download_mp3(youtube_query_or_url: str, out_dir: Path, preferred_title: str 
                 resource_check=lambda: _check_download_size(directory),
             )
             _check_download_size(directory)
-            matches = list(directory.glob("*.mp3"))
+            matches = list(directory.iterdir())
             if len(matches) != 1 or matches[0].stat().st_size == 0:
-                raise RuntimeError("Download command finished but no MP3 file found") from None
-            return _publish_audio(matches[0], out_dir, base)
+                raise RuntimeError("Download command finished but no audio file found") from None
+            converted = directory / ".converted.mp3"
+            convert_to_mp3(matches[0], converted, max_bytes=_MAX_DOWNLOAD_BYTES, trim=trim)
+            return _publish_audio(converted, out_dir, base)
     except OSError:
         raise RuntimeError("YouTube download failed") from None

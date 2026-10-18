@@ -101,8 +101,8 @@ def test_converter_discards_noisy_diagnostics_at_authenticated_upload(browser, n
     native_child["ffmpeg"] = "import os; os.write(1, b'x'*262144); os.write(2, b'x'*262144)"
     response = browser.post("/api/files/upload", files={"file": ("synthetic.wav", b"synthetic", "audio/wav")})
     assert response.status_code == 200
-    cmd, launch = native_child["calls"][0]
-    assert cmd[0] == "ffmpeg"
+    # The loudness probe runs first; the encoder is the call that writes the MP3.
+    cmd, launch = next(call for call in native_child["calls"] if call[0][0] == "ffmpeg" and "mp3" in call[0])
     assert launch["stderr"] == subprocess.DEVNULL
     assert launch["stdout"] == subprocess.DEVNULL
     assert launch["stdin"] == subprocess.DEVNULL
@@ -282,7 +282,7 @@ def test_converter_failure_reaps_and_cleans_both_temporaries(failure, browser, n
     assert SECRET not in response.text and str(tmp_path) not in response.text
     assert list((tmp_path / "uploads").iterdir()) == []
     assert list((tmp_path / "downloads").iterdir()) == []
-    assert short_deadline == [240]
+    assert short_deadline[-1] == 240  # loudness probe first, then the bounded encoder
     assert_reaped(native_child)
 
 

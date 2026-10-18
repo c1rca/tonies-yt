@@ -13,7 +13,7 @@ from starlette.concurrency import run_in_threadpool
 
 from .config import settings
 from .downloader import sanitize_filename
-from .media_process import MEDIA_INPUT_OPTIONS, probe_seconds, run_conversion
+from .media_process import convert_to_mp3, probe_seconds
 
 CHUNK_BYTES = 64 * 1024
 
@@ -59,12 +59,7 @@ def _duration(path: Path) -> float | None:
 
 def _convert(source: Path, destination: Path) -> None:
     try:
-        run_conversion([
-            "ffmpeg", "-nostdin", "-v", "error", "-y", *MEDIA_INPUT_OPTIONS,
-            "-i", str(source), "-map", "0:a:0", "-vn", "-ar", "44100", "-ac", "2",
-            "-codec:a", "libmp3lame", "-b:a", "128k", "-fs", str(settings.max_upload_bytes),
-            "-f", "mp3", str(destination),
-        ])
+        convert_to_mp3(source, destination, max_bytes=settings.max_upload_bytes)
     except (RuntimeError, OSError):
         raise HTTPException(status_code=400, detail="Audio conversion failed; upload a supported audio file") from None
     if destination.stat().st_size >= settings.max_upload_bytes:
