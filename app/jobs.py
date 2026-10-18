@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Dict, Optional, Any
 
 from .attach_order import AttachOrder
-from .media_process import Trim, probe_duration
+from .media_process import probe_duration
 from .models import JobState
 from .ai import parse_request
 from .downloader import PLAYLIST_MAX, download_mp3, search_youtube
@@ -405,7 +405,7 @@ def _accepted_attachment(action) -> dict | None:
 
 
 def select_candidate_and_continue(job_id: str, index: int, target_url: Optional[str] = None,
-                                  position: Optional[dict] = None, trim: Optional[Trim] = None) -> str:
+                                  position: Optional[dict] = None) -> str:
     with _lock:
         st = _jobs.get(job_id)
         if not st:
@@ -414,25 +414,22 @@ def select_candidate_and_continue(job_id: str, index: int, target_url: Optional[
             raise RuntimeError("Invalid candidate index")
 
         selected = st.candidates[index]
-        trim_state = None if trim is None else {"start": trim.start, "end": trim.end}
 
         # Idempotent re-select: if same candidate is already in-flight/done, no-op.
         in_flight_states = {"queued_download", "downloading", "queued_prepare", "preparing", "waiting_upload", "uploading", "done"}
-        already_same = bool(st.selected_candidate and st.selected_candidate.get("url") == selected.get("url")
-                            and st.trim == trim_state)
+        already_same = bool(st.selected_candidate and st.selected_candidate.get("url") == selected.get("url"))
         if st.status in in_flight_states and already_same:
             return job_id
 
         # If the original search job already moved past selection, spawn a sibling upload job
         # so multiple candidates from one search result set can be queued independently.
         if st.status != "awaiting_selection":
-            new_id = _spawn_selection_job(st, selected, target_url, position, trim_state).id
+            new_id = _spawn_selection_job(st, selected, target_url, position).id
         else:
             st.selected_candidate = selected
             st.status = "queued_download"
             st.target_url = target_url
             st.target_position = position
-            st.trim = trim_state
             st.updated_at = now_iso()
             new_id = None
 
@@ -440,16 +437,16 @@ def select_candidate_and_continue(job_id: str, index: int, target_url: Optional[
     if new_id:
         _emit_event("job_created", new_id)
         _emit_event("job_selected", new_id)
-        run_selected_candidate_async(new_id, selected, target_url, position, trim)
+        run_selected_candidate_async(new_id, selected, target_url, position)
         return new_id
 
     _emit_event("job_selected", job_id)
-    run_selected_candidate_async(job_id, selected, target_url, position, trim)
+    run_selected_candidate_async(job_id, selected, target_url, position)
     return job_id
 
 
-def _spawn_selection_job(st: JobState, selected: dict, target_url: Optional[str], position: Optional[dict],
-                         trim_state: Optional[dict] = None) -> JobState:
+def _spawn_selection_job(st: JobState, selected: dict, target_url: Optional[str],
+                         position: Optional[dict]) -> JobState:
     """A new job for one picked result, leaving the search job's list in place. Caller holds _lock."""
     new_state = JobState(
         id=str(uuid.uuid4()),
@@ -463,7 +460,6 @@ def _spawn_selection_job(st: JobState, selected: dict, target_url: Optional[str]
         selected_candidate=selected,
         target_url=target_url,
         target_position=position,
-        trim=trim_state,
         logs=[f"Spawned from search job {st.id}", f"Selected candidate: {selected.get('title', 'unknown')}"],
     )
     _jobs[new_state.id] = new_state
@@ -494,9 +490,21 @@ def select_candidates_and_continue(job_id: str, indexes: list[int], target_url: 
     return [job.id for job in spawned]
 
 
+def fetch_candidate(job_id: str, index: int) -> Path:
+    """Download one result into the local library (for the editor) without adding it anywhere."""
+    with _lock:
+        st = _jobs.get(job_id)
+        if not st or not 0 <= index < len(st.candidates):
+            raise ValueError("That video is no longer in the results; search again")
+        selected = dict(st.candidates[index])
+    title = selected.get("title") or (st.parsed or {}).get("preferred_title")
+    # Same FIFO pool as adds, so the editor never runs more than three downloads at once.
+    future = _downloads.submit(download_mp3, selected["url"], settings.data_dir / "downloads", title)
+    return Path(future.result())
+
+
 def run_selected_candidate_async(job_id: str, selected: dict, target_url: Optional[str] = None,
-                                 position: Optional[dict] = None, trim: Optional[Trim] = None,
-                                 order: Optional[AttachOrder] = None):
+                                 position: Optional[dict] = None, order: Optional[AttachOrder] = None):
     """Download on the shared FIFO pool, wait for its turn in a batch, then queue the upload."""
     def _stopped() -> bool:
         job = get_job(job_id)
@@ -519,9 +527,7 @@ def run_selected_candidate_async(job_id: str, selected: dict, target_url: Option
             _update(job_id, status="downloading")
             _log(job_id, f"Downloading selected URL only: {selected.get('url')}")
             dl_started = time.time()
-            if trim is not None:
-                _log(job_id, f"Trimming to {trim.start:g}s–{'end' if trim.end is None else f'{trim.end:g}s'}")
-            mp3 = download_mp3(selected["url"], settings.data_dir / "downloads", preferred_title, trim=trim)
+            mp3 = download_mp3(selected["url"], settings.data_dir / "downloads", preferred_title)
             _log(job_id, f"Timing: download+extract completed in {time.time() - dl_started:.1f}s")
             if _stopped():
                 return

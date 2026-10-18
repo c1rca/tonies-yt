@@ -174,7 +174,7 @@ Pushing a `v*` tag runs `.github/workflows/release-image.yml`: it builds the ima
 
 ## Audio processing
 
-Every added track goes through one encoder (`media_process.convert_to_mp3`): it measures integrated loudness (EBU R128), applies one static gain towards -14 LUFS with a -1 dBFS limiter (boost capped at +12 dB, no gain for silence), trims if asked, and writes 128 kbps stereo MP3. If loudness can't be measured the audio is converted unchanged. YouTube audio is downloaded in its original format and encoded once. Existing library files are not re-processed.
+Every added track goes through one encoder (`media_process.convert_to_mp3`): it measures integrated loudness (EBU R128), applies one static gain towards -14 LUFS with a -1 dBFS limiter (boost capped at +12 dB, no gain for silence) and writes 128 kbps stereo MP3. Clips made in the audio editor are cut from that MP3 without re-encoding. If loudness can't be measured the audio is converted unchanged. YouTube audio is downloaded in its original format and encoded once. Existing library files are not re-processed.
 
 YouTube: at most three downloads run at once; a plain download failure is retried once (a download has no side effects), timeouts and size limits are not. A playlist link lists its first 50 videos. Several results added together attach in the order shown, even when a later one finishes downloading first.
 

@@ -9,7 +9,7 @@ Fast web app for managing Creative Tonies audio.
 ## What it does
 - Search YouTube, pick a result and download audio, or paste a playlist link and pick from its first 50 videos
 - Select several results and add them in one go; they land in the order shown
-- **Trim** a video before adding it (keep only 0:10–2:30, for example)
+- **Edit and clip** audio on a waveform before adding it: play it, drag the start and end, listen to the clip
 - Every track is **volume-levelled** when it's added, so one song isn't quiet and the next one loud
 - Upload audio to Creative Tonies through the Tonies cloud API
 - Manage Tonies tracks: rename, reorder, delete, **delete all content with confirmation**
@@ -82,7 +82,7 @@ No framework, build step or external frontend dependency is required. The page l
 - `workspace-navigation.js`: view/source navigation, appearance, selected destination and safe artwork/rail rendering.
 - `workspace-sources.js`: local multi-selection, captured-target submission and local import lifecycle.
 - `workspace-youtube-selection.js`: selecting several YouTube results (or playlist videos) and adding them in one request.
-- `workspace-trim.js`: the Trim dialog and its minutes:seconds parsing.
+- `workspace-audio-editor.js`: the waveform editor (drawing, handles, playback, clip and add).
 - `workspace-tracks.js`: exact-ID selection, inline rename ownership and row-action bindings.
 - `workspace-activity.js`: in-session job/action presentation and dismissible feedback; never mutation replay or client-side recovery history.
 - `workspace-dialogs.js`: confirmation ownership, keyboard focus and safe initial action.

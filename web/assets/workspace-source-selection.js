@@ -21,10 +21,10 @@ function prepareWorkspaceCandidateIntent(jobId, targetUrl) {
   uploadIntentsByJobId.set(jobId, pendingDropUploadIntent);
 }
 
-async function pickCandidate(jobId, index, trim = null) {
+async function pickCandidate(jobId, index) {
   if (isCandidateSelectionPending(jobId) || workspaceCandidateAttempt(jobId, index)?.blocked) return;
   const targetUrl = selectedToniesUrl;
-  const payload = getCandidateSelectionPayload(index, trim);
+  const payload = getCandidateSelectionPayload(index);
   const parent = getJobById(jobId);
   const previous = {status:parent?.status, selected:parent?.selected_candidate};
   const picked = applyOptimisticCandidateSelection(jobId, index);

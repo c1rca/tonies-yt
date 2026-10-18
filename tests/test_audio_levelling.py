@@ -1,4 +1,4 @@
-"""Volume levelling and trimming with the real ffmpeg (offline, generated audio)."""
+"""Volume levelling with the real ffmpeg (offline, generated audio)."""
 import subprocess
 from pathlib import Path
 
@@ -22,9 +22,9 @@ def _source(tmp_path: Path, name: str, gain_db: float, seconds: float = 8, kind:
     return path
 
 
-def _converted(tmp_path: Path, source: Path, trim: Trim | None = None) -> Path:
+def _converted(tmp_path: Path, source: Path) -> Path:
     destination = tmp_path / f"{source.stem}-out.mp3"
-    convert_to_mp3(source, destination, max_bytes=MAX_BYTES, trim=trim)
+    convert_to_mp3(source, destination, max_bytes=MAX_BYTES)
     return destination
 
 
@@ -57,22 +57,6 @@ def test_silence_converts_without_gain(tmp_path):
     assert probe_seconds(output, timeout=10) == pytest.approx(3, abs=0.2)
 
 
-def test_trim_keeps_only_the_requested_section_and_levels_it(tmp_path):
-    output = _converted(tmp_path, _source(tmp_path, "long", -10, seconds=10), Trim(start=2, end=5))
-    assert probe_seconds(output, timeout=10) == pytest.approx(3, abs=0.15)
-    assert abs(measure_loudness(output) - media_process.TARGET_LUFS) <= 1.5
-
-
-def test_trim_end_past_the_audio_keeps_the_rest(tmp_path):
-    output = _converted(tmp_path, _source(tmp_path, "short", -20, seconds=4), Trim(start=1, end=60))
-    assert probe_seconds(output, timeout=10) == pytest.approx(3, abs=0.15)
-
-
-def test_trim_starting_after_the_audio_is_refused(tmp_path):
-    with pytest.raises(RuntimeError, match="Trim starts after the end"):
-        _converted(tmp_path, _source(tmp_path, "brief", -20, seconds=2), Trim(start=5))
-
-
 def test_unmeasurable_audio_is_still_converted_unchanged(tmp_path, monkeypatch):
     source = _source(tmp_path, "plain", -30)
     monkeypatch.setattr(media_process, "_measure", lambda *_a, **_kw: None)
@@ -88,7 +72,7 @@ def test_invalid_trims_are_rejected(trim):
         trim.validate()
 
 
-def test_youtube_download_is_encoded_once_levelled_and_trimmed(tmp_path, monkeypatch):
+def test_youtube_download_is_encoded_once_and_levelled(tmp_path, monkeypatch):
     source = _source(tmp_path, "provider", -10, seconds=10)
     commands = []
 
@@ -100,10 +84,10 @@ def test_youtube_download_is_encoded_once_levelled_and_trimmed(tmp_path, monkeyp
     monkeypatch.setattr(downloader, "_run_ytdlp", fake_ytdlp)
     out = tmp_path / "library"
     out.mkdir()
-    result = downloader.download_mp3("https://youtu.be/AbCdEf_12-3", out, "Song", trim=Trim(start=1, end=4))
+    result = downloader.download_mp3("https://youtu.be/AbCdEf_12-3", out, "Song")
     assert result.parent == out and result.suffix == ".mp3"
     assert "--audio-format" not in commands[0], "yt-dlp must not encode; the app encodes once"
-    assert probe_seconds(result, timeout=10) == pytest.approx(3, abs=0.15)
+    assert probe_seconds(result, timeout=10) == pytest.approx(10, abs=0.15)
     assert abs(measure_loudness(result) - media_process.TARGET_LUFS) <= 1.5
     assert [p.name for p in out.iterdir()] == [result.name]
 

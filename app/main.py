@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -14,10 +14,9 @@ from pydantic import BaseModel, Field, StrictInt
 from . import __version__, auth
 from .config import settings
 from .credentials import setup_status, initialize_vault, login_unlock, lock_runtime, get_credentials, change_app_password, update_tonies_credentials, vault_configured, VaultError
-from .media_files import library_file, library_files, store_upload
-from .media_process import Trim
+from .media_files import clip_library_file, library_file, library_files, library_waveform, store_upload
 from .downloader import PLAYLIST_MAX, clear_search_cache
-from .jobs import create_job, get_job, list_jobs, start_worker, select_candidate_and_continue, select_candidates_and_continue, create_upload_only_job, get_events_since, get_event_stats, get_queue_stats, cancel_job
+from .jobs import create_job, get_job, list_jobs, start_worker, select_candidate_and_continue, select_candidates_and_continue, fetch_candidate, create_upload_only_job, get_events_since, get_event_stats, get_queue_stats, cancel_job
 from .logger import setup_logging
 from .models import ChatRequest
 from .subprocess_runner import run_bounded
@@ -68,16 +67,19 @@ class Health(BaseModel):
     status: str
 
 
-class TrimRequest(BaseModel):
-    start: float = Field(default=0, ge=0, le=86400)
-    end: Optional[float] = Field(default=None, gt=0, le=86400)
-
-
 class SelectionRequest(BaseModel):
     index: int
     target_url: str = None
     position: Optional[dict] = None
-    trim: Optional[TrimRequest] = None
+
+
+class FetchRequest(BaseModel):
+    index: StrictInt
+
+
+class ClipRequest(BaseModel):
+    start: float = Field(ge=0, le=86400)
+    end: float = Field(gt=0, le=86400)
 
 
 class MultiSelectionRequest(BaseModel):
@@ -479,6 +481,17 @@ def download_file(filename: str, inline: bool = False):
     )
 
 
+@app.get('/api/files/{filename}/waveform')
+def file_waveform(filename: str, start: float = Query(0, ge=0, le=86400),
+                  end: Optional[float] = Query(None, gt=0, le=86400), points: int = Query(1000, ge=50, le=4000)):
+    return library_waveform(filename, start=start, end=end, points=points)
+
+
+@app.post('/api/files/{filename}/clip')
+async def clip_file(filename: str, req: ClipRequest):
+    return await clip_library_file(filename, req.start, req.end)
+
+
 @app.delete('/api/files/{filename}')
 def delete_file(filename: str):
     p = library_file(filename)
@@ -488,20 +501,22 @@ def delete_file(filename: str):
 
 @app.post("/api/jobs/{job_id}/select")
 def select_candidate(job_id: str, req: SelectionRequest):
-    trim = None
-    if req.trim is not None:
-        try:
-            trim = Trim(start=req.trim.start, end=req.trim.end).validate()
-        except ValueError as error:
-            raise HTTPException(status_code=422, detail=str(error)) from None
-        trim = trim if trim.active else None
     try:
-        selected_job_id = select_candidate_and_continue(job_id, req.index, req.target_url,
-                                                        clean_position(req.position), trim=trim)
+        selected_job_id = select_candidate_and_continue(job_id, req.index, req.target_url, clean_position(req.position))
         j = get_job(selected_job_id)
         return j.model_dump() if j else {"error": "not_found"}
     except Exception:
         return {"error": "Could not select this candidate; refresh and check the selection"}
+
+
+@app.post("/api/jobs/{job_id}/fetch")
+def fetch_candidate_to_library(job_id: str, req: FetchRequest):
+    try:
+        return {"filename": fetch_candidate(job_id, req.index).name}
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from None
+    except RuntimeError:
+        raise HTTPException(status_code=502, detail="Could not download this video; try again") from None
 
 
 @app.post("/api/jobs/{job_id}/select-many")

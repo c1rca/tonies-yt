@@ -10,7 +10,7 @@ import time
 from threading import Lock
 from uuid import uuid4
 
-from .media_process import Trim, convert_to_mp3
+from .media_process import convert_to_mp3
 from .subprocess_runner import ChildFailed, run_ytdlp as _run_ytdlp
 from .youtube_source import is_playlist_url, normalize_youtube_input, parse_candidates
 
@@ -109,15 +109,14 @@ def _publish_audio(source: Path, out_dir: Path, base: str) -> Path:
     return destination
 
 
-def download_mp3(youtube_query_or_url: str, out_dir: Path, preferred_title: str | None = None,
-                 trim: Trim | None = None) -> Path:
-    """Download the original audio, then encode it once: levelled, trimmed if asked, MP3."""
+def download_mp3(youtube_query_or_url: str, out_dir: Path, preferred_title: str | None = None) -> Path:
+    """Download the original audio, then encode it once: levelled MP3."""
     text = normalize_youtube_input(youtube_query_or_url)
     target = text if text.startswith("https://") else f"ytsearch1:{text}"
     base = sanitize_filename(preferred_title or "audio")
     for attempt in range(1, _DOWNLOAD_ATTEMPTS + 1):
         try:
-            return _download_once(target, out_dir, base, trim)
+            return _download_once(target, out_dir, base)
         except ChildFailed:
             if attempt == _DOWNLOAD_ATTEMPTS:
                 raise
@@ -126,7 +125,7 @@ def download_mp3(youtube_query_or_url: str, out_dir: Path, preferred_title: str 
     raise AssertionError("unreachable")
 
 
-def _download_once(target: str, out_dir: Path, base: str, trim: Trim | None) -> Path:
+def _download_once(target: str, out_dir: Path, base: str) -> Path:
     try:
         # A private operation directory per attempt prevents stale/concurrent-file reuse.
         with tempfile.TemporaryDirectory(prefix=".yt-audio-", dir=out_dir) as staging:
@@ -150,7 +149,7 @@ def _download_once(target: str, out_dir: Path, base: str, trim: Trim | None) -> 
                 raise RuntimeError("Download command finished but no audio file found") from None
             converted = directory / ".converted.mp3"
             try:
-                convert_to_mp3(matches[0], converted, max_bytes=_MAX_DOWNLOAD_BYTES, trim=trim)
+                convert_to_mp3(matches[0], converted, max_bytes=_MAX_DOWNLOAD_BYTES)
             except ChildFailed:
                 raise RuntimeError("Audio conversion failed") from None  # deterministic: not retried
             return _publish_audio(converted, out_dir, base)

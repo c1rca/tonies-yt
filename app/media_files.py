@@ -1,11 +1,13 @@
 """Local library policy and bounded, network-disabled audio conversion."""
 from __future__ import annotations
 
+from collections import OrderedDict
 import math
 import os
 from pathlib import Path
 import stat
 import tempfile
+import threading
 import uuid
 
 from fastapi import HTTPException, UploadFile
@@ -13,9 +15,12 @@ from starlette.concurrency import run_in_threadpool
 
 from .config import settings
 from .downloader import sanitize_filename
-from .media_process import convert_to_mp3, probe_seconds
+from .media_process import Trim, TrimOutsideAudio, convert_to_mp3, cut_mp3, probe_seconds, waveform
 
 CHUNK_BYTES = 64 * 1024
+_WAVEFORM_CACHE_SIZE = 16
+_waveforms: OrderedDict[tuple, dict] = OrderedDict()
+_waveforms_lock = threading.Lock()
 
 
 def library_file(filename: str) -> Path:
@@ -99,3 +104,68 @@ async def store_upload(file: UploadFile) -> dict:
         if temporary is not None:
             temporary.unlink(missing_ok=True)
         await file.close()
+
+
+def _editor_error(error: Exception) -> HTTPException:
+    if isinstance(error, (ValueError, TrimOutsideAudio)):
+        return HTTPException(status_code=422, detail=str(error))
+    return HTTPException(status_code=400, detail="This audio file can't be read")
+
+
+def clear_waveform_cache() -> None:
+    with _waveforms_lock:
+        _waveforms.clear()
+
+
+def library_waveform(filename: str, *, start: float, end: float | None, points: int) -> dict:
+    """Waveform of a library file (or a window of it); cached per file version."""
+    path = library_file(filename)
+    info = path.stat()
+    key = (path.name, info.st_mtime_ns, info.st_size, start, end, points)
+    with _waveforms_lock:
+        if key in _waveforms:
+            _waveforms.move_to_end(key)
+            return _waveforms[key]
+    window = None if start == 0 and end is None else Trim(start=start, end=end)
+    try:
+        outline = waveform(path, window=window, points=points)
+    except (ValueError, RuntimeError) as error:
+        raise _editor_error(error) from None
+    with _waveforms_lock:
+        _waveforms[key] = outline
+        while len(_waveforms) > _WAVEFORM_CACHE_SIZE:
+            _waveforms.popitem(last=False)
+    return outline
+
+
+def _clock_label(seconds: float) -> str:
+    whole = int(seconds)
+    hours, minutes, secs = whole // 3600, whole // 60 % 60, whole % 60
+    return f"{hours}-{minutes:02}-{secs:02}" if hours else f"{minutes}-{secs:02}"
+
+
+async def clip_library_file(filename: str, start: float, end: float) -> dict:
+    """Save ``start``..``end`` of a library file as a new library file; the original stays."""
+    source = library_file(filename)
+    try:
+        trim = Trim(start=start, end=end).validate()
+    except ValueError as error:
+        raise _editor_error(error) from None
+    downloads = source.parent
+    base = f"{Path(source.name).stem[:90]}_{_clock_label(start)}-{_clock_label(end)}"
+    fd, name = tempfile.mkstemp(prefix=".clipping-", suffix=".part", dir=downloads)
+    os.close(fd)
+    temporary = Path(name)
+    try:
+        await run_in_threadpool(cut_mp3, source, temporary, trim)
+        final = downloads / f"{base}.mp3"
+        try:
+            os.link(temporary, final)  # exclusive: never overwrite another file
+        except FileExistsError:
+            final = downloads / f"{base}_{uuid.uuid4().hex[:8]}.mp3"
+            os.link(temporary, final)
+        return {"ok": True, "filename": final.name}
+    except (ValueError, RuntimeError) as error:
+        raise _editor_error(error) from None
+    finally:
+        temporary.unlink(missing_ok=True)

@@ -6,7 +6,7 @@ All notable changes to Tonies-YT. Versions follow [Semantic Versioning](https://
 
 ### Added
 - Volume levelling: every track added (YouTube or imported) is brought to the same loudness, so one song isn't quiet and the next one loud.
-- Trim: a Trim button next to Add keeps only part of a video (start and end in minutes:seconds).
+- Audio editor: an Edit button on YouTube results and Local files opens a waveform. Play it, drag the start and end handles (or type times, or use the arrow keys), zoom in on the clip and listen to it, then add it or save it as a new file. The clip is cut without re-encoding; the original file stays.
 - Playlists: paste a playlist link to list its first 50 videos.
 - Select several YouTube results and add them in one go; they land in the order shown.
 - A ready-made image for PCs and Raspberry Pis (`ghcr.io/c1rca/tonies-yt`), published with every release; Compose pulls it, so installing no longer needs a build. New "Get started" section in the README.

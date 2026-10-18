@@ -57,8 +57,8 @@ function renderCandidateCard(parentJob, candidate, index) {
   const disabled = !selectedToniesUrl ? 'disabled' : '';
   const addable = !awaitingReceipt && !view.isSelected;
   const add = awaitingReceipt ? `<span class="tiny">${receiptLabel}</span>` : view.isSelected ? '<span class="tiny">Added to queue</span>' : `
-    <button class="ghost candidate-trim" data-job-id="${esc(parentJob.id)}" data-candidate-index="${index}"
-      aria-label="Trim ${title} before adding" ${disabled}>Trim</button>
+    <button class="ghost candidate-edit" data-job-id="${esc(parentJob.id)}" data-candidate-index="${index}"
+      aria-label="Edit and clip ${title}">Edit</button>
     <button class="good candidate-add" data-job-id="${esc(parentJob.id)}"
       data-candidate-index="${index}" aria-label="Add ${title} to ${esc(workspaceTargetName())}"
       ${disabled}>Add</button>`;

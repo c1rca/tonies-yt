@@ -22,6 +22,9 @@ _SILENCE_LUFS = -50.0
 _PEAK_LIMIT = 0.891  # -1 dBFS
 _MAX_SECONDS = 24 * 3600
 _LOUDNESS = re.compile(rb"lavfi\.r128\.I=(-?\d+(?:\.\d+)?)")
+# Waveform outline: per-point peak of a mono 8 kHz decode (plenty for drawing).
+_WAVEFORM_RATE = 8000
+_PEAK = re.compile(rb"lavfi\.astats\.Overall\.Peak_level=(-inf|-?\d+(?:\.\d+)?)")
 
 
 @dataclass(frozen=True)
@@ -94,13 +97,13 @@ def _measure(source: Path, trim: Trim | None, seconds: float) -> float | None:
     return float(values[-1]) if values else None
 
 
-def measure_loudness(source: Path, *, trim: Trim | None = None) -> float | None:
-    """Integrated loudness (LUFS) of the (trimmed) audio; None when it can't be measured."""
+def measure_loudness(source: Path) -> float | None:
+    """Integrated loudness (LUFS); None when it can't be measured."""
     try:
-        seconds = _trimmed_seconds(source, trim)
+        seconds = _trimmed_seconds(source, None)
     except RuntimeError:
         return None
-    return None if seconds is None else _measure(source, trim, seconds)
+    return None if seconds is None else _measure(source, None, seconds)
 
 
 def _level_filter(loudness: float | None) -> list[str]:
@@ -110,25 +113,57 @@ def _level_filter(loudness: float | None) -> list[str]:
     return ["-af", f"volume={gain:.2f}dB,alimiter=limit={_PEAK_LIMIT}:level=false"]
 
 
-def convert_to_mp3(source: Path, destination: Path, *, max_bytes: int, trim: Trim | None = None) -> None:
-    """Convert any supported audio to a levelled 128 kbps stereo MP3, trimmed if asked.
+def convert_to_mp3(source: Path, destination: Path, *, max_bytes: int) -> None:
+    """Convert any supported audio to a levelled 128 kbps stereo MP3.
 
     Without a known length the audio is converted without levelling.
     """
-    if trim is not None:
-        trim.validate()
     try:
-        seconds = _trimmed_seconds(source, trim)
-    except TrimOutsideAudio:
-        raise
+        seconds = _trimmed_seconds(source, None)
     except RuntimeError:
         seconds = None
-    loudness = None if seconds is None else _measure(source, trim, seconds)
+    loudness = None if seconds is None else _measure(source, None, seconds)
     run_conversion([
-        "ffmpeg", "-nostdin", "-v", "error", "-y", *_trimmed_input(source, trim),
+        "ffmpeg", "-nostdin", "-v", "error", "-y", *_trimmed_input(source, None),
         "-map", "0:a:0", "-vn", *_level_filter(loudness),
         "-ar", "44100", "-ac", "2", "-codec:a", "libmp3lame", "-b:a", "128k", "-fs", str(max_bytes),
         "-f", "mp3", str(destination),
+    ], timeout=_work_timeout(seconds))
+
+
+def waveform(source: Path, *, window: Trim | None = None, points: int = 1000) -> dict:
+    """Peak outline (0..1) of the whole audio or of ``window``, about ``points`` values long."""
+    total = probe_duration(source, timeout=30)
+    if total is None or not math.isfinite(total) or total <= 0:
+        raise RuntimeError("Could not read the audio length")
+    if window is not None:
+        window.validate()
+    start = window.start if window else 0.0
+    if start >= total:
+        raise TrimOutsideAudio("The window starts after the end of the audio")
+    end = min(total, window.end) if window and window.end is not None else total
+    per_point = max(1, math.ceil((end - start) * _WAVEFORM_RATE / points))
+    output = run_bounded([
+        "ffmpeg", "-nostdin", "-v", "error", *_trimmed_input(source, window), "-map", "0:a:0",
+        "-af", (f"aformat=channel_layouts=mono,aresample={_WAVEFORM_RATE},asetnsamples=n={per_point}:p=0,"
+                "astats=metadata=1:reset=1:measure_perchannel=none:measure_overall=Peak_level,"
+                "ametadata=mode=print:key=lavfi.astats.Overall.Peak_level:file=-"),
+        "-f", "null", "-",
+    ], operation="Waveform", timeout=_work_timeout(end - start), max_output_bytes=points * 128 + 4096)
+    peaks = [0.0 if level == b"-inf" else round(min(1.0, 10 ** (float(level) / 20)), 3)
+             for level in _PEAK.findall(output)]
+    return {"seconds": total, "start": start, "end": end, "peaks": peaks[:points]}
+
+
+def cut_mp3(source: Path, destination: Path, trim: Trim) -> None:
+    """Copy the ``trim`` window of an MP3 without re-encoding (no quality loss)."""
+    trim.validate()
+    seconds = _trimmed_seconds(source, trim)
+    if seconds is None:
+        raise RuntimeError("Could not read the audio length")
+    run_conversion([
+        "ffmpeg", "-nostdin", "-v", "error", "-y", *_trimmed_input(source, trim),
+        "-map", "0:a:0", "-c:a", "copy", "-f", "mp3", str(destination),
     ], timeout=_work_timeout(seconds))
 
 

@@ -129,9 +129,10 @@ def test_local_player_is_one_persistent_native_control_without_autoplay():
     html = HTML.read_text(encoding='utf-8')
     parser = PlayerParser()
     parser.feed(html)
-    assert len(parser.audio) == 1
+    # One persistent dock player, plus the waveform editor's own player inside its dialog.
+    assert [a['id'] for a in parser.audio] == ['local-audio', 'editor-audio']
+    assert all('autoplay' not in a and 'src' not in a for a in parser.audio)
     audio = parser.audio[0]
-    assert audio['id'] == 'local-audio'
     assert 'controls' in audio and audio['preload'] == 'metadata'
     assert 'autoplay' not in audio and 'src' not in audio
     # The dock is outside all view/source panes, rather than above only Local files.

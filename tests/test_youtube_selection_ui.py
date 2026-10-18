@@ -99,4 +99,4 @@ def test_results_rendering_keeps_the_selection_bar_in_step():
     html = HTML.read_text(encoding="utf-8")
     render = html[html.index("function renderJobs()"):html.index("async function refreshFiles()")]
     assert "syncYoutubeSelection(" in render
-    assert "bindCandidatePicks(jobsEl)" in render and "bindCandidateTrim(jobsEl)" in render
+    assert "bindCandidatePicks(jobsEl)" in render and "bindCandidateEdit(jobsEl)" in render

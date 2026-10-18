@@ -70,18 +70,33 @@
       </section>
       <nav class="workspace-nav" aria-label="Workspace"><button id="nav-tracks" aria-current="page" onclick="setWorkspaceView('tracks', true)"><span aria-hidden="true">≡</span>Tracks</button><button id="nav-add" onclick="setWorkspaceView('add', true)"><span aria-hidden="true">+</span>Add audio</button><button id="nav-activity" onclick="setWorkspaceView('activity', true)"><span aria-hidden="true">↗</span>Activity</button></nav>
     </div>
-    <dialog id="trim-dialog" class="modal trim-dialog" aria-labelledby="trim-title" aria-describedby="trim-length">
+    <dialog id="audio-editor" class="modal audio-editor" aria-labelledby="editor-title" aria-describedby="editor-help">
       <form method="dialog">
-        <h3 id="trim-title">Trim</h3>
-        <p id="trim-length" class="tiny"></p>
-        <div class="trim-fields">
-          <div><label for="trim-start" class="field-label">Start</label><input id="trim-start" placeholder="0:00" autocomplete="off" /></div>
-          <div><label for="trim-end" class="field-label">End</label><input id="trim-end" autocomplete="off" /></div>
+        <h3 id="editor-title">Edit</h3>
+        <p id="editor-status" class="tiny" aria-live="polite"></p>
+        <p id="editor-help" class="tiny">Drag the two handles to choose the part to keep. Tap the waveform to listen from there.</p>
+        <div id="editor-wave" class="editor-wave">
+          <canvas id="editor-canvas" aria-hidden="true"></canvas>
+          <span id="editor-handle-start" class="editor-handle" role="slider" tabindex="0" aria-label="Clip start" hidden></span>
+          <span id="editor-handle-end" class="editor-handle" role="slider" tabindex="0" aria-label="Clip end" hidden></span>
         </div>
-        <p id="trim-error" class="trim-error" role="alert"></p>
+        <div class="editor-transport">
+          <button type="button" id="editor-play" class="ghost">Play</button>
+          <button type="button" id="editor-play-clip" class="ghost">Play clip</button>
+          <button type="button" id="editor-zoom" class="ghost" aria-pressed="false">Zoom to clip</button>
+          <span id="editor-time" class="tiny"></span>
+        </div>
+        <div class="editor-fields">
+          <div><label for="editor-start" class="field-label">Start</label><input id="editor-start" autocomplete="off" /></div>
+          <div><label for="editor-end" class="field-label">End</label><input id="editor-end" autocomplete="off" /></div>
+        </div>
+        <p id="editor-length" class="tiny"></p>
+        <p id="editor-error" class="editor-error" role="alert"></p>
+        <audio id="editor-audio" preload="metadata"></audio>
         <div class="modal-actions">
-          <button type="button" id="trim-cancel" class="ghost">Cancel</button>
-          <button value="add" class="good">Add trimmed</button>
+          <button type="button" id="editor-cancel" class="ghost">Cancel</button>
+          <button type="button" id="editor-save" class="ghost">Save clip</button>
+          <button id="editor-add" class="good">Add</button>
         </div>
       </form>
     </dialog>
@@ -120,7 +135,7 @@
     <script src="/static/assets/workspace-navigation.js?v=1"></script>
     <script src="/static/assets/workspace-sources.js?v=3"></script>
     <script src="/static/assets/workspace-source-selection.js?v=2"></script>
-    <script src="/static/assets/workspace-trim.js?v=2"></script>
+    <script src="/static/assets/workspace-audio-editor.js?v=1"></script>
     <script src="/static/assets/workspace-youtube-selection.js?v=2"></script>
     <script src="/static/assets/workspace-tracks.js?v=1"></script>
     <script src="/static/assets/local-preview.js?v=1"></script>
@@ -1260,12 +1275,10 @@
         clearSelectedCandidateIndex(jobId);
       }
 
-      function getCandidateSelectionPayload(index, trim = null) {
+      function getCandidateSelectionPayload(index) {
         // YouTube picks land at the visual top; the server places them there directly.
         const position = selectedToniesUrl ? { edge: toniesReverseView ? 'end' : 'start' } : null;
-        const payload = { index, target_url: selectedToniesUrl || null, position };
-        if (trim) payload.trim = trim;
-        return payload;
+        return { index, target_url: selectedToniesUrl || null, position };
       }
 
       function hasSelectionAdvanced(job) {
@@ -2629,6 +2642,7 @@
               </div>
               <div class="row">
                 <button type="button" class="ghost local-play-btn" aria-label="Play ${esc(f.name)}">Play</button>
+                <button type="button" class="ghost local-edit-btn" aria-label="Edit and clip ${esc(f.name)}">Edit</button>
                 <button class="good local-upload-btn" aria-label="Add ${esc(f.name)} to ${esc(workspaceTargetName())}" ${isQueuedLocalUpload || !selectedToniesUrl ? 'disabled' : ''}>${isQueuedLocalUpload ? 'Adding…' : 'Add'}</button>
                 <button class="trash-btn" title="Delete local file" aria-label="Delete local file"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M6 6l1 14h10l1-14"/><path d="M10 10v7"/><path d="M14 10v7"/></svg></button>
               </div>
@@ -2656,6 +2670,10 @@
           el.querySelector('.local-play-btn')?.addEventListener('click', () => {
             const name = el.getAttribute('data-file-name') || '';
             if (name) toggleLocalPlayback(name);
+          });
+          el.querySelector('.local-edit-btn')?.addEventListener('click', () => {
+            const name = el.getAttribute('data-file-name') || '';
+            if (name) openAudioEditorForFile(name);
           });
           el.querySelector('.local-upload-btn')?.addEventListener('click', () => {
             const name = el.getAttribute('data-file-name') || '';
@@ -2712,7 +2730,7 @@
         for (const button of jobsEl.querySelectorAll('.candidate-add')) button.addEventListener('click', () => {
           void pickCandidate(button.getAttribute('data-job-id'), Number(button.getAttribute('data-candidate-index')));
         });
-        bindCandidateTrim(jobsEl);
+        bindCandidateEdit(jobsEl);
         bindCandidatePicks(jobsEl);
       }
 
@@ -3057,6 +3075,7 @@
       loadResultsClearedState();
       initWorkspaceSources();
       initYoutubeSelection();
+      initAudioEditor();
       loadWorkspaceTheme();
       setWorkspaceView('tracks');
       setWorkspaceSource('youtube');

@@ -72,7 +72,7 @@ flowchart LR
 - `app/tonies_api.py`: Tonies OAuth/HTTP client
 - `app/uploader.py`: app-facing Tonies operations
 - `app/downloader.py`: YouTube search, playlist listing and download (one retry for a plain failure)
-- `app/media_process.py`: the one audio encoder (volume levelling, trim, MP3) and bounded ffprobe
+- `app/media_process.py`: the one audio encoder (volume levelling, MP3), waveform outlines, lossless clips and bounded ffprobe
 - `app/credentials.py`: encrypted local vault and app login
 - `app/config.py`: environment config
 - `app/request_security.py`: Host/origin parsing and trust policy
