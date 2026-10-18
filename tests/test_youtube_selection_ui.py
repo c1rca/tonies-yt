@@ -1,5 +1,6 @@
 """Pick several YouTube results (or a playlist) and add them in one go."""
-from test_frontend_contracts import HTML, run_js
+from page_sources import HTML, function_source
+from test_frontend_contracts import run_js
 
 SETUP = """
 const posts = [];
@@ -96,7 +97,6 @@ assert.equal(document.getElementById('youtube-selection-bar').hidden, true);
 
 
 def test_results_rendering_keeps_the_selection_bar_in_step():
-    html = HTML.read_text(encoding="utf-8")
-    render = html[html.index("function renderJobs()"):html.index("async function refreshFiles()")]
+    render = function_source("renderJobs")
     assert "syncYoutubeSelection(" in render
     assert "bindCandidatePicks(jobsEl)" in render and "bindCandidateEdit(jobsEl)" in render

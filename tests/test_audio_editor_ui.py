@@ -1,5 +1,6 @@
 """Waveform audio editor: selection maths, keyboard, fetching YouTube audio, clip and add."""
-from test_frontend_contracts import HTML, run_js
+from page_sources import HTML, function_source
+from test_frontend_contracts import run_js
 
 SETUP = """
 const posts = [], uploads = [];
@@ -163,8 +164,7 @@ const card = renderCandidateCard(jobsCache[0], jobsCache[0].candidates[0], 0);
 assert.match(card, /class="ghost candidate-edit"[^>]*data-job-id="job"[^>]*data-candidate-index="0"/);
 assert.match(card, /aria-label="Edit and clip Twinkle"/);
 """)
-    html = HTML.read_text(encoding="utf-8")
-    render = html[html.index("function renderFiles()"):html.index("function getResultsRenderState")]
+    render = function_source("renderFiles")
     assert 'class="ghost local-edit-btn"' in render and "openAudioEditorForFile(name)" in render
 
 

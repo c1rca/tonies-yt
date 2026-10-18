@@ -1,7 +1,8 @@
 """Audio workspace behavior through the actual page controller (no live cloud)."""
 from html.parser import HTMLParser
 
-from test_frontend_contracts import HTML, run_js
+from page_sources import HTML, page_css
+from test_frontend_contracts import run_js
 
 
 def test_workspace_navigation_preserves_sources_and_native_player():
@@ -415,7 +416,7 @@ assert.equal(workspaceCandidateAttempt('root/exact',1),undefined);
 
 def test_source_tabs_keep_44px_touch_targets_on_tablet_and_desktop():
     import re
-    css=(HTML.parent/'assets'/'workspace.css').read_text()
+    css=page_css()
     match=re.search(r'\.source-tabs button\s*\{([^}]+)\}',css)
     assert match is not None
     assert 'min-height:44px' in match.group(1)
@@ -512,7 +513,7 @@ assert.doesNotMatch(renderCandidateCard(parent,{title:'Story'},0),/<img/);
 
 
 def test_preview_reserves_space_after_the_shared_footer_not_only_before_it():
-    css=(HTML.parent/'assets'/'workspace.css').read_text()
+    css=page_css()
     assert 'body:has(.local-player:not([hidden]))' in css
     assert 'padding-bottom: calc(140px + env(safe-area-inset-bottom' in css
 

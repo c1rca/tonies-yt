@@ -1,48 +1,15 @@
 """Frontend invariants, executed without a browser or any live API calls."""
-from pathlib import Path
 import subprocess
 
 import pytest
 
-
-HTML = Path(__file__).parents[1] / "web" / "index.html"
+from page_sources import HTML, function_source, page_source, script_paths
 
 
 def run_js(body):
-    # Match the real page load order. Session/auth and runtime boot are network boundaries;
-    # every local feature module is evaluated, never replaced with test-only behavior.
-    from html.parser import HTMLParser
-
-    class Scripts(HTMLParser):
-        def __init__(self):
-            super().__init__()
-            self.parts = []
-            self.inline = False
-
-        def handle_starttag(self, tag, attrs):
-            if tag != 'script':
-                return
-            src = dict(attrs).get('src')
-            if src:
-                if not src.startswith('/static/assets/'):
-                    raise AssertionError(f'Unexpected script origin: {src}')
-                asset = src.split('?', 1)[0].removeprefix('/static/')
-                if asset != 'assets/session.js':
-                    self.parts.append((HTML.parent / asset).read_text(encoding='utf-8'))
-            else:
-                self.inline = True
-
-        def handle_data(self, data):
-            if self.inline:
-                self.parts.append(data.split('\n      loadResultsClearedState();', 1)[0])
-
-        def handle_endtag(self, tag):
-            if tag == 'script':
-                self.inline = False
-
-    scripts = Scripts()
-    scripts.feed(HTML.read_text(encoding='utf-8'))
-    source = '\n'.join(scripts.parts)
+    # Every page script in load order, except the network/boot boundary (see page_sources).
+    # Each local feature module is evaluated, never replaced with test-only behavior.
+    source = '\n'.join(p.read_text(encoding='utf-8') for p in script_paths(include_boot=False))
     harness = r"""
 const assert = require('node:assert/strict');
 const timers = new Map(); let timerId = 0;
@@ -67,7 +34,7 @@ function element() { const listeners = new Map(), attrs = new Map(); return {
   getBoundingClientRect(){return {width:100};}}; }
 global.document = { getElementById(id) { if (!elements.has(id)) elements.set(id, element()); return elements.get(id); },
   documentElement:element(), addEventListener(){}, querySelector(){return null;} };
-global.window = {innerWidth:1200, innerHeight:900};
+global.window = {innerWidth:1200, innerHeight:900, location:{search:''}};
 global.localStorage = {getItem(){return null;}, setItem(){}};
 global.fetch = () => {throw Error('Live network forbidden');};
 """
@@ -108,8 +75,7 @@ await pickCandidate('job', 1);
 
 
 def test_local_file_actions_do_not_embed_filename_in_inline_javascript():
-    html = HTML.read_text(encoding="utf-8")
-    render = html[html.index("function renderFiles()"):html.index("function getResultsRenderState")]
+    render = function_source("renderFiles")
     assert "onclick=\"uploadExisting('" not in render
     assert "onclick=\"deleteFile('" not in render
 
@@ -137,7 +103,7 @@ def test_local_player_is_one_persistent_native_control_without_autoplay():
     assert 'autoplay' not in audio and 'src' not in audio
     # The dock is outside all view/source panes, rather than above only Local files.
     assert 'aria-label="Local preview"' in html
-    assert 'id="local-player"' not in html[html.index('function renderFiles()'):html.index('function getResultsRenderState')]
+    assert 'id="local-player"' not in function_source('renderFiles')
 
 
 def test_local_playback_toggles_switches_and_survives_file_renders_and_filtering():
@@ -1030,7 +996,7 @@ assert.equal(uploadLaneBusy(),false);
 
 
 def test_browser_resync_workarounds_are_removed():
-    html=HTML.read_text(encoding="utf-8")
+    html=page_source()
     for obsolete in ('transientPlaywright','toniesRefreshHardWatchdogByUrl',
                      'refreshToniesContentWithFollowups','mergeOptimisticUploadedChapters',
                      'confirmedDeletedKeys','chapterFingerprint','beforeNorm','retryPayload'):
