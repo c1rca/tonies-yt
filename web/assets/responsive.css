@@ -1,0 +1,254 @@
+/* Tablet and phone layout for the workspace. */
+@media(max-width:1199px) {
+  .workspace {
+    padding:0 20px 120px;
+  }
+  .studio-grid {
+    grid-template-columns:minmax(0,1fr) 360px;
+  }
+  .tonie-rail {
+    display:none;
+  }
+  .target-change {
+    display:inline-flex;
+    align-items:center;
+    border:0!important;
+    padding:0!important;
+    min-height:32px;
+    font-size:11px;
+    color:var(--accent)!important;
+  }
+  .workspace-main {
+    border-left:0;
+  }
+  .target-header {
+    padding:24px;
+  }
+  .tracks-pane,.activity-pane {
+    padding:24px;
+  }
+  .tonie-rail.selector-open {
+    display:block;
+    position:fixed;
+    top:84px;
+    left:20px;
+    width:300px;
+    max-height:70dvh;
+    overflow:auto;
+    background:var(--raised);
+    border:1px solid var(--border);
+    box-shadow:var(--shadow);
+    border-radius:12px;
+    padding:16px;
+    z-index:30;
+  }
+}
+
+@media(max-width:899px) {
+  .workspace {
+    padding:0 0 calc(90px + env(safe-area-inset-bottom));
+  }
+  .app-header {
+    height:72px;
+    margin:0 20px;
+  }
+  .studio-grid {
+    display:block;
+  }
+  .workspace-main {
+    /* Do not bound the sticky target to the hidden Tracks view on touch layouts. */
+    display: contents;
+    min-height:0;
+    background:transparent;
+  }
+  .target-header {
+    position:sticky;
+    top:0;
+    z-index:10;
+    background:var(--bg);
+    padding:16px 20px 14px;
+    grid-template-columns:48px minmax(0,1fr);
+    gap:8px 12px;
+    min-height:130px;
+  }
+  .target-art {
+    width:48px;
+    height:58px;
+    background:var(--surface);
+    border-radius:8px;
+  }
+  .target-art img {
+    width:42px;
+    height:52px;
+  }
+  .target-copy h1 {
+    font-size:22px;
+    letter-spacing:-.65px;
+  }
+  .target-label {
+    font-size:10px;
+    margin-bottom:2px;
+  }
+  .target-change {
+    min-height:30px;
+  }
+  .capacity {
+    gap:12px;
+  }
+  .tracks-pane,.activity-pane,.source-pane {
+    padding:24px 20px;
+  }
+  .source-pane {
+    border:0;
+  }
+  .source-pane .section-heading h2 {
+    font-size:22px;
+  }
+  .destination {
+    margin-bottom:18px;
+  }
+  .mobile-add {
+    display:inline-flex;
+    align-items:center;
+  }
+  .track-toolbar {
+    gap:4px;
+  }
+  .track-toolbar button {
+    font-size:11px;
+    padding:8px 10px;
+    min-height:44px;
+  }
+  .tonies-item {
+    padding:13px 0;
+    min-height:76px;
+  }
+  .source-tabs {
+    margin-bottom:22px;
+  }
+  .source-tabs button {
+    min-height:44px;
+  }
+  .workspace[data-view=tracks] #view-add,.workspace[data-view=activity] #view-add,.workspace[data-view=add] #view-tracks {
+    display:none!important;
+  }
+  .workspace-nav {
+    display:grid;
+    grid-template-columns:repeat(3,1fr);
+    position:fixed;
+    z-index:20;
+    left:0;
+    right:0;
+    bottom:0;
+    background:var(--raised);
+    border-top:1px solid var(--border);
+    padding:6px 12px calc(6px + env(safe-area-inset-bottom));
+  }
+  .workspace-nav button {
+    background:transparent;
+    color:var(--muted);
+    border-radius:8px;
+    display:grid;
+    justify-items:center;
+    gap:2px;
+    padding:6px;
+    min-height:52px;
+    font-size:10px;
+  }
+  .workspace-nav span {
+    font-size:23px;
+    line-height:1;
+    height:24px;
+    font-weight:400;
+  }
+  .workspace-nav button[aria-current=page] {
+    color:var(--accent);
+    background:var(--accent-soft);
+  }
+  .local-player {
+    bottom:calc(76px + env(safe-area-inset-bottom));
+    width:calc(100% - 24px);
+    padding:10px 12px;
+    border-radius:12px;
+    grid-template-columns:minmax(0,1fr) auto;
+    gap:6px 12px;
+  }
+  .local-player audio {
+    grid-row:2;
+    grid-column:1/-1;
+    height:40px;
+  }
+  .local-player #local-player-close {
+    grid-column:2;
+    grid-row:1;
+    border:0;
+    min-height:44px;
+  }
+  .preview-disc {
+    width:34px;
+    height:34px;
+    font-size:18px;
+  }
+  .preview-label .tiny {
+    font-size:10px;
+  }
+  .preview-label {
+    gap:10px;
+  }
+  .workspace:has(.local-player:not([hidden])) {
+    padding-bottom:calc(230px + env(safe-area-inset-bottom));
+  }
+  .toast-stack {
+    right:16px;
+    bottom:calc(220px + env(safe-area-inset-bottom));
+  }
+  .page-footer {
+    display:none;
+  }
+  .app-brand {
+    font-size:15px;
+  }
+  .app-brand small {
+    font-size:10px;
+  }
+  .header-actions {
+    gap:8px;
+  }
+  .header-actions button,.app-settings summary {
+    font-size:12px;
+  }
+  .tonie-rail.selector-open {
+    top:76px;
+    left:12px;
+    width:calc(100% - 24px);
+    max-height:65dvh;
+  }
+  .file {
+    grid-template-columns:32px minmax(0,1fr);
+    padding:16px 0;
+  }
+  .file-title {
+    font-size:14px;
+  }
+  .file>.row button {
+    font-size:12px;
+  }
+  .file>.row {
+    gap:8px;
+  }
+  .import-strip {
+    padding:16px;
+  }
+  .import-strip strong {
+    font-size:13px;
+  }
+  .import-strip button {
+    font-size:12px;
+  }
+}
+
+@media(min-width:900px) {
+  #view-add[hidden] {
+    display:block!important;
+  }
+}
