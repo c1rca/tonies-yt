@@ -6,7 +6,7 @@ import threading
 import httpx
 import pytest
 
-from app import tonies_api
+from app import tonies_api, tonies_content
 from app.actions import ActionQueue
 from tonies_fake import URL
 
@@ -101,7 +101,7 @@ def test_queue_exposes_receipt_and_ids_but_no_inventory_or_success(cloud_api, mo
     assert terminal["pending"] == 0
     assert len(cloud.patches) == 1
     if failure != "mismatch":
-        assert tonies_api._writable(cloud.chapters[:2]) == tonies_api._writable(baseline)
+        assert tonies_content._writable(cloud.chapters[:2]) == tonies_content._writable(baseline)
 
 
 def test_success_still_returns_confirmed_content_and_marks_action_done(cloud_api):
@@ -199,7 +199,7 @@ def test_real_worker_retains_three_transfer_receipts_for_exact_id_cleanup(cloud_
             queue._cond.notify_all()
         for action in deletes:
             assert action.finished.wait(5) and action.status == "done"
-        assert tonies_api._writable(cloud.chapters) == tonies_api._writable(baseline)
+        assert tonies_content._writable(cloud.chapters) == tonies_content._writable(baseline)
         assert len(cloud.patches) == 2  # one attach and one explicit exact-ID cleanup, no replay
     finally:
         queue._transfers.shutdown(wait=True)
