@@ -7,7 +7,7 @@ from pathlib import Path
 import httpx
 import pytest
 
-from app import events, jobs
+from app import events, job_store as jobs, job_upload
 from app.actions import Action, ActionQueue
 from app.models import JobState
 from tonies_fake import URL
@@ -153,7 +153,7 @@ def test_real_attachment_receipt_mirrors_to_job_without_inventing_inventory(queu
     job = JobState(id="linked-job", status=starting_status, created_at=events.now_iso(),
                    updated_at=events.now_iso(), user_message="upload existing: synthetic.mp3", target_url=URL)
     jobs._jobs[job.id] = job
-    action = queue.submit_upload(URL, Path("synthetic.mp3"), "Synthetic", on_change=lambda a: jobs._on_upload_action(job.id, a))
+    action = queue.submit_upload(URL, Path("synthetic.mp3"), "Synthetic", on_change=lambda a: job_upload._on_upload_action(job.id, a))
     queue._transfers.shutdown(wait=True)
     job.tonies_action_id = action.id
     action.params.update(file_id="staging", seconds=1)
@@ -195,14 +195,14 @@ def test_terminal_upload_mirror_clears_receipt_and_rejects_stale_acceptance(queu
     jobs._jobs[job.id] = job
     action = Action("upload", 1, URL, "upload", {}, status="failed", chapter_id="permanent",
                     attachment_receipt={"chapters": [{"id": "permanent"}]}, needs_refresh=True)
-    jobs._on_upload_action(job.id, action)
+    job_upload._on_upload_action(job.id, action)
     assert job.uploaded_chapter_id == "permanent" and job.attachment_receipt
     stale = copy.copy(action)
     action.status = terminal
-    jobs._on_upload_action(job.id, action)
+    job_upload._on_upload_action(job.id, action)
     assert job.status == ("undone" if terminal == "undone" else "canceled")
     assert job.uploaded_chapter_id is None and job.attachment_receipt is None
     assert job.tonies_content is None and not job.needs_refresh
-    jobs._on_upload_action(job.id, stale)
+    job_upload._on_upload_action(job.id, stale)
     assert job.uploaded_chapter_id is None and job.attachment_receipt is None
     assert job.tonies_content is None and not job.needs_refresh

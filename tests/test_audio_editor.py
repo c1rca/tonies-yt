@@ -6,7 +6,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 import pytest
 
-from app import jobs, main, media_files
+from app import job_pipeline as jobs, job_store, main, media_files
 from app.media_process import Trim, TrimOutsideAudio, cut_mp3, probe_seconds, waveform
 from app.models import ParseIntent
 
@@ -128,7 +128,7 @@ def searched(monkeypatch, tmp_path, library, downloads):
         {"title": "Twinkle", "url": "https://www.youtube.com/watch?v=AbCdEf_12-3", "duration": 10}])
     monkeypatch.setattr(jobs, "download_mp3", fake_download)
     monkeypatch.setattr(jobs, "_fetches", {})
-    job = jobs.create_job("song")
+    job = job_store.create_job("song")
     jobs.run_job(job.id)
     return job.id
 
@@ -137,7 +137,7 @@ def test_a_youtube_result_can_be_fetched_into_the_library_for_editing(searched, 
     response = client.post(f"/api/jobs/{searched}/fetch", json={"index": 0})
     assert response.status_code == 200 and response.json() == {"filename": "Twinkle.mp3"}
     assert (library / "Twinkle.mp3").exists()
-    assert jobs.get_job(searched).status == "awaiting_selection", "fetching doesn't add anything to a Tonie"
+    assert job_store.get_job(searched).status == "awaiting_selection", "fetching doesn't add anything to a Tonie"
 
 
 @pytest.mark.parametrize("body", [{"index": 3}, {"index": -1}, {"index": True}])
@@ -168,8 +168,8 @@ def test_two_edits_while_downloading_share_one_download(searched, library, downl
 def test_a_video_already_added_is_not_downloaded_again(searched, client, library, downloads):
     added = library / "Added.mp3"
     added.write_bytes((library / "Song.mp3").read_bytes())
-    with jobs._lock:
-        job = jobs._jobs[searched]
+    with job_store._lock:
+        job = job_store._jobs[searched]
         job.selected_candidate = dict(job.candidates[0])
         job.output_file = str(added)
     assert client.post(f"/api/jobs/{searched}/fetch", json={"index": 0}).json() == {"filename": "Added.mp3"}

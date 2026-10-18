@@ -9,7 +9,7 @@ import wave
 
 import pytest
 
-from app import jobs, media_process
+from app import job_upload as jobs, media_process
 
 
 @pytest.fixture(autouse=True)
