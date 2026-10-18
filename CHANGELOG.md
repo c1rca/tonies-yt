@@ -65,6 +65,7 @@ Tonies-YT now talks to the Tonies cloud directly over HTTPS instead of driving m
 - `pytest` moved to `requirements-dev.txt`; the unused `keyring` and `python-dotenv` packages were removed.
 
 ### Fixed
+- Live job events now reach the page immediately instead of silently falling back to polling.
 - First-run setup could be re-run over an existing vault by anyone who could reach the app.
 - Job history saves could fail or go back in time when two jobs updated at once.
 - `/favicon.ico` returned 404.
