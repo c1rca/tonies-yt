@@ -257,6 +257,20 @@ def test_upload_limits_checked_before_allocating_or_streaming(cloud_api, tmp_pat
     assert not any(r.url.path == "/v2/file" for r in cloud.calls)
 
 
+def test_capacity_counts_tracks_still_processing_when_remaining_time_lags(cloud_api, tmp_path, monkeypatch):
+    """Live finding: Tonies' secondsRemaining doesn't yet subtract a just-added, still
+    processing track. The batch must not overfill the Tonie (Tonies then drops a track)."""
+    from app import tonies_api
+    cloud, api = cloud_api
+    cloud.chapters[0]["seconds"] = 5300.0  # with the others this nearly fills 5400 s; remaining stays 5376
+    monkeypatch.setattr(tonies_api, "_audio_seconds", lambda _: 200)
+    path = tmp_path / "clip.mp3"
+    path.write_bytes(b"synthetic")
+    with pytest.raises(RuntimeError, match="capacity"):
+        api.upload(path, URL, "New")
+    assert not cloud.patches
+
+
 def test_httpx_streams_multipart_in_bounded_chunks_without_read_bytes(tmp_path, monkeypatch):
     from app import tonies_api
     from pathlib import Path

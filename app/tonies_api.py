@@ -365,8 +365,11 @@ class ToniesAPI:
         with self._target_lock(ids):
             before, config = self._snapshot(ids)
             chapters = before["chapters"]
-            capacity = _number(before["secondsRemaining"], "remaining capacity") + sum(
-                _number(c["seconds"], "chapter duration") for c in chapters)
+            # secondsRemaining lags behind tracks still processing, so it alone can overfill the
+            # Tonie (Tonies then silently drops a track). Never exceed the Tonie's total.
+            capacity = min(_number(config.get("maxSeconds"), "capacity"),
+                           _number(before["secondsRemaining"], "remaining capacity")
+                           + sum(_number(c["seconds"], "chapter duration") for c in chapters))
             desired, errors = apply_ops(chapters, ops, capacity_seconds=capacity,
                                         max_chapters=_number(config.get("maxChapters"), "chapter limit"))
             results = [{"error": error, "chapter_id": None} for error in errors]
