@@ -1,4 +1,5 @@
 """YouTube playlists: link policy, the bounded listing command and ordered multi-add."""
+from concurrent.futures import ThreadPoolExecutor
 import json
 from pathlib import Path
 import threading
@@ -153,8 +154,12 @@ def test_one_failed_download_does_not_stall_the_rest(playlist_job):
     assert [job_store.get_job(i).status for i in ids] == ["done", "failed", "done"]
 
 
-def test_adding_to_the_top_downloads_in_hand_over_order(playlist_job):
+def test_adding_to_the_top_downloads_in_hand_over_order(playlist_job, monkeypatch):
     job_id, state = playlist_job
+    # One worker makes start order observable: with three, which thread reaches
+    # download_mp3 first is a scheduling race, even though the queue itself is FIFO.
+    single = ThreadPoolExecutor(max_workers=1)
+    monkeypatch.setattr(jobs, "_downloads", single)
     started = []
     original = jobs.download_mp3
     monkeypatch_download = lambda url, out_dir, preferred_title=None: (  # noqa: E731
@@ -164,7 +169,8 @@ def test_adding_to_the_top_downloads_in_hand_over_order(playlist_job):
         _wait_done(jobs.select_candidates_and_continue(job_id, [0, 1, 2, 3], "tonie", {"edge": "start"}))
     finally:
         jobs.download_mp3 = original
-    assert started[:3] == ["Song 4", "Song 3", "Song 2"], "the first to hand over downloads first"
+    single.shutdown(wait=True)
+    assert started == ["Song 4", "Song 3", "Song 2", "Song 1"], "the first to hand over downloads first"
 
 
 def test_a_job_that_failed_while_queued_never_downloads(playlist_job, monkeypatch):
