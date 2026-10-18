@@ -5,13 +5,27 @@ from urllib.parse import urlsplit
 
 MAX_INPUT_LENGTH = 1000
 VIDEO_ID = re.compile(r"[A-Za-z0-9_-]{11}", re.ASCII)
+PLAYLIST_ID = re.compile(r"[A-Za-z0-9_-]{12,64}", re.ASCII)
+PLAYLIST_URL_PREFIX = "https://www.youtube.com/playlist?list="
 _YOUTUBE_HOSTS = {"youtube.com", "www.youtube.com", "m.youtube.com", "music.youtube.com", "youtu.be", "www.youtu.be"}
 _SCHEME_PREFIX = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*:")
 _BARE_HOST_PATH = re.compile(r"^[^\s/]+\.[^\s/]+/")
-_INPUT_ERROR = "Enter a YouTube video link or plain search text (maximum 1000 characters)"
+_INPUT_ERROR = "Enter a YouTube video or playlist link, or plain search text (maximum 1000 characters)"
 
 
-def _canonical_video_url(text: str) -> str:
+def _single_query_value(query: str, name: str) -> str:
+    values = [item[len(name) + 1:] for item in query.split("&") if item.startswith(f"{name}=")]
+    if len(values) != 1:
+        raise ValueError
+    return values[0]
+
+
+def is_playlist_url(text: str) -> bool:
+    """True for the canonical playlist URLs produced by ``normalize_youtube_input``."""
+    return text.startswith(PLAYLIST_URL_PREFIX) and bool(PLAYLIST_ID.fullmatch(text[len(PLAYLIST_URL_PREFIX):]))
+
+
+def _canonical_url(text: str) -> str:
     try:
         parts = urlsplit(text)
         # Comparing the entire authority rejects credentials, ports, subdomain
@@ -20,11 +34,14 @@ def _canonical_video_url(text: str) -> str:
             raise ValueError
         if parts.netloc.lower() in {"youtu.be", "www.youtu.be"}:
             video_id = parts.path.removeprefix("/")
-        elif parts.path == "/watch":
-            ids = [item[2:] for item in parts.query.split("&") if item.startswith("v=")]
-            if len(ids) != 1:
+        elif parts.path == "/playlist":
+            playlist_id = _single_query_value(parts.query, "list")
+            if not PLAYLIST_ID.fullmatch(playlist_id):
                 raise ValueError
-            video_id = ids[0]
+            return PLAYLIST_URL_PREFIX + playlist_id
+        elif parts.path == "/watch":
+            # A video playing inside a playlist stays that one video.
+            video_id = _single_query_value(parts.query, "v")
         elif parts.path.startswith("/shorts/"):
             video_id = parts.path[len("/shorts/"):]
         else:
@@ -37,9 +54,9 @@ def _canonical_video_url(text: str) -> str:
 
 
 def normalize_youtube_input(value: str) -> str:
-    """Return ordinary query text or a canonical, single-video YouTube URL.
+    """Return ordinary query text, a canonical single-video URL or a canonical playlist URL.
 
-    URL extras (including tracking, playlist and fragment fields) are discarded.
+    URL extras (tracking, a watch page's playlist and fragment fields) are discarded.
     A descriptive colon followed by a space remains ordinary search text.
     This is an input policy, not a transitive network/SSRF sandbox.
     """
@@ -49,14 +66,14 @@ def normalize_youtube_input(value: str) -> str:
     if not text or text.startswith(("-", "/", "\\", ".", "~")) or "\\" in text:
         raise ValueError(_INPUT_ERROR) from None
     if text.split("/", 1)[0].lower() in _YOUTUBE_HOSTS:
-        return _canonical_video_url("https://" + text)
+        return _canonical_url("https://" + text)
     scheme = _SCHEME_PREFIX.match(text)
     if scheme:
         rest = text[scheme.end():]
         if not rest.startswith(" ") or rest.lstrip().startswith("/"):
-            return _canonical_video_url(text)
+            return _canonical_url(text)
     if "://" in text or _BARE_HOST_PATH.match(text):
-        return _canonical_video_url(text)
+        return _canonical_url(text)
     return text
 
 
@@ -78,7 +95,7 @@ def parse_candidates(output: bytes, limit: int) -> tuple[list[dict], int]:
             rejected += 1
             continue
         title = row.get("title")
-        uploader = row.get("uploader")
+        uploader = row.get("uploader") or row.get("channel")
         duration = row.get("duration")
         candidates.append({
             "id": video_id,

@@ -17,7 +17,7 @@ from .credentials import setup_status, initialize_vault, login_unlock, lock_runt
 from .media_files import library_file, library_files, store_upload
 from .media_process import Trim
 from .downloader import clear_search_cache
-from .jobs import create_job, get_job, list_jobs, start_worker, select_candidate_and_continue, create_upload_only_job, get_events_since, get_event_stats, get_queue_stats, cancel_job
+from .jobs import create_job, get_job, list_jobs, start_worker, select_candidate_and_continue, select_candidates_and_continue, create_upload_only_job, get_events_since, get_event_stats, get_queue_stats, cancel_job
 from .logger import setup_logging
 from .models import ChatRequest
 from .subprocess_runner import run_bounded
@@ -78,6 +78,12 @@ class SelectionRequest(BaseModel):
     target_url: str = None
     position: Optional[dict] = None
     trim: Optional[TrimRequest] = None
+
+
+class MultiSelectionRequest(BaseModel):
+    indexes: list[int]
+    target_url: str = None
+    position: Optional[dict] = None
 
 
 class UploadExistingRequest(BaseModel):
@@ -495,6 +501,15 @@ def select_candidate(job_id: str, req: SelectionRequest):
         return j.model_dump() if j else {"error": "not_found"}
     except Exception:
         return {"error": "Could not select this candidate; refresh and check the selection"}
+
+
+@app.post("/api/jobs/{job_id}/select-many")
+def select_candidates(job_id: str, req: MultiSelectionRequest):
+    try:
+        position = clean_position(req.position)
+        return {"job_ids": select_candidates_and_continue(job_id, req.indexes, req.target_url, position)}
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from None
 
 
 @app.post("/api/jobs/{job_id}/cancel")

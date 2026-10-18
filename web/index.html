@@ -6,7 +6,7 @@
     <title>Tonies-YT</title>
     <script src="/static/assets/theme.js?v=1"></script>
     <link rel="stylesheet" href="/static/assets/theme.css?v=1" />
-    <link rel="stylesheet" href="/static/assets/workspace.css?v=3" />
+    <link rel="stylesheet" href="/static/assets/workspace.css?v=4" />
   </head>
   <body>
     <div class="workspace" data-view="tracks" id="workspace">
@@ -50,7 +50,9 @@
           <div class="source-tabs" role="tablist" aria-label="Audio source"><button id="source-tab-youtube" role="tab" aria-selected="true" aria-controls="source-youtube" onclick="setWorkspaceSource('youtube')">YouTube</button><button id="source-tab-local" role="tab" aria-selected="false" aria-controls="source-local" tabindex="-1" onclick="setWorkspaceSource('local')">Local files</button></div>
           <div id="source-youtube" role="tabpanel" aria-labelledby="source-tab-youtube">
             <label class="field-label" for="query-input">Find a song or story</label><div class="search-field"><input id="query-input" aria-label="Search YouTube" placeholder="Song, story, or YouTube link" /><button id="search-btn">Search</button></div>
-            <div class="results-heading"><span class="tiny" id="search-limit-label">Top 5 results</span><button id="clear-results" class="ghost">Clear</button></div><div id="results-loader" class="tiny" role="status"></div><div class="list" id="jobs"></div>
+            <div class="results-heading"><span class="tiny" id="search-limit-label">Top 5 results</span><button id="clear-results" class="ghost">Clear</button></div><div id="results-loader" class="tiny" role="status"></div>
+            <div id="youtube-selection-bar" class="selection-bar" hidden><span id="youtube-selection-count"></span><button id="add-selected-youtube">Add selected</button><button id="select-all-youtube" class="ghost">Select all</button><button id="clear-youtube-selection" class="ghost" aria-label="Clear video selection">Cancel</button></div>
+            <div class="list" id="jobs"></div>
           </div>
           <div id="source-local" class="library" role="tabpanel" aria-labelledby="source-tab-local" hidden>
             <div class="import-strip" id="local-import-zone"><div><strong>Your audio, ready to add.</strong><p class="tiny">Import an audio file or drop it here.</p></div><button id="browse-files" class="ghost">Import file</button></div><input id="upload-file-input" type="file" accept="audio/*,.mp3,.m4a,.aac,.wav,.flac,.ogg" hidden />
@@ -116,9 +118,10 @@
 
     <script src="/static/assets/session.js?v=1"></script>
     <script src="/static/assets/workspace-navigation.js?v=1"></script>
-    <script src="/static/assets/workspace-sources.js?v=2"></script>
+    <script src="/static/assets/workspace-sources.js?v=3"></script>
     <script src="/static/assets/workspace-source-selection.js?v=2"></script>
     <script src="/static/assets/workspace-trim.js?v=1"></script>
+    <script src="/static/assets/workspace-youtube-selection.js?v=1"></script>
     <script src="/static/assets/workspace-tracks.js?v=1"></script>
     <script src="/static/assets/local-preview.js?v=1"></script>
     <script src="/static/assets/workspace-activity.js?v=1"></script>
@@ -2702,12 +2705,16 @@
         const singleCardViews = (renderState.views && renderState.views.length > 1)
           ? [renderState.views[0]]
           : renderState.views;
+        if (searchLimitLabelEl) searchLimitLabelEl.textContent = youtubeResultsLabel(singleCardViews[0]?.job) || `Top ${searchLimit} results`;
         jobsEl.innerHTML = renderSearchJobCardsHtml(singleCardViews);
         for (const button of jobsEl.querySelectorAll('.candidate-add')) button.addEventListener('click', () => {
           void pickCandidate(button.getAttribute('data-job-id'), Number(button.getAttribute('data-candidate-index')));
         });
         for (const button of jobsEl.querySelectorAll('.candidate-trim')) button.addEventListener('click', () => {
           openTrimDialog(button.getAttribute('data-job-id'), Number(button.getAttribute('data-candidate-index')));
+        });
+        for (const box of jobsEl.querySelectorAll('.candidate-pick')) box.addEventListener('change', () => {
+          toggleYoutubeSelection(box.getAttribute('data-job-id'), Number(box.getAttribute('data-candidate-index')), box.checked);
         });
       }
 
@@ -3051,6 +3058,7 @@
 
       loadResultsClearedState();
       initWorkspaceSources();
+      initYoutubeSelection();
       loadWorkspaceTheme();
       setWorkspaceView('tracks');
       setWorkspaceSource('youtube');

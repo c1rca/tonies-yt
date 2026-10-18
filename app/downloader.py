@@ -12,14 +12,20 @@ from uuid import uuid4
 
 from .media_process import Trim, convert_to_mp3
 from .subprocess_runner import run_ytdlp as _run_ytdlp
-from .youtube_source import normalize_youtube_input, parse_candidates
+from .youtube_source import is_playlist_url, normalize_youtube_input, parse_candidates
 
 _SEARCH_TIMEOUT_SEC = 60
 _DOWNLOAD_TIMEOUT_SEC = 600
 _MAX_SEARCH_OUTPUT_BYTES = 1024 * 1024
+PLAYLIST_MAX = 50  # videos listed from one playlist
 _MAX_DOWNLOAD_BYTES = 512 * 1024 * 1024
 _MIN_YTDLP_SEARCH_SPACING_SEC = 0.0
 _MIN_YTDLP_DOWNLOAD_SPACING_SEC = 0.0
+# YouTube occasionally refuses one of several parallel downloads; a download has no side
+# effects, so a plain failure (not a timeout or size limit) is tried once more.
+_DOWNLOAD_ATTEMPTS = 2
+_RETRY_DELAY_SEC = 3.0
+_RETRYABLE = "YouTube download failed"
 _search_cache: dict[str, tuple[float, list[dict]]] = {}
 _last_ytdlp_call_at = 0.0
 _call_lock = Lock()
@@ -45,14 +51,18 @@ def sanitize_filename(name: str) -> str:
     return re.sub(r"[^a-zA-Z0-9._-]+", "_", name).strip("_.")[:120] or "audio"
 
 
-def _base_command() -> list[str]:
+def _base_command(*, playlist: bool = False) -> list[str]:
     # Isolated Python ignores PYTHONPATH/user-site code. Configuration/plugins,
     # cookies and runtime component downloads are never opted into. Install the
     # matching yt-dlp-ejs wheel and Deno alongside yt-dlp; no runtime GitHub fetch.
+    # Playlist listing is its own narrow mode: only the playlist page extractor.
+    if playlist:
+        scope = ["--use-extractors", "youtube:tab", "--yes-playlist", "--playlist-end", str(PLAYLIST_MAX)]
+    else:
+        scope = ["--use-extractors", "youtube,youtube:search", "--no-playlist"]
     return [
         sys.executable, "-I", "-m", "yt_dlp",
-        "--ignore-config", "--no-plugin-dirs", "--no-remote-components",
-        "--use-extractors", "youtube,youtube:search", "--no-playlist",
+        "--ignore-config", "--no-plugin-dirs", "--no-remote-components", *scope,
         "--no-progress", "--no-warnings", "--no-cache-dir",
         "--retries", "0", "--fragment-retries", "0", "--extractor-retries", "0",
     ]
@@ -75,10 +85,12 @@ def _check_download_size(directory: Path) -> None:
 
 
 def search_youtube(youtube_query: str, limit: int = 3) -> list[dict]:
+    """Search results, one linked video, or the first PLAYLIST_MAX videos of a playlist."""
     text = normalize_youtube_input(youtube_query)
-    raw_limit = max(1, min(int(limit), 20))
+    playlist = is_playlist_url(text)
+    raw_limit = PLAYLIST_MAX if playlist else max(1, min(int(limit), 20))
     target = text if text.startswith("https://") else f"ytsearch{raw_limit}:{text}"
-    cmd = [*_base_command(), "--dump-json", "--flat-playlist", "--socket-timeout", "12", "--", target]
+    cmd = [*_base_command(playlist=playlist), "--dump-json", "--flat-playlist", "--socket-timeout", "12", "--", target]
     _throttle_ytdlp_calls(_MIN_YTDLP_SEARCH_SPACING_SEC)
     output = _run_ytdlp(cmd, operation="search", timeout=_SEARCH_TIMEOUT_SEC, max_output_bytes=_MAX_SEARCH_OUTPUT_BYTES)
     candidates, rejected = parse_candidates(output, raw_limit)
@@ -104,8 +116,20 @@ def download_mp3(youtube_query_or_url: str, out_dir: Path, preferred_title: str 
     text = normalize_youtube_input(youtube_query_or_url)
     target = text if text.startswith("https://") else f"ytsearch1:{text}"
     base = sanitize_filename(preferred_title or "audio")
+    for attempt in range(1, _DOWNLOAD_ATTEMPTS + 1):
+        try:
+            return _download_once(target, out_dir, base, trim)
+        except RuntimeError as error:
+            if str(error) != _RETRYABLE or attempt == _DOWNLOAD_ATTEMPTS:
+                raise
+            logger.info("yt_download retry attempt=%d", attempt + 1)
+            time.sleep(_RETRY_DELAY_SEC)
+    raise AssertionError("unreachable")
+
+
+def _download_once(target: str, out_dir: Path, base: str, trim: Trim | None) -> Path:
     try:
-        # A private operation directory prevents stale/concurrent-file reuse.
+        # A private operation directory per attempt prevents stale/concurrent-file reuse.
         with tempfile.TemporaryDirectory(prefix=".yt-audio-", dir=out_dir) as staging:
             directory = Path(staging)
             output_template = str(directory / f"{base}.%(ext)s")
@@ -129,4 +153,4 @@ def download_mp3(youtube_query_or_url: str, out_dir: Path, preferred_title: str 
             convert_to_mp3(matches[0], converted, max_bytes=_MAX_DOWNLOAD_BYTES, trim=trim)
             return _publish_audio(converted, out_dir, base)
     except OSError:
-        raise RuntimeError("YouTube download failed") from None
+        raise RuntimeError(_RETRYABLE) from None

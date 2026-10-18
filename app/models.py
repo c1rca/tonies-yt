@@ -30,6 +30,7 @@ class JobState(BaseModel):
     search_limit: int = 5
     parsed: Optional[dict] = None
     candidates: list[dict] = []
+    playlist: bool = False  # candidates are the first videos of a playlist, not search results
     selected_candidate: Optional[dict] = None
     target_url: Optional[str] = None
     logs: list[str] = []

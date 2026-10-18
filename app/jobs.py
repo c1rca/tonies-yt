@@ -12,10 +12,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Optional, Any
 
+from .attach_order import AttachOrder
 from .media_process import Trim, probe_duration
 from .models import JobState
 from .ai import parse_request
-from .downloader import download_mp3, search_youtube
+from .downloader import PLAYLIST_MAX, download_mp3, search_youtube
+from .youtube_source import is_playlist_url, normalize_youtube_input
 from . import events
 from .uploader import action_queue, resolve_upload_target, upload_title
 from .config import settings
@@ -32,10 +34,13 @@ _q: queue.Queue[str] = queue.Queue()
 _lock = threading.Lock()
 _persist_lock = threading.Lock()
 _upload_mirror_lock = threading.Lock()
+MAX_PARALLEL_DOWNLOADS = 3
+_download_slots = threading.BoundedSemaphore(MAX_PARALLEL_DOWNLOADS)
 _STAGE_TIMEOUT_SEC: dict[str, int] = {
     "parsing": 90,
     "searching": 180,
-    "queued_download": 120,
+    # Waiting for one of MAX_PARALLEL_DOWNLOADS slots when several videos are added at once.
+    "queued_download": 1800,
     "downloading": 900,
     "queued_prepare": 120,
     "preparing": 900,
@@ -231,7 +236,8 @@ def run_job(job_id: str):
         if not candidates:
             raise RuntimeError("No YouTube results found")
 
-        _update(job_id, candidates=candidates, status="awaiting_selection")
+        playlist = is_playlist_url(normalize_youtube_input(parsed.youtube_query))
+        _update(job_id, candidates=candidates, playlist=playlist, status="awaiting_selection")
         _log(job_id, f"Found {len(candidates)} candidates; waiting for selection")
     except Exception as e:
         _update(job_id, status="failed", error=str(e))
@@ -412,23 +418,7 @@ def select_candidate_and_continue(job_id: str, index: int, target_url: Optional[
         # If the original search job already moved past selection, spawn a sibling upload job
         # so multiple candidates from one search result set can be queued independently.
         if st.status != "awaiting_selection":
-            new_id = str(uuid.uuid4())
-            new_state = JobState(
-                id=new_id,
-                status="queued_download",
-                created_at=now_iso(),
-                updated_at=now_iso(),
-                user_message=st.user_message,
-                search_limit=st.search_limit,
-                parsed=st.parsed,
-                candidates=st.candidates,
-                selected_candidate=selected,
-                target_url=target_url,
-                target_position=position,
-                trim=trim_state,
-                logs=[f"Spawned from search job {job_id}", f"Selected candidate: {selected.get('title', 'unknown')}"]
-            )
-            _jobs[new_id] = new_state
+            new_id = _spawn_selection_job(st, selected, target_url, position, trim_state).id
         else:
             st.selected_candidate = selected
             st.status = "queued_download"
@@ -450,8 +440,54 @@ def select_candidate_and_continue(job_id: str, index: int, target_url: Optional[
     return job_id
 
 
+def _spawn_selection_job(st: JobState, selected: dict, target_url: Optional[str], position: Optional[dict],
+                         trim_state: Optional[dict] = None) -> JobState:
+    """A new job for one picked result, leaving the search job's list in place. Caller holds _lock."""
+    new_state = JobState(
+        id=str(uuid.uuid4()),
+        status="queued_download",
+        created_at=now_iso(),
+        updated_at=now_iso(),
+        user_message=st.user_message,
+        search_limit=st.search_limit,
+        parsed=st.parsed,
+        candidates=st.candidates,
+        selected_candidate=selected,
+        target_url=target_url,
+        target_position=position,
+        trim=trim_state,
+        logs=[f"Spawned from search job {st.id}", f"Selected candidate: {selected.get('title', 'unknown')}"],
+    )
+    _jobs[new_state.id] = new_state
+    return new_state
+
+
+def select_candidates_and_continue(job_id: str, indexes: list[int], target_url: Optional[str] = None,
+                                   position: Optional[dict] = None) -> list[str]:
+    """Add several results at once; they attach in list order (top-down, wherever they land)."""
+    if (not isinstance(indexes, list) or not 1 <= len(indexes) <= PLAYLIST_MAX
+            or len(set(indexes)) != len(indexes)):
+        raise ValueError(f"Choose between 1 and {PLAYLIST_MAX} different videos")
+    with _lock:
+        st = _jobs.get(job_id)
+        if not st:
+            raise ValueError("Search not found; search again")
+        if any(not isinstance(i, int) or isinstance(i, bool) or not 0 <= i < len(st.candidates) for i in indexes):
+            raise ValueError("A chosen video is no longer in the results; search again")
+        spawned = [_spawn_selection_job(st, st.candidates[i], target_url, position) for i in indexes]
+    _persist_jobs_state()
+    # Each one lands at the chosen edge, so adding to the top hands them over last-first.
+    hand_over = spawned[::-1] if (position or {}).get("edge") == "start" else spawned
+    order = AttachOrder([job.id for job in hand_over])
+    for job in spawned:
+        _emit_event("job_created", job.id)
+        run_selected_candidate_async(job.id, job.selected_candidate, target_url, position, order=order)
+    return [job.id for job in spawned]
+
+
 def run_selected_candidate_async(job_id: str, selected: dict, target_url: Optional[str] = None,
-                                 position: Optional[dict] = None, trim: Optional[Trim] = None):
+                                 position: Optional[dict] = None, trim: Optional[Trim] = None,
+                                 order: Optional[AttachOrder] = None):
     def _runner():
         t0 = time.time()
         try:
@@ -462,13 +498,22 @@ def run_selected_candidate_async(job_id: str, selected: dict, target_url: Option
             parsed = _jobs[job_id].parsed or {}
             preferred_title = selected.get("title") or parsed.get("preferred_title")
 
-            _update(job_id, status="downloading")
-            _log(job_id, f"Downloading selected URL only: {selected.get('url')}")
-            dl_started = time.time()
-            if trim is not None:
-                _log(job_id, f"Trimming to {trim.start:g}s–{'end' if trim.end is None else f'{trim.end:g}s'}")
-            mp3 = download_mp3(selected["url"], settings.data_dir / "downloads", preferred_title, trim=trim)
-            _log(job_id, f"Timing: download+extract completed in {time.time() - dl_started:.1f}s")
+            with _download_slots:
+                if _cancel_requested(job_id):
+                    _update(job_id, status="failed", error="Canceled by user")
+                    return
+                _update(job_id, status="downloading")
+                _log(job_id, f"Downloading selected URL only: {selected.get('url')}")
+                dl_started = time.time()
+                if trim is not None:
+                    _log(job_id, f"Trimming to {trim.start:g}s–{'end' if trim.end is None else f'{trim.end:g}s'}")
+                mp3 = download_mp3(selected["url"], settings.data_dir / "downloads", preferred_title, trim=trim)
+                _log(job_id, f"Timing: download+extract completed in {time.time() - dl_started:.1f}s")
+
+            if order is not None:
+                _update(job_id, status="waiting_upload")
+                _log(job_id, "Waiting for the tracks before it to be handed over")
+                order.wait_turn(job_id)
 
             if _cancel_requested(job_id):
                 _update(job_id, status="failed", error="Canceled by user")
@@ -483,6 +528,9 @@ def run_selected_candidate_async(job_id: str, selected: dict, target_url: Option
             reason = _classify_download_error(e)
             _update(job_id, status="failed", error=f"{e}")
             _log(job_id, f"Failed ({reason}): {e}")
+        finally:
+            if order is not None:
+                order.done(job_id)
 
     threading.Thread(target=_runner, daemon=True).start()
 

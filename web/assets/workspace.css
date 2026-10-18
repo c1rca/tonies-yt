@@ -1395,6 +1395,15 @@ summary::after {
   padding-left: 32px;
   margin-top: 12px;
 }
+.candidate-select {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 44px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
 .candidate-actions a {
   margin-right: auto;
   font-size: 11px;

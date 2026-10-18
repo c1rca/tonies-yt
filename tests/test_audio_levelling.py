@@ -112,3 +112,46 @@ def test_local_import_is_levelled(tmp_path):
     destination = tmp_path / "imported.mp3"
     media_files._convert(_source(tmp_path, "local", -10), destination)
     assert abs(measure_loudness(destination) - media_process.TARGET_LUFS) <= 1.5
+
+
+def _flaky_provider(monkeypatch, source, failures):
+    calls = []
+
+    def fake_ytdlp(cmd, **_kwargs):
+        calls.append(cmd)
+        if len(calls) <= failures:
+            raise RuntimeError("YouTube download failed")
+        Path(cmd[cmd.index("-o") + 1].replace("%(ext)s", "webm")).write_bytes(source.read_bytes())
+        return b""
+
+    monkeypatch.setattr(downloader, "_run_ytdlp", fake_ytdlp)
+    monkeypatch.setattr(downloader, "_RETRY_DELAY_SEC", 0)
+    return calls
+
+
+def test_a_failed_youtube_download_is_tried_once_more(tmp_path, monkeypatch):
+    calls = _flaky_provider(monkeypatch, _source(tmp_path, "src", -10, seconds=2), failures=1)
+    out = tmp_path / "library"
+    out.mkdir()
+    assert downloader.download_mp3("https://youtu.be/AbCdEf_12-3", out, "Song").exists()
+    assert len(calls) == 2
+
+
+def test_a_download_that_fails_twice_reports_the_failure(tmp_path, monkeypatch):
+    calls = _flaky_provider(monkeypatch, _source(tmp_path, "src", -10, seconds=2), failures=2)
+    with pytest.raises(RuntimeError, match="YouTube download failed"):
+        downloader.download_mp3("https://youtu.be/AbCdEf_12-3", tmp_path, "Song")
+    assert len(calls) == 2
+
+
+def test_size_limit_failures_are_not_retried(tmp_path, monkeypatch):
+    calls = []
+
+    def too_big(cmd, **_kwargs):
+        calls.append(cmd)
+        raise RuntimeError("YouTube download size limit exceeded")
+
+    monkeypatch.setattr(downloader, "_run_ytdlp", too_big)
+    with pytest.raises(RuntimeError, match="size limit"):
+        downloader.download_mp3("https://youtu.be/AbCdEf_12-3", tmp_path, "Song")
+    assert len(calls) == 1

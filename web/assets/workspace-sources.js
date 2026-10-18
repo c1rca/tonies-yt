@@ -55,6 +55,7 @@ function renderCandidateCard(parentJob, candidate, index) {
   const metadata = esc(uiText(candidate.uploader || 'YouTube')) +
     (candidate.duration ? ` · ${fmtDuration(candidate.duration)}` : '');
   const disabled = !selectedToniesUrl ? 'disabled' : '';
+  const addable = !awaitingReceipt && !view.isSelected;
   const add = awaitingReceipt ? `<span class="tiny">${receiptLabel}</span>` : view.isSelected ? '<span class="tiny">Added to queue</span>' : `
     <button class="ghost candidate-trim" data-job-id="${esc(parentJob.id)}" data-candidate-index="${index}"
       aria-label="Trim ${title} before adding" ${disabled}>Trim</button>
@@ -70,6 +71,7 @@ function renderCandidateCard(parentJob, candidate, index) {
     </div>
     <p class="tiny">${metadata}</p>
     <div class="candidate-actions">
+      ${addable ? renderCandidatePick(parentJob, index, title) : ''}
       ${href ? `<a href="${esc(href)}" target="_blank" rel="noopener noreferrer">View source ↗</a>` : ''}
       ${add}
     </div>
