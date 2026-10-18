@@ -634,3 +634,36 @@ def test_reads_are_not_blocked_by_a_slow_storage_transfer(cloud_api, tmp_path, m
     assert len(api.get_content(URL)["chapters"]) == 2  # answered while the transfer is still running
     release.set()
     transfer.join(5)
+
+
+@pytest.mark.parametrize("operation", ["content", "targets", "rename", "upload"])
+def test_closed_session_erases_credentials_and_cannot_be_reused(cloud_api, tmp_path, monkeypatch, operation):
+    from app import tonies_api
+    cloud, api = cloud_api
+    api.get_content(URL)
+    assert api._access_token and api._refresh_token
+    api.close()
+    assert api.closed and api._client.is_closed
+    assert api._email == api._password == api._access_token == api._refresh_token == ""
+    assert api._expires_at == 0
+    calls_before = len(cloud.calls)
+    monkeypatch.setattr(tonies_api, "_audio_seconds", lambda _: 1)
+    path = tmp_path / "clip.mp3"
+    path.write_bytes(b"synthetic")
+    actions = {
+        "content": lambda: api.get_content(URL),
+        "targets": api.list_targets,
+        "rename": lambda: api.rename(URL, 0, "New", "one"),
+        "upload": lambda: api.upload(path, URL, "New"),
+    }
+    with pytest.raises(RuntimeError, match="account session was reset"):
+        actions[operation]()
+    assert len(cloud.calls) == calls_before
+    assert not cloud.patches and not cloud.storage
+
+
+def test_public_helpers_remain_importable_from_tonies_api():
+    from app.tonies_api import editor_url, parse_target_url, renamed_title
+    assert editor_url(HOUSEHOLD, TONIE) == URL
+    assert parse_target_url(URL) == (HOUSEHOLD, TONIE)
+    assert renamed_title("Before [oc:abc123]", "After") == "After [oc:abc123]"

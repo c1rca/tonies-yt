@@ -1,68 +1,23 @@
-"""HTTP-only Tonies cloud client. Tokens live only in this process's memory."""
+"""Own Tonies uploads, guarded batch mutations, undo and the public client interface."""
 from __future__ import annotations
 
 import copy
 import math
-import re
-import time
 from pathlib import Path
-from threading import Lock, RLock
+from threading import RLock
 from typing import cast
 from urllib.parse import urlsplit
 
-import httpx
-
 from . import tonies_batch
 from .tonies_batch import ATTACH_MARK, OpError, apply_ops
+from .tonies_content import (
+    ToniesContent, _TRACK, _chapters, _content, _matches_chapters, _processing,
+    _writable, editor_url, parse_target_url,
+)
+from .tonies_session import _number
 from .undo import UndoReceipt, apply_inverse, inverse_steps
 
-API_BASE = "https://api.prod.tcs.toys/v2"
-TOKEN_URL = "https://login.tonies.com/auth/realms/tonies/protocol/openid-connect/token"
-_UUID = r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
-_TARGET = re.compile(rf"/creative-tonies/({_UUID})/([0-9a-fA-F]{{16}})/edit")
-_TRACK = re.compile(r"\s\[(?:oc:)?([a-f0-9]{4,12})\]$", re.I)
-_TIMEOUT = httpx.Timeout(30, connect=10, write=120, pool=10)
-QUERY = """query ($householdId: String, $creativeTonieId: String) {
-  config { maxChapters maxSeconds maxBytes accepts }
-  households(id: $householdId) { id name
-    creativeTonies(id: $creativeTonieId) {
-      id name imageUrl live transcoding secondsRemaining
-      chapters { id title file seconds transcoding type }
-    }
-  }
-}"""
-
-
-def parse_target_url(value: str) -> tuple[str, str]:
-    match = None
-    try:
-        parsed = urlsplit(value)
-        match = _TARGET.fullmatch(parsed.path)
-        valid = (parsed.scheme == "https" and parsed.netloc == "my.tonies.com"
-                 and not parsed.fragment and parsed.query in ("", "withUpload=true") and match)
-    except (TypeError, ValueError):
-        valid = False
-    if not valid:
-        raise RuntimeError("Invalid Tonies target URL; select a Creative-Tonie editor on my.tonies.com")
-    return match.group(1), match.group(2)
-
-
-def editor_url(household_id: str, tonie_id: str) -> str:
-    value = f"https://my.tonies.com/creative-tonies/{household_id}/{tonie_id}/edit?withUpload=true"
-    parse_target_url(value)
-    return value
-
-
-def _number(value, label: str) -> float:
-    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
-        raise RuntimeError(f"Invalid Tonies {label}")
-    return value
-
-
-def _processing(value) -> bool:
-    if isinstance(value, str) and value.lower() in {"error", "failed", "failure"}:
-        raise RuntimeError("Tonies audio processing failed")
-    return bool(value)
+__all__ = ["ToniesAPI", "UnconfirmedWriteError", "editor_url", "parse_target_url", "renamed_title"]
 
 
 def renamed_title(current: str, requested: str) -> str:
@@ -82,34 +37,6 @@ def _audio_seconds(path: Path) -> float:
     if not math.isfinite(seconds) or seconds <= 0:
         raise RuntimeError("Audio duration must be positive") from None
     return seconds
-
-
-def _chapters(value) -> list[dict]:
-    if not isinstance(value, list):
-        raise RuntimeError("Invalid Tonies chapter response")
-    identities = set()
-    for chapter in value:
-        if not isinstance(chapter, dict) or any(not isinstance(chapter.get(key), str) for key in ("id", "title", "file", "type")):
-            raise RuntimeError("Invalid Tonies chapter response")
-        if not chapter["id"] or chapter["id"] in identities:
-            raise RuntimeError("Invalid or duplicate Tonies chapter identity")
-        identities.add(chapter["id"])
-        _number(chapter.get("seconds"), "chapter duration")
-        _processing(chapter.get("transcoding"))
-    return value
-
-
-def _writable(chapters: list[dict]) -> list[dict]:
-    return [{key: chapter[key] for key in ("id", "title", "file", "seconds", "type")} for chapter in chapters]
-
-
-def _matches_chapters(actual, expected, processing_ids):
-    comparable, expected = _writable(actual), _writable(expected)
-    for chapter, original in zip(comparable, expected):
-        if chapter["id"] == original["id"] and chapter["id"] in processing_ids:
-            # Only established processing identities may acquire a new file/duration.
-            chapter["file"], chapter["seconds"] = original["file"], original["seconds"]
-    return comparable == expected
 
 
 def _signed_storage_request(allocation: dict, existing: list[dict]) -> tuple[str, str, dict]:
@@ -134,27 +61,6 @@ def _signed_storage_request(allocation: dict, existing: list[dict]) -> tuple[str
     return identity, signed["url"], fields
 
 
-def _content(target: dict, config: dict) -> dict:
-    total = _number(config.get("maxSeconds"), "capacity")
-    free = _number(target.get("secondsRemaining"), "remaining capacity")
-    chapters = []
-    for index, chapter in enumerate(_chapters(target.get("chapters"))):
-        seconds = _number(chapter["seconds"], "chapter duration")
-        rounded = int(seconds)
-        token = _TRACK.search(chapter["title"])
-        chapters.append({"index": index, "chapter_id": chapter["id"], "title": chapter["title"],
-                         "display_title": _TRACK.sub("", chapter["title"]).strip() or chapter["title"],
-                         "app_track_token": token.group(1).lower() if token else "",
-                         "duration": f"{rounded // 3600:02}:{rounded // 60 % 60:02}:{rounded % 60:02}",
-                         "seconds": seconds,
-                         "processing": _processing(chapter.get("transcoding"))})
-    return {"free_minutes": int(free // 60), "total_minutes": int(total // 60),
-            "used_minutes": math.ceil(max(total - free, 0) / 60),
-            "free_seconds": free, "total_seconds": total,
-            "processing": _processing(target.get("transcoding")) or any(c["processing"] for c in chapters),
-            "chapters": chapters}
-
-
 class UnconfirmedWriteError(RuntimeError):
     """A write was accepted, but a fresh inventory could not confirm its outcome.
 
@@ -173,155 +79,11 @@ class UnconfirmedWriteError(RuntimeError):
         self.needs_refresh = True
 
 
-class ToniesAPI:
-    def __init__(self, email: str, password: str, *, client: httpx.Client | None = None,
-                 poll_timeout: float = 8, poll_interval: float = 0.25):
-        self._email, self._password = email, password
-        self._client = client or httpx.Client(timeout=_TIMEOUT, follow_redirects=False, trust_env=False)
-        self._access_token = self._refresh_token = ""
-        self._expires_at = 0.0
-        self._auth_lock = RLock()
-        self._locks_lock = Lock()
-        self._target_locks: dict[tuple[str, str], RLock] = {}
-        self._closed = False
-        self._poll_timeout, self._poll_interval = poll_timeout, poll_interval
-
-    @property
-    def closed(self) -> bool:
-        """True once the session was ended (lock, sign-out or account change); never reused."""
-        return self._closed
-
-    def close(self):
-        with self._auth_lock:
-            self._closed = True
-            self._access_token = self._refresh_token = self._email = self._password = ""
-            self._expires_at = 0
-            self._client.close()
-
-    def _request(self, method, url, *, storage=False, **kwargs):
-        # httpx.Client is thread-safe: reads, storage transfers and writes run concurrently.
-        if self._closed:
-            raise RuntimeError("Tonies account session was reset; retry with current credentials")
-        try:
-            request = self._client.build_request(method, url, timeout=_TIMEOUT, **kwargs)
-            # No client defaults/cookies/auth may leak into the signed storage POST.
-            if storage:
-                for header in ("authorization", "cookie"):
-                    request.headers.pop(header, None)
-            return self._client.send(request, auth=None, follow_redirects=False)
-        except (httpx.HTTPError, RuntimeError):
-            if self._closed:
-                raise RuntimeError("Tonies account session was reset; retry with current credentials") from None
-            suffix = "; write outcome unconfirmed; refresh before another action" if method == "PATCH" else ""
-            raise RuntimeError(f"Tonies HTTP transport failed{suffix}") from None
-
-    @staticmethod
-    def _json(response, operation):
-        if not 200 <= response.status_code < 300:
-            raise RuntimeError(f"Tonies {operation} failed (HTTP {response.status_code})")
-        try:
-            data = response.json()
-        except ValueError:
-            raise RuntimeError(f"Invalid Tonies {operation} response") from None
-        if not isinstance(data, dict):
-            raise RuntimeError(f"Invalid Tonies {operation} response")
-        return data
-
-    def _token(self):
-        with self._auth_lock:
-            if self._closed:
-                raise RuntimeError("Tonies account session was reset; retry with current credentials")
-            if self._access_token and time.monotonic() < self._expires_at:
-                return self._access_token
-            form = {"client_id": "my-tonies"}
-            if self._refresh_token:
-                form.update(grant_type="refresh_token", refresh_token=self._refresh_token)
-            else:
-                form.update(grant_type="password", scope="openid", username=self._email, password=self._password)
-            response = self._request("POST", TOKEN_URL, data=form)
-            if form["grant_type"] == "refresh_token" and response.status_code in (400, 401):
-                # Explicit refresh rejection is not an ambiguous mutation. Reauthenticate once.
-                self._access_token = self._refresh_token = ""
-                response = self._request("POST", TOKEN_URL, data={"client_id": "my-tonies", "grant_type": "password", "scope": "openid", "username": self._email, "password": self._password})
-            data = self._json(response, "authentication")
-            if not isinstance(data.get("access_token"), str) or not data["access_token"]:
-                raise RuntimeError("Invalid Tonies authentication response")
-            lifetime = _number(data.get("expires_in"), "token lifetime")
-            refresh = data.get("refresh_token", self._refresh_token)
-            if not isinstance(refresh, str):
-                raise RuntimeError("Invalid Tonies authentication response")
-            self._access_token, self._refresh_token = data["access_token"], refresh
-            self._expires_at = time.monotonic() + max(0, lifetime - min(15, lifetime / 10))
-            return self._access_token
-
-    def _api(self, method: str, path: str, payload: dict, *, read=False) -> dict:
-        token = self._token()
-        response = self._request(method, API_BASE + path, json=payload, headers={"Authorization": f"Bearer {token}"})
-        if read and response.status_code == 401:
-            with self._auth_lock:
-                if self._access_token == token:
-                    self._expires_at = 0
-                token = self._token()
-            response = self._request(method, API_BASE + path, json=payload, headers={"Authorization": f"Bearer {token}"})
-        return self._json(response, "API request")
-
-    def _query(self, ids=None):
-        variables = {"householdId": ids[0], "creativeTonieId": ids[1]} if ids else {}
-        result = self._api("POST", "/graphql", {"query": QUERY, "variables": variables}, read=True)
-        if result.get("errors"):
-            raise RuntimeError("Tonies GraphQL request failed")
-        data = result.get("data")
-        if not isinstance(data, dict) or not isinstance(data.get("config"), dict) or not isinstance(data.get("households"), list):
-            raise RuntimeError("Invalid Tonies GraphQL response")
-        for household in data["households"]:
-            if (not isinstance(household, dict) or not isinstance(household.get("id"), str)
-                    or not isinstance(household.get("creativeTonies"), list)
-                    or any(not isinstance(target, dict) or not isinstance(target.get("id"), str)
-                           for target in household["creativeTonies"])):
-                raise RuntimeError("Invalid Tonies GraphQL response")
-        return data
-
-    def _snapshot(self, ids):
-        data = self._query(ids)
-        targets = [target for house in data["households"] if house.get("id") == ids[0]
-                   for target in house.get("creativeTonies", []) if target.get("id") == ids[1]]
-        if len(targets) != 1:
-            raise RuntimeError("Tonies target was not uniquely found in this account")
-        _content(targets[0], data["config"])
-        return targets[0], data["config"]
-
-    def get_content(self, target_url):
-        target, config = self._snapshot(parse_target_url(target_url))
-        return _content(target, config)
-
-    def list_targets(self):
-        data = self._query()
-        result = []
-        seen = set()
-        for house in data["households"]:
-            for target in house.get("creativeTonies", []):
-                url = editor_url(house.get("id"), target.get("id"))
-                if url in seen:
-                    raise RuntimeError("Duplicate Tonies target identity")
-                seen.add(url)
-                result.append({"name": target.get("name") or "Creative-Tonie", "image": target.get("imageUrl") or "", "edit_url": url})
-        return result
+class ToniesAPI(ToniesContent):
 
     def _target_lock(self, ids):
         with self._locks_lock:
             return self._target_locks.setdefault(ids, RLock())
-
-    def _readback(self, ids, expected, *, processing_ids, with_snapshot=False):
-        deadline = time.monotonic() + self._poll_timeout
-        for _ in range(40):
-            target, config = self._snapshot(ids)
-            if _matches_chapters(target["chapters"], expected, processing_ids):
-                content = _content(target, config)
-                return (content, copy.deepcopy(target["chapters"])) if with_snapshot else content
-            if time.monotonic() >= deadline:
-                break
-            time.sleep(min(self._poll_interval, max(0, deadline - time.monotonic())))
-        raise RuntimeError("Saved Tonies content was not confirmed; refresh before another action")
 
     def prepare_upload(self, path: Path, target_url: str) -> dict:
         """Send one audio file to Tonies storage. It is not on the Tonie until ``apply`` attaches it.

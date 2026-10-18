@@ -28,7 +28,6 @@ ALLOWED = {
     # T10
     "app/main.py": 619,
     # T11
-    "app/tonies_api.py": 513,
 }
 
 _JS_FUNCTION = re.compile(r"^(?:async\s+)?function\s+(\w+)")
