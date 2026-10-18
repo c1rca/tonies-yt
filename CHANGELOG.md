@@ -4,6 +4,17 @@ All notable changes to Tonies-YT. Versions follow [Semantic Versioning](https://
 
 ## [Unreleased]
 
+### Added
+- Volume levelling: every track added (YouTube or imported) is brought to the same loudness, so one song isn't quiet and the next one loud.
+- Trim: a Trim button next to Add keeps only part of a video (start and end in minutes:seconds).
+- Playlists: paste a playlist link to list its first 50 videos.
+- Select several YouTube results and add them in one go; they land in the order shown.
+- A ready-made image for PCs and Raspberry Pis (`ghcr.io/c1rca/tonies-yt`), published with every release; Compose pulls it, so installing no longer needs a build. New "Get started" section in the README.
+
+### Changed
+- YouTube audio is encoded once by the app instead of twice.
+- At most three YouTube downloads run at once, and a plain download failure is retried once.
+
 ## [3.0.0] - 2026-10-17
 
 A new interface: the audio workspace, with Undo, a queue that saves library changes in batches, local playback in the browser, and a locked-down, non-root Docker image.

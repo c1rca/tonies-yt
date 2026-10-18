@@ -64,19 +64,21 @@ flowchart LR
 ### Backend
 - `app/main.py`: routes and API
 - `app/auth.py`: sign-in sessions and request guard
-- `app/jobs.py`: search/download jobs; uploads hand over to the action queue
+- `app/jobs.py`: search/download jobs (three downloads at a time); uploads hand over to the action queue
+- `app/attach_order.py`: hands several parallel downloads to the queue in list order
 - `app/actions.py`: per-Tonie queue of library changes, applied in batches
 - `app/tonies_batch.py`: batch planner (pure, no I/O)
 - `app/events.py`: event stream for `/api/events`
 - `app/tonies_api.py`: Tonies OAuth/HTTP client
 - `app/uploader.py`: app-facing Tonies operations
-- `app/downloader.py`: YouTube search/download
+- `app/downloader.py`: YouTube search, playlist listing and download (one retry for a plain failure)
+- `app/media_process.py`: the one audio encoder (volume levelling, trim, MP3) and bounded ffprobe
 - `app/credentials.py`: encrypted local vault and app login
 - `app/config.py`: environment config
 - `app/request_security.py`: Host/origin parsing and trust policy
 - `app/media_files.py`: bounded imports, regular-file policy and restricted audio conversion
 - `app/vault_storage.py`: private atomic vault file storage
-- `app/youtube_source.py`: YouTube-only source normalization
+- `app/youtube_source.py`: YouTube-only source normalization (videos and playlists)
 - `app/subprocess_runner.py`: bounded subprocess output, deadline and process cleanup
 - `app/web_pages.py`: shared server-rendered version footer using the running app version
 

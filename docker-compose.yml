@@ -1,5 +1,7 @@
 services:
   tonies-yt:
+    # The published image is pulled; if it can't be (or with --build), this checkout is built.
+    image: ghcr.io/c1rca/tonies-yt:${TONIES_IMAGE_TAG:-latest}
     build: .
     # Fixed non-root identity, including when the entry command is overridden.
     user: "10001:10001"

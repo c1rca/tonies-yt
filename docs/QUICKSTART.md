@@ -23,9 +23,11 @@ Restrict `.env` to your Windows account using its file permissions. Normally do 
 ## 2. Start locally
 
 ```bash
-docker compose -p tonies-local up -d --build
+docker compose -p tonies-local up -d
 docker compose -p tonies-local ps
 ```
+
+This pulls the published image (`ghcr.io/c1rca/tonies-yt`, amd64 and arm64). Add `--build` to build this checkout instead. `TONIES_IMAGE_TAG` in `.env` picks the version (`latest` by default).
 
 Open **http://localhost:8090** on the Docker host. The default is **loopback only**, not accessible from your phone/LAN. For a remote Docker host, use `ssh -L 8090:127.0.0.1:8090 user@docker-host`, then open localhost on your workstation. Do not expose an unconfigured instance.
 
@@ -57,7 +59,10 @@ Always use the same project name; another `-p` value creates separate state.
 ```bash
 docker compose -p tonies-local stop tonies-yt
 docker compose -p tonies-local up -d
-# After source/dependency/base updates, back up first, then:
+# Update to the newest published image (back up first):
+docker compose -p tonies-local pull tonies-yt
+docker compose -p tonies-local up -d tonies-yt
+# Or, running your own checkout: rebuild it after source/dependency/base updates:
 docker compose -p tonies-local build --pull tonies-yt
 docker compose -p tonies-local up -d --no-build tonies-yt
 ```

@@ -7,7 +7,10 @@ Fast web app for managing Creative Tonies audio.
 ![Tonies-YT app screenshot](docs/assets/app-screenshot.png)
 
 ## What it does
-- Search YouTube, pick a result and download audio
+- Search YouTube, pick a result and download audio, or paste a playlist link and pick from its first 50 videos
+- Select several results and add them in one go; they land in the order shown
+- **Trim** a video before adding it (keep only 0:10–2:30, for example)
+- Every track is **volume-levelled** when it's added, so one song isn't quiet and the next one loud
 - Upload audio to Creative Tonies through the Tonies cloud API
 - Manage Tonies tracks: rename, reorder, delete, **delete all content with confirmation**
 - Maintain a Local MP3 Library for drag/drop or upload-to-Tonies flows
@@ -16,6 +19,25 @@ Fast web app for managing Creative Tonies audio.
 - Import local audio using **Import file**; it is converted to a Tonies-friendly MP3 once, on import
 - Right-click local files on desktop for upload / upload to top / upload to bottom
 - **Undo** the last rename, move or upload on a Tonie, and cancel a removal within five seconds
+
+## Get started
+
+You need [Docker](https://docs.docker.com/get-docker/) (Docker Desktop on Windows and macOS). Then, in a terminal:
+
+```bash
+mkdir tonies-yt && cd tonies-yt
+curl -fsSLO https://raw.githubusercontent.com/c1rca/tonies-yt/main/docker-compose.yml
+curl -fsSL https://raw.githubusercontent.com/c1rca/tonies-yt/main/.env.example -o .env
+docker compose -p tonies-local up -d
+```
+
+On Windows PowerShell, type `curl.exe` instead of `curl`. This downloads the ready-made image (PCs and Raspberry Pis), so nothing is built.
+
+Open **http://localhost:8090** on that computer, create an app login and enter your Tonies account.
+
+**From your phone:** by default only that computer can open the app. Find the computer's address (for example `192.168.1.20`), then in `.env` set `TONIES_BIND_ADDRESS=192.168.1.20` and add it to `APP_ALLOWED_HOSTS` (`APP_ALLOWED_HOSTS=localhost,127.0.0.1,192.168.1.20`). Run `docker compose -p tonies-local up -d` again and open `http://192.168.1.20:8090`. This is plain HTTP, so only do it on a home network you trust; for anything wider use [a reverse proxy with HTTPS](docs/OPERATIONS.md#running-behind-a-reverse-proxy).
+
+**Update:** `docker compose -p tonies-local pull && docker compose -p tonies-local up -d`. To stay on one version, set `TONIES_IMAGE_TAG=3.1.0` (for example) in `.env`.
 
 ## How it talks to Tonies
 
@@ -59,6 +81,8 @@ No framework, build step or external frontend dependency is required. The page l
 
 - `workspace-navigation.js`: view/source navigation, appearance, selected destination and safe artwork/rail rendering.
 - `workspace-sources.js`: local multi-selection, captured-target submission and local import lifecycle.
+- `workspace-youtube-selection.js`: selecting several YouTube results (or playlist videos) and adding them in one request.
+- `workspace-trim.js`: the Trim dialog and its minutes:seconds parsing.
 - `workspace-tracks.js`: exact-ID selection, inline rename ownership and row-action bindings.
 - `workspace-activity.js`: in-session job/action presentation and dismissible feedback; never mutation replay or client-side recovery history.
 - `workspace-dialogs.js`: confirmation ownership, keyboard focus and safe initial action.
@@ -89,9 +113,9 @@ The queue client, receipt reconciliation, caching, drag/drop and SSE/polling con
 - `yt-dlp`, `ffmpeg` and Deno for YouTube/audio processing (Deno is yt-dlp's JavaScript runtime)
 - `python:3.12-slim` nonroot container + Docker Compose
 
-## Quick start (recommended)
+## Run from a checkout
 
-Docker Compose on Linux, or Docker Desktop with Linux containers on Windows.
+Use this to run or change the source. Compose builds this checkout when you pass `--build`; without it, it pulls the published image.
 
 Linux:
 ```bash

@@ -168,6 +168,16 @@ Library changes use a per-Tonie in-memory queue, exact chapter IDs and readback 
 
 The inverse consumes its capability before making one guarded write, including failures. Stale state or an uncertain result returns `409` and `needs_refresh: true`; refresh rather than retry. Success includes confirmed `content` only when an inverse actually completed. A canceled pending removal returns actions with `status: canceled` and no invented canonical content. Upload jobs mirror canceled/undone outcomes separately from forward completion, so they do not leave ghost uploads or advertise removed attachments as current. Provider-side atomic compare-and-swap is not proven; another device can still race the final read/write boundary.
 
+## Published images
+
+Pushing a `v*` tag runs `.github/workflows/release-image.yml`: it builds the image, smoke-tests it as UID 10001 with a read-only root (health, `401` on the API, ffmpeg and Deno present), then publishes `ghcr.io/c1rca/tonies-yt` for `linux/amd64` and `linux/arm64` as `X.Y.Z`, `X.Y`, `X` and `latest`. A manual run of the workflow builds and tests without publishing. Compose pulls `${TONIES_IMAGE_TAG:-latest}` and falls back to building the checkout if the image can't be pulled. After the first publish, check the package is **Public** under the repository's Packages.
+
+## Audio processing
+
+Every added track goes through one encoder (`media_process.convert_to_mp3`): it measures integrated loudness (EBU R128), applies one static gain towards -14 LUFS with a -1 dBFS limiter (boost capped at +12 dB, no gain for silence), trims if asked, and writes 128 kbps stereo MP3. If loudness can't be measured the audio is converted unchanged. YouTube audio is downloaded in its original format and encoded once. Existing library files are not re-processed.
+
+YouTube: at most three downloads run at once; a plain download failure is retried once (a download has no side effects), timeouts and size limits are not. A playlist link lists its first 50 videos. Several results added together attach in the order shown, even when a later one finishes downloading first.
+
 ## Audio tooling and dependency audits
 
 The image contains ffmpeg, CA certificates, curl, Deno **2.9.7** and `yt-dlp[default]`; no browser runtime is installed. Deno amd64/arm64 archives are version-pinned and SHA-256 checked. The default yt-dlp dependency set installs its matching `yt-dlp-ejs` solver wheel at build time; production invocations disable remote component downloads, ambient configuration and external plugins. Do not rely on `ejs:github` fetches at runtime. Python direct dependencies are pinned except yt-dlp; base tags/APT/transitives also move, so builds are **not fully reproducible**. Record the built image ID and dependency inventory for each release.

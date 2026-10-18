@@ -1,0 +1,70 @@
+name: release image
+
+# Publishes ghcr.io/c1rca/tonies-yt for PCs (amd64) and Raspberry Pis (arm64) when a
+# version tag is pushed. A manual run builds and smoke-tests without publishing.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-qemu-action@v4
+      - uses: docker/setup-buildx-action@v4
+      - name: Image tags
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ghcr.io/c1rca/tonies-yt
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+      - name: Build for the smoke test
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          load: true
+          tags: tonies-yt:smoke
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Smoke test
+        run: |
+          docker run -d --name smoke --user 10001:10001 --read-only --cap-drop ALL \
+            --security-opt no-new-privileges:true --tmpfs /tmp -v smoke-data:/app/data \
+            -p 127.0.0.1:8090:8080 tonies-yt:smoke
+          for _ in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8090/api/health; then break; fi
+            sleep 2
+          done
+          curl -fsS http://127.0.0.1:8090/api/health
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8090/api/jobs)" = 401
+          docker exec smoke ffmpeg -version > /dev/null
+          docker exec smoke deno --version > /dev/null
+      - name: Smoke test logs
+        if: failure()
+        run: docker logs smoke || true
+      - name: Log in to GitHub Container Registry
+        if: github.event_name == 'push'
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.event_name == 'push' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
