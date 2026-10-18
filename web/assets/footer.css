@@ -1,0 +1,14 @@
+/* Footer spacing and reduced-motion overrides. */
+/* The shared server footer follows the workspace. Reserve space AFTER it too,
+   so a fixed native preview never covers its links at the end of the page. */
+body:has(.local-player:not([hidden])) {
+  padding-bottom: calc(140px + env(safe-area-inset-bottom, 0px));
+}
+
+@media(prefers-reduced-motion:reduce) {
+  *,*::before,*::after {
+    animation:none!important;
+    transition:none!important;
+    scroll-behavior:auto!important;
+  }
+}

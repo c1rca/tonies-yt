@@ -1,0 +1,99 @@
+/* Empty states and candidate result cards. */
+/* Empty states and source results use real content, never decorative telemetry. */
+.empty-tracks {
+  padding: 42px 12px;
+  text-align: center;
+}
+.empty-note {
+  display: block;
+  font-size: 38px;
+  color: var(--accent);
+  margin-bottom: 18px;
+}
+.empty-tracks h3 {
+  font-size: 18px;
+  letter-spacing: -.4px;
+}
+.empty-tracks p {
+  margin: 8px auto 18px;
+  max-width: 260px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.8;
+}
+.empty-tracks .mobile-add {
+  margin: auto;
+}
+.candidate-card {
+  padding: 18px 0;
+  border-bottom: 1px solid var(--border);
+}
+.candidate-card.selected {
+  opacity: .75;
+}
+.candidate-heading {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+}
+.candidate-heading strong {
+  font-size: 13px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.candidate-number {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 21px;
+}
+.candidate-card > p {
+  padding-left: 32px;
+  margin-top: 5px;
+  font-size: 11px;
+}
+.candidate-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-left: 32px;
+  margin-top: 12px;
+}
+.candidate-select {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 44px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.candidate-actions a {
+  margin-right: auto;
+  font-size: 11px;
+  color: var(--muted);
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+}
+.candidate-actions button {
+  min-width: 64px;
+}
+.inline-rename-actions {
+  margin-top: 8px;
+}
+.inline-rename-actions button {
+  font-size: 11px;
+  padding: 8px 10px;
+}
+
+.candidate-heading:has(.candidate-thumbnail) {
+  grid-template-columns: 64px minmax(0, 1fr);
+}
+.candidate-thumbnail {
+  width: 64px;
+  height: 48px;
+  border-radius: 6px;
+  object-fit: cover;
+}

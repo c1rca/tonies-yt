@@ -22,7 +22,6 @@ ALLOWED = {
     # T3
     "web/assets/tonie-library-render.js:renderToniesContent": 365,
     # T8
-    "web/assets/workspace.css": 1516,
     # T9
     "app/jobs.py": 646,
     # T10

@@ -1,0 +1,234 @@
+/* Workspace shell, header, and overall layout. */
+/* Audio workspace layout. Tokens and base controls come from theme.css.
+   Layers: sticky header 10, preview/navigation 20, selector/menu 30, dialog 40. */
+.workspace {
+  max-width:1600px;
+  margin:auto;
+  padding:0 32px 120px;
+}
+
+.header-actions {
+  display:flex;
+  align-items:center;
+  gap:12px;
+}
+
+.header-actions>button {
+  border:0;
+}
+
+summary {
+  cursor:pointer;
+  min-height:44px;
+  display:flex;
+  align-items:center;
+  color:var(--muted);
+  font-size:13px;
+  list-style:none;
+}
+
+summary::-webkit-details-marker {
+  display:none;
+}
+
+summary::after {
+  content:'⌄';
+  margin-left:10px;
+}
+
+.app-settings {
+  position:relative;
+}
+
+.settings-popover {
+  position:absolute;
+  z-index:30;
+  right:0;
+  top:48px;
+  min-width:220px;
+  padding:16px;
+  display:grid;
+  gap:12px;
+  border:1px solid var(--border);
+  border-radius:12px;
+  background:var(--raised);
+  box-shadow:var(--shadow);
+}
+
+.settings-popover a {
+  min-height:32px;
+  display:flex;
+  align-items:center;
+  color:var(--text);
+}
+
+.studio-grid {
+  display:grid;
+  grid-template-columns:210px minmax(330px,1fr) minmax(320px,390px);
+  align-items:start;
+}
+
+.tonie-rail {
+  padding:28px 20px 28px 0;
+  position:sticky;
+  top:0;
+}
+
+.rail-heading {
+  display:flex;
+  gap:6px;
+  align-items:center;
+  justify-content:space-between;
+  margin-bottom:16px;
+}
+
+.rail-heading h2 {
+  font-size:13px;
+  letter-spacing:0;
+  color:var(--muted);
+}
+
+.rail-heading button {
+  font-size:11px;
+  padding:8px;
+  border:0;
+}
+
+.tonies-grid {
+  display:grid;
+  gap:6px;
+}
+
+.tonies-row {
+  display:grid;
+  grid-template-columns:40px minmax(0,1fr);
+  align-items:center;
+  gap:10px;
+  width:100%;
+  padding:10px;
+  border:1px solid transparent;
+  background:transparent;
+  color:var(--text);
+  text-align:left;
+  border-radius:10px;
+  white-space:normal;
+}
+
+.tonies-row:hover {
+  background:var(--hover);
+}
+
+.tonies-row.active {
+  background:var(--accent-soft);
+  border-color:var(--accent);
+}
+
+.tonies-row img {
+  display:block;
+  width:40px;
+  height:48px;
+  object-fit:contain;
+  border-radius:6px;
+}
+
+.tonies-row .tiny {
+  font-size:11px;
+  margin-top:3px;
+}
+
+.tonies-row .truncate {
+  color:var(--text);
+}
+
+.tonies-row .tonie-space {
+  display:none;
+}
+
+.workspace-main {
+  border-left:1px solid var(--border);
+  min-width:0;
+  min-height:calc(100dvh - 200px);
+  background:var(--surface);
+}
+
+.target-header {
+  display:grid;
+  grid-template-columns:70px minmax(0,1fr);
+  gap:16px;
+  padding:28px 28px 24px;
+  align-items:center;
+  border-bottom:1px solid var(--border);
+}
+
+.target-art {
+  height:80px;
+  width:70px;
+  display:grid;
+  place-items:center;
+  background:var(--raised);
+  border-radius:12px;
+}
+
+.target-art img {
+  height:72px;
+  width:62px;
+  object-fit:contain;
+}
+
+.target-art:empty::after {
+  content:'♪';
+  color:var(--muted);
+  font-size:30px;
+}
+
+.target-label {
+  color:var(--muted);
+  font-size:11px;
+  margin-bottom:4px;
+}
+
+.target-copy {
+  min-width:0;
+}
+
+.target-copy h1 {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  font-size:clamp(21px,2.1vw,29px);
+  letter-spacing:-1px;
+  font-weight:750;
+  line-height:1.2;
+  overflow-wrap:anywhere;
+}
+
+.target-change {
+  display:none;
+}
+
+.capacity {
+  grid-column:1/-1;
+  display:flex;
+  align-items:center;
+  gap:16px;
+}
+
+#tonies-progress-track {
+  height:4px;
+  background:var(--border);
+  border-radius:4px;
+  overflow:hidden;
+  flex:1;
+  min-width:30px;
+}
+
+#tonies-progress {
+  height:100%;
+  background:var(--accent);
+}
+
+#tonies-minutes {
+  font-size:11px;
+  font-variant-numeric:tabular-nums;
+}
