@@ -15,6 +15,7 @@ Fast web app for managing Creative Tonies audio.
 - Transfer up to three local uploads concurrently, with queued attachment order and pending-state highlighting
 - Import local audio using **Import file**; it is converted to a Tonies-friendly MP3 once, on import
 - Right-click local files on desktop for upload / upload to top / upload to bottom
+- **Undo** the last rename, move or upload on a Tonie, and cancel a removal within five seconds
 
 ## How it talks to Tonies
 
@@ -30,7 +31,7 @@ The app calls the Tonies cloud directly over HTTPS (`httpx`): OAuth login at `lo
 ## Security model
 
 - Each browser signs in with the app username and password and gets its own session cookie (HttpOnly, SameSite=Strict). Application pages and APIs require it; minimal setup/sign-in/health routes and public static assets remain accessible.
-- **Lock** (top bar) signs every browser out and locks the vault. Changing the app password signs other browsers out. A restart signs everyone out.
+- **Lock** (in the **Settings** menu) signs every browser out and locks the vault. Changing the app password signs other browsers out. A restart signs everyone out.
 - Five wrong passwords from one address within five minutes trigger a wait. Writes sent from other websites are refused.
 - Tonies credentials are encrypted with a vault key protected by the app password; OAuth tokens stay server-side in memory, never browser storage. New app passwords require at least 12 characters; existing vaults remain supported.
 - The Docker image runs as **UID/GID 10001:10001**. Compose additionally makes code read-only, drops all capabilities, prevents privilege escalation and limits resources. There is no root startup/ownership-repair fallback.
@@ -44,7 +45,7 @@ The app calls the Tonies cloud directly over HTTPS (`httpx`): OAuth login at `lo
 4. **Check Activity.** Jobs and library changes share one view, named by destination. Sending, queued attachment, saved attachment, cloud processing and refresh-needed states remain distinct. Partial failures stay visible until dismissed. Accepted uploads are not resubmitted when their follow-up refresh fails.
 5. **Preview locally.** Play opens one persistent native audio dock, including seeking and volume. Changing views, sources or Tonies does not remount it. It is explicitly a local preview, not playback on your physical Tonie. Close, confirmed deletion of the playing local file and Lock stop playback.
 
-Mobile has three primary destinations: **Tracks**, **Add audio**, and **Activity**. Desktop keeps Tracks and Add audio side by side. **Settings → Appearance** follows the system by default and remembers a manual light/dark choice. Account settings and logs retain their existing routes.
+Mobile has three primary destinations: **Tracks**, **Add audio**, and **Activity**. Desktop keeps Tracks and Add audio side by side. **Settings → Appearance** follows the system by default and remembers a manual light/dark choice; the Settings, Logs, Sign-in and Setup pages use the same appearance and look.
 
 ### Undo mistakes
 
@@ -66,7 +67,7 @@ No framework, build step or external frontend dependency is required. The page l
 - `workspace.css`: workspace shell, source/track/player components and explicit touch-layout rules.
 - `pages.css`: Settings, Logs, Sign-in and Setup layouts in the same style.
 
-The existing queue, receipt reconciliation, caching, drag/drop and SSE/polling domain controller remains in `index.html`; this change does not claim a wholesale legacy-controller refactor. Feature modules call those established boundaries rather than wrapping or replacing them. Frontend contract tests evaluate the actual local scripts in page order and fail if an async contract never reaches its final assertion.
+The queue client, receipt reconciliation, caching, drag/drop and SSE/polling controller still live in `index.html`; the modules above call into it rather than replacing it. Frontend contract tests evaluate the actual local scripts in page order and fail if an async contract never reaches its final assertion.
 
 ## Main UI
 - App: `http://localhost:8090`
@@ -113,7 +114,7 @@ Compose maps loopback host port 8090 to container port 8080 and mounts the proje
 
 See [Quick Start](docs/QUICKSTART.md) for native Python 3.12 instructions on Linux/macOS. Install ffmpeg and Deno on the host, then install `requirements.txt` (including yt-dlp's matched build-time solver dependencies).
 
-The hardened native runtime uses POSIX file locking and process groups; **native Windows Python is not supported by this branch**. Windows users should use Docker Desktop with Linux containers or a Linux environment such as WSL2. The legacy `scripts/setup-windows.ps1` targets native Windows and resets to `main`; do not use it to install/evaluate this branch.
+The hardened native runtime uses POSIX file locking and process groups; **native Windows Python is not supported**. Windows users should use Docker Desktop with Linux containers or a Linux environment such as WSL2. The legacy `scripts/setup-windows.ps1` targets native Windows Python and is no longer a supported installer.
 
 ## Optional config
 - `LOG_LEVEL`
@@ -124,6 +125,14 @@ The hardened native runtime uses POSIX file locking and process groups; **native
 - `APP_MAX_UPLOAD_BYTES`: per-file limit (100 MiB by default); container disk/resource limits still apply.
 - `TONIES_EMAIL` / `TONIES_PASSWORD`: when both are set they choose the Tonies account instead of the one saved in the vault. You still create and use an app login. Keep them private.
 - `TONIES_CREATIVE_UPLOAD_URL` or `TONIES_CHARACTER_NAME`: default target Tonie (edit URL or name) when a job doesn't pick one.
+
+## Upgrading from 2.0
+
+- **Data:** the container now runs as UID/GID 10001 and Compose uses a named volume. Your old `data/` is not picked up automatically and root-owned files can't be written. Back it up, then follow [existing root-owned bind mounts](docs/OPERATIONS.md#existing-root-owned-bind-mounts) (copy it once with app ownership). The existing login and vault keep working.
+- **Address:** Compose now listens on `127.0.0.1:8090` only. For LAN access set `TONIES_BIND_ADDRESS`.
+- **Hostnames:** only names in `APP_ALLOWED_HOSTS` are accepted (default `localhost,127.0.0.1,::1`). Add your LAN IP and any reverse-proxy hostname, or requests get `400`.
+- **Reverse proxy:** forwarded headers are ignored unless you enable them for your proxy's exact IP, or set `APP_PUBLIC_URL` to the HTTPS address. See [running behind a reverse proxy](docs/OPERATIONS.md#running-behind-a-reverse-proxy).
+- **yt-dlp** is updated by rebuilding the image, no longer from Settings.
 
 ## Upgrading from 1.x
 

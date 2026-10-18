@@ -4,6 +4,10 @@ All notable changes to Tonies-YT. Versions follow [Semantic Versioning](https://
 
 ## [Unreleased]
 
+### Breaking changes
+- The Docker image runs as UID/GID 10001 and Compose uses a project-scoped named volume, listening on `127.0.0.1:8090`. Existing `data/` bind mounts need the documented one-time ownership copy; nothing falls back to root.
+- Only hostnames listed in `APP_ALLOWED_HOSTS` are accepted (default `localhost,127.0.0.1,::1`). Add LAN IPs and reverse-proxy hostnames. Forwarded headers are trusted only when enabled for the proxy's exact IP, or use `APP_PUBLIC_URL`.
+
 ### Added
 - Settings, Logs, Sign-in and Setup now share the workspace's look, header and light/dark/system appearance (shared `theme.css`/`theme.js`, `pages.css`).
 - One-level per-Tonie server-owned Undo for guarded Rename/Move/new-upload inverses, with expiry, account reset invalidation and a five-second pre-commit cancellation window for removals. No pretend recovery after committed deletion/Clear all; uncertain inverses are never replayed.
@@ -28,8 +32,11 @@ All notable changes to Tonies-YT. Versions follow [Semantic Versioning](https://
 - Changes refer to tracks by chapter ID with anchored positions, so a queued change still hits the right track after the list moved; one failing change no longer blocks the others in its batch.
 - Upload jobs no longer re-check free space with an extra read before queuing; the queue checks capacity for the whole batch.
 
+### Removed
+- The "online" connection label in the Settings menu.
+
 ### Fixed
-- Live updates: the event stream named every event `job`, which the page never received, so job progress only arrived through the 3–20 s fallback poll.
+- Undo keeps working after Tonies processes a new upload (it rewrites the track's file and duration, which Undo used to treat as someone else's change).
 
 ## [2.0.0] - 2026-10-17
 

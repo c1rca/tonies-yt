@@ -3,6 +3,22 @@ __pycache__/
 .pytest_cache/
 *.pyc
 
+# Local tooling
+.venv/
+venv/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+node_modules/
+*.egg-info/
+build/
+dist/
+.idea/
+.vscode/
+.DS_Store
+.hermes/
+
 # Runtime data (keep repo clean)
 data/
 backups/
@@ -15,6 +31,9 @@ data/downloads/*.mp3
 data-secure-branch/
 data-sse-branch/
 docker-compose.*-branch.yml
+# Host-specific Compose overrides (bind mounts, proxy settings) from the docs
+compose.*.yml
+docker-compose.override.yml
 
 # Extra secret/material safety
 .env.*
@@ -26,8 +45,6 @@ docker-compose.*-branch.yml
 *.pfx
 *.sqlite
 
-# Internal/one-off maintainer scripts
-scripts/dev/
-
 # Private cumulative work tracker (requirements, progress, evidence pointers)
 /WORK_STATUS.local.md
+*.local.md

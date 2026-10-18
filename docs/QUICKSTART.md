@@ -66,7 +66,7 @@ After `.env` changes use `up -d --force-recreate tonies-yt`. Logs: `docker compo
 
 ## Native setup (Linux/macOS, without Docker)
 
-The hardened native runtime requires POSIX file locking and process-group controls. **Native Windows Python is not supported by this branch**; its former native command cannot import the locking module. On Windows use Docker Desktop with Linux containers (recommended), or a Linux environment such as WSL2 with the Linux instructions. Do not remove vault locks or process bounds to work around this.
+The hardened native runtime requires POSIX file locking and process-group controls. **Native Windows Python is not supported**; its former native command cannot import the locking module. On Windows use Docker Desktop with Linux containers (recommended), or a Linux environment such as WSL2 with the Linux instructions. Do not remove vault locks or process bounds to work around this.
 
 Use Python 3.12, ffmpeg and Deno on PATH. Native runs do not receive the container sandbox or automatically load `.env`.
 
@@ -79,7 +79,7 @@ export LOG_FILE=./data/logs/toni-auto.log
 .venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8090 --no-proxy-headers
 ```
 
-Do not reuse `/app/data` on the native host. The legacy `scripts/setup-windows.ps1` targets native Windows and resets its checkout; it is not an installer for this hardened branch. Use Docker Desktop's Linux-container flow above instead.
+Do not reuse `/app/data` on the native host. The legacy `scripts/setup-windows.ps1` targets native Windows and resets its checkout; it is no longer a supported installer. Use Docker Desktop's Linux-container flow above instead.
 
 ## Troubleshooting
 

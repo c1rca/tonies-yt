@@ -17,7 +17,7 @@
           <details class="app-settings"><summary aria-label="Workspace settings">Settings</summary><div class="settings-popover">
             <label for="workspace-theme">Appearance</label><select id="workspace-theme" onchange="setWorkspaceTheme(this.value)"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select>
             <a href="/settings">Account &amp; settings</a><a href="/logs">Application logs</a><button class="ghost" id="lock-app">Lock app</button>
-            <span class="tiny" id="health">Connecting…</span><span id="realtime-status" hidden></span>
+            <span id="realtime-status" hidden></span>
           </div></details>
         </div>
       </header>
@@ -162,7 +162,6 @@
       const stCount = document.getElementById('st-count');
       const stSize = document.getElementById('st-size');
       const stLength = document.getElementById('st-length');
-      const health = document.getElementById('health');
       const lockAppEl = document.getElementById('lock-app');
       const realtimeStatusEl = document.getElementById('realtime-status');
       const searchLimitLabelEl = document.getElementById('search-limit-label');
@@ -2866,20 +2865,11 @@
       async function checkHealth() {
         const wasOnline = isBackendOnline;
         try {
-          const h = await api('/api/health', {}, 5000);
-          if (h.status === 'ok') {
-            isBackendOnline = true;
-            health.className = 'chip ok';
-            health.textContent = 'online';
-          } else {
-            isBackendOnline = true;
-            health.className = 'chip warn';
-            health.textContent = 'degraded';
-          }
+          // Reachability only drives retrying a search queued while offline; it isn't shown.
+          await api('/api/health', {}, 5000);
+          isBackendOnline = true;
         } catch {
           isBackendOnline = false;
-          health.className = 'chip err';
-          health.textContent = 'offline';
         }
 
         if (!wasOnline && isBackendOnline && queuedSearchMessage) {
