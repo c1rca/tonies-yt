@@ -1,4 +1,26 @@
 /** YouTube search: sending a search, rendering results and picking a result. */
+let queuedSearchMessage = '';
+let queuedSearchRetryTimer = null;
+let activeSearchRequestController = null;
+let activeSearchRequestSeq = 0;
+let lastSearchStartedAtMs = 0;
+const RESULTS_CLEARED_KEY = 'tonies-auto.results-cleared.v1';
+const SEARCH_LIMIT_KEY = 'tonies-auto.search-limit.v1';
+function initSearch() {
+  try {
+    if (localStorage.getItem(RESULTS_CLEARED_KEY) === '1') {
+      document.documentElement.classList.add('hide-search-results');
+    }
+  } catch {}
+  if (searchBtnEl) searchBtnEl.onclick = sendQuery;
+  if (clearResultsEl) clearResultsEl.onclick = clearResults;
+  if (queryInputEl) {
+    queryInputEl.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') sendQuery();
+    });
+  }
+}
+
 const JOB_PROGRESS_TEXT = {
   queued_download: 'Queued for download…', downloading: 'Downloading audio…',
   queued_prepare: 'Queued for preparation…', preparing: 'Preparing audio…',

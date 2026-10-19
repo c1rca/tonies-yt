@@ -1,4 +1,8 @@
 /** Adding Local files to a Tonie: the upload queue, one file at a time. */
+let queuedLocalUploads = [];
+let queuedLocalUploadNames = new Set();
+let localUploadQueuePumping = false;
+let localUploadOutstandingByName = {};
 function focusUploadInLibrary(filename) {
   renderFiles();
   const key = encodeURIComponent(filename || '');

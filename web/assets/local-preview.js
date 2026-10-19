@@ -1,4 +1,19 @@
 /** Single native local preview. Authenticated media URL; no remote Tonie playback. */
+let localPlaybackFilename = '';
+let localPlaybackIntent = 0;
+function initLocalPreview() {
+  for (const event of ['play', 'pause', 'ended']) {
+    localAudioEl.addEventListener(event, updateLocalPlaybackButtons);
+  }
+  localAudioEl.addEventListener('error', () => {
+    if (localPlaybackFilename) {
+      localPlayerStatusEl.textContent = 'Could not play this file. Try again or refresh the library.';
+      updateLocalPlaybackButtons();
+    }
+  });
+  document.getElementById('local-player-close').addEventListener('click', stopLocalPlayback);
+}
+
 function updateLocalPlaybackButtons() {
   filesEl.querySelectorAll('.file').forEach((row) => {
     const name = row.getAttribute('data-file-name') || '';

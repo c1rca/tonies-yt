@@ -1,4 +1,8 @@
 /** Keeping the page's job list in step with the server, and reacting to job changes. */
+const jobStatusById = {};
+let loadingJobs = false;
+let hasLoadedJobsOnce = false;
+const CANCELLABLE_JOB_STATUSES = new Set(['queued', 'parsing', 'searching', 'awaiting_selection', 'queued_download', 'downloading', 'queued_prepare', 'preparing', 'waiting_upload', 'uploading']);
 function canCancelJob(status) {
   return CANCELLABLE_JOB_STATUSES.has(getJobStatus(status));
 }
@@ -95,9 +99,7 @@ function syncPendingToniesUploadState(sourceJobs = jobsCache) {
 }
 
 let jobsReadSeq = 0;
-
 let jobsAppliedSeq = 0;
-
 const reversedJobsById = new Map();
 
 // Undone/canceled is final: no snapshot may bring back the job's earlier status or receipt.

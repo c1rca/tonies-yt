@@ -1,4 +1,24 @@
-/** The Local files list: rendering, refreshing and deleting files. */
+/** The Local files list: rendering, refreshing, downloading and deleting files. */
+let loadingFiles = false;
+const FILES_CACHE_KEY = 'tonies-auto.files-cache.v1';
+
+function initLocalFiles() {
+  document.getElementById('refresh-files').onclick = refreshFiles;
+  document.getElementById('clear-filter').onclick = () => { fileFilterEl.value = ''; renderFiles(); };
+  fileFilterEl.oninput = renderFiles;
+}
+
+function downloadLocalFile(filename) {
+  const safe = String(filename || '').trim();
+  if (!safe) return;
+  closeFileMenu();
+  const a = document.createElement('a');
+  a.href = `/api/files/${encodeURIComponent(safe)}`;
+  a.download = safe;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
 async function deleteFile(filename) {
   const ok = await askConfirm({
     title: 'Delete local file?',

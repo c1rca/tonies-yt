@@ -1,4 +1,19 @@
 /** Following an upload from the app to the Tonie until the track is confirmed there. */
+let recentUploadedChapterIds = {};
+const completedUploadJobIds = new Set();
+const reconciledUploadReceiptJobIds = new Set();
+const toniesUploadReconciliations = [];
+let toniesUploadReconciliationRunning = false;
+const uploadIntentsByJobId = new Map();
+const localUploadToastShownJobIds = new Set();
+let toniesNewClearTimer = null;
+const attachedUploadJobIds = new Set();  // upload jobs whose chapter is already in the list
+const TONIES_NEW_HIGHLIGHT_MS = 5000;
+let toniesUploadSyncing = false;
+let pendingDropUploadIntent = null;
+let pendingToniesUpload = null;
+let activeUploadJobIds = new Set();
+let syncingResultJobIds = new Set();
 function markUploadJobActive(jobId) {
   if (jobId) activeUploadJobIds.add(jobId);
 }

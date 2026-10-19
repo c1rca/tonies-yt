@@ -1,4 +1,17 @@
 /** Search results view model: which jobs and candidates show, and in what state. */
+let highlightedJobId = '';
+let highlightJobTimer = null;
+let searchResultsCutoffMs = null;
+let activeSearchJobId = '';
+let resultsCleared = false;
+const START_WITH_CLEARED_RESULTS = true;
+let searchLimit = 5;
+let searchUiActive = false;
+let selectingCandidateJobIds = new Set();
+let selectedCandidateIndexByJob = {};
+const ACTIVE_JOB_STATUSES = new Set(['queued', 'parsing', 'searching', 'awaiting_selection', 'queued_download', 'downloading', 'queued_prepare', 'preparing', 'waiting_upload', 'uploading']);
+const SEARCH_READY_STATUSES = new Set(['awaiting_selection', 'failed']);
+const SEARCH_PENDING_STATUSES = new Set(['queued', 'parsing', 'searching']);
 function getSelectedCandidateIndex(jobId) {
   return Number(selectedCandidateIndexByJob[jobId]);
 }
