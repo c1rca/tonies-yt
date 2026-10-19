@@ -1,4 +1,7 @@
 /** Starts the page: wires each area, restores caches and loads live data. Loaded last. */
+initLocalPreview();
+initToniesPicker();
+initTonieLibrary();
 initAppCore();
 initSearch();
 initLocalFiles();

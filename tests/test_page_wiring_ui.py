@@ -12,11 +12,8 @@ ASSETS = Path(__file__).parents[1] / "web" / "assets"
 
 @pytest.fixture(autouse=True)
 def declarations_only(monkeypatch):
-    """Do not inherit the three legacy initializers from the old contract harness."""
-    paths = frontend.script_paths
-    monkeypatch.setattr(frontend, "script_paths", lambda **kwargs: [
-        path for path in paths(**kwargs) if path.name != "app-wiring.js"
-    ])
+    """Load the area scripts without initializing any of them."""
+    monkeypatch.setattr(frontend, "AREA_INIT", "")
 
 
 def test_area_scripts_have_no_implicit_wiring_or_window_exports():

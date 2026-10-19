@@ -56,11 +56,6 @@ def emit_job_event(kind: str, job_id: Optional[str] = None):
     events.publish(kind, payload)
 
 
-# Remove these after T13's direct app.events router imports land on integration.
-get_events_since = events.events_since
-get_event_stats = events.stats
-
-
 def get_queue_stats() -> dict[str, int]:
     with state_lock:
         in_flight = sum(1 for j in _jobs.values() if str(j.status) in {

@@ -6,10 +6,16 @@ import pytest
 from page_sources import HTML, function_source, page_source, script_paths
 
 
+# Areas whose existing contracts exercise their listeners. app-boot.js (not run here) calls
+# these first, so the harness does the same; tests about wiring itself set this to ''.
+AREA_INIT = "initLocalPreview();\ninitToniesPicker();\ninitTonieLibrary();\n"
+
+
 def run_js(body):
     # Every page script in load order, except the network/boot boundary (see page_sources).
     # Each local feature module is evaluated, never replaced with test-only behavior.
     source = '\n'.join(p.read_text(encoding='utf-8') for p in script_paths(include_boot=False))
+    source += '\n' + AREA_INIT
     harness = r"""
 const assert = require('node:assert/strict');
 const timers = new Map(); let timerId = 0;
