@@ -1,4 +1,7 @@
 /** Drawing the chosen Tonie's track list. */
+let lastToniesTapIndex = null;
+let lastToniesTapAt = 0;
+
 function renderToniesContent() {
   const focused = document.activeElement;
   const restoreInline = focused?.classList?.contains('tonies-title-inline');

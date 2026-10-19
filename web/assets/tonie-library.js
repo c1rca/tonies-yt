@@ -1,4 +1,63 @@
 /** The chosen Tonie's track list: loading it, status, edit mode and processing polls. */
+let toniesApplying = false;
+let toniesReverseView = true;
+let toniesEditMode = false;
+let toniesNameDrafts = {};
+let toniesContentRequestSeq = 0;
+const toniesContentVersionByUrl = {};
+const toniesContentReadSeqByUrl = {};  // latest-started library read per Tonie
+let toniesProcessingTimer = null;
+let toniesProcessingPolls = 0;
+let loadingToniesContent = false;
+let loadingToniesContentUrl = '';
+const TONIES_CONTENT_CACHE_KEY = 'tonies-auto.tonies-content-by-url.v1';
+const TONIES_REVERSE_VIEW_KEY = 'tonies-auto.tonies-reverse-view.v1';
+
+function initTonieLibrary() {
+  for (const event of ['dragend', 'drop']) {
+    document.addEventListener(event, () => {
+      toniesContentEl?.classList.remove('external-drop');
+      try { toniesContentEl?.querySelectorAll('.tonies-item.drop-target').forEach(n => n.classList.remove('drop-target')); } catch {}
+    });
+  }
+  if (toggleToniesOrderEl) {
+    toggleToniesOrderEl.onclick = () => {
+      toniesReverseView = !toniesReverseView;
+      saveToniesViewPrefs();
+      renderToniesOrderToggle();
+      renderToniesContent();
+    };
+  }
+  if (toggleToniesEditEl) {
+    toggleToniesEditEl.onclick = () => {
+      if (toniesEditMode) {
+        cancelToniesEditMode();
+        return;
+      }
+      if (isToniesActionBusy()) {
+        showToast('Please wait for current Tonies sync to finish.', 'warn', 2200);
+        return;
+      }
+      beginToniesEditMode();
+    };
+  }
+  if (saveToniesNamesEl) saveToniesNamesEl.onclick = saveToniesNameEdits;
+  if (cancelToniesNamesEl) cancelToniesNamesEl.onclick = cancelToniesEditMode;
+  if (deleteAllToniesContentEl) deleteAllToniesContentEl.onclick = deleteAllToniesContent;
+}
+
+function blockIfActionInProgress() {
+  if (toniesApplying) {
+    showToast('Please wait for the Tonies library to load.', 'warn', 3000);
+    return true;
+  }
+  return false;
+}
+
+// Only a blocking library load stops edits; uploads and queued edits never do.
+function isToniesActionBusy() {
+  return !!toniesApplying;
+}
 function isToniesShowingNewestFirst() {
   return !!toniesReverseView;
 }

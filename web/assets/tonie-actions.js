@@ -1,4 +1,8 @@
 /** Library edits queued on the server: delete, move, rename and upload placement. */
+// The list overlays these pending edits on the server's last content.
+const toniesQueuedActions = new Map();
+const finishedToniesActionIds = new Set();
+let toniesActionPollTimer = null;
 // ---- Library action queue -------------------------------------------------------
 // Deletes, moves, renames and delete-all are sent to the server queue
 // (POST /api/tonies-actions), which applies everything queued for a Tonie in one

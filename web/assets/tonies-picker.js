@@ -1,4 +1,32 @@
 /** The Creative Tonie picker: the list of Tonies, their artwork and choosing one. */
+let toniesImagesLoading = false;
+let loadingTonies = false;
+let toniesLoadError = '';
+let toniesStatsSyncing = new Set();
+let toniesStatsSyncBusy = false;
+let manualToniesRefreshInFlight = false;
+const TONIES_CACHE_KEY = 'tonies-auto.creative-tonies.v1';
+const TONIES_SELECTED_KEY = 'tonies-auto.selected-tonies-url.v1';
+const TONIES_IMAGE_CACHE_KEY = 'tonies-auto.creative-tonies.image-cache.v1';
+function initToniesPicker() {
+  document.getElementById('refresh-tonies').onclick = async () => {
+    if (blockIfActionInProgress() || manualToniesRefreshInFlight) return;
+    manualToniesRefreshInFlight = true;
+    setToniesStatus('Loading Tonies library…', true);
+    try {
+      await refreshTonies({ force: true });
+    } catch (e) {
+      setToniesStatus(`Error: ${e?.message || e}`, false);
+      renderToniesContent();
+    } finally {
+      manualToniesRefreshInFlight = false;
+      toniesApplying = false;
+      renderTonies();
+      renderToniesEditUI();
+    }
+  };
+}
+
 function renderTonies() {
   renderWorkspaceTarget();
   const el = document.getElementById('tonies');

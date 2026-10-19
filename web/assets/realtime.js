@@ -1,11 +1,5 @@
 /** Live updates: server events (SSE) with polling as the fallback, plus health checks. */
-async function lockApp() {
-  stopLocalPlayback();
-  try {
-    await api('/api/setup/lock', { method: 'POST' });
-  } catch {}
-  window.location.href = '/login?locked=1';
-}
+let isBackendOnline = true;
 
 async function checkHealth() {
   const wasOnline = isBackendOnline;
@@ -32,19 +26,12 @@ function hasActiveJobFlow() {
 }
 
 const REALTIME_MODE = 'sse'; // switch to 'poll' for immediate fallback
-
 const RT_DEBUG = new URLSearchParams(window.location.search).get('rtDebug') === '1';
-
 let sseConnected = false;
-
 let sseBackoffMs = 1000;
-
 let sseLastEventId = 0;
-
 let sseRefreshTimer = null;
-
 let lastSseRefreshAt = 0;
-
 let lastJobsReconcileAt = Date.now();
 
 function renderRealtimeStatus() {

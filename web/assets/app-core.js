@@ -1,4 +1,16 @@
 /** Small shared helpers: escaping, formatting, the API call, toasts and status lines. */
+function initAppCore() {
+  if (lockAppEl) lockAppEl.onclick = lockApp;
+  document.addEventListener('pointerdown', (e) => {
+    const btn = e.target.closest?.('button');
+    if (!btn) return;
+    btn.classList.remove('tap-feedback');
+    void btn.offsetWidth;
+    btn.classList.add('tap-feedback');
+    setTimeout(() => btn.classList.remove('tap-feedback'), 180);
+  });
+}
+
 function esc(s) {
   return String(s ?? '')
     .replaceAll('&', '&amp;')
@@ -49,17 +61,12 @@ function statusLine(text, { tone = '', busy = false, placement = '' } = {}) {
   return `<div class="${classes}">${busy ? '<span class="loading-dot"></span>' : ''}${esc(text)}</div>`;
 }
 
-function blockIfActionInProgress() {
-  if (toniesApplying) {
-    showToast('Please wait for the Tonies library to load.', 'warn', 3000);
-    return true;
-  }
-  return false;
-}
-
-// Only a blocking library load stops edits; uploads and queued edits never do.
-function isToniesActionBusy() {
-  return !!toniesApplying;
+async function lockApp() {
+  stopLocalPlayback();
+  try {
+    await api('/api/setup/lock', { method: 'POST' });
+  } catch {}
+  window.location.href = '/login?locked=1';
 }
 
 function showToast(message, kind = 'ok', ms = 3800, action = null) {

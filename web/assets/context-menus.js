@@ -1,7 +1,47 @@
 /** The right-click / long-press menus for tracks and local files. */
 let menuReturnFocusId = null;
-
 let toniesMenuTargetUrl = '';
+let toniesMenuChapterId = null;
+let fileMenuFilename = '';
+
+function initContextMenus() {
+  document.getElementById('tonies-menu-rename').onclick = () => {
+    const id = toniesMenuChapterId, url = toniesMenuTargetUrl; closeToniesMenu();
+    if (url === selectedToniesUrl) beginInlineRename(id);
+  };
+  document.getElementById('tonies-menu-delete').onclick = () => {
+    const id = toniesMenuChapterId, url = toniesMenuTargetUrl; closeToniesMenu();
+    const index = (toniesContentCache?.chapters || []).findIndex(c => c.chapter_id === id);
+    if (url === selectedToniesUrl && index >= 0) void enqueueToniesDelete(index);
+  };
+  toniesMenuEl.addEventListener('keydown', e => {
+    const items = [...toniesMenuEl.querySelectorAll('button')];
+    if (['ArrowUp','ArrowDown','Home','End','Tab'].includes(e.key)) {
+      if (e.key === 'Tab') { closeToniesMenu(); return; }
+      e.preventDefault(); const i = items.indexOf(document.activeElement);
+      const next = e.key === 'Home' ? 0 : e.key === 'End' ? items.length-1 : (i + (e.key === 'ArrowUp' ? -1 : 1) + items.length) % items.length;
+      items[next]?.focus();
+    }
+  });
+  if (toniesMenuTopEl) toniesMenuTopEl.onclick = () => moveToniesFromMenu('top');
+  if (toniesMenuBottomEl) toniesMenuBottomEl.onclick = () => moveToniesFromMenu('bottom');
+  if (toniesMenuUpEl) toniesMenuUpEl.onclick = () => moveToniesFromMenu('up');
+  if (toniesMenuDownEl) toniesMenuDownEl.onclick = () => moveToniesFromMenu('down');
+  if (toniesMenuCancelEl) toniesMenuCancelEl.onclick = () => closeToniesMenu();
+  if (fileMenuUploadEl) fileMenuUploadEl.onclick = () => uploadFromFileMenu('default');
+  if (fileMenuUploadTopEl) fileMenuUploadTopEl.onclick = () => uploadFromFileMenu('top');
+  if (fileMenuUploadBottomEl) fileMenuUploadBottomEl.onclick = () => uploadFromFileMenu('bottom');
+  if (fileMenuDownloadEl) fileMenuDownloadEl.onclick = () => downloadLocalFile(fileMenuFilename);
+  if (fileMenuCancelEl) fileMenuCancelEl.onclick = () => closeFileMenu();
+  document.addEventListener('click', (e) => {
+    if (toniesMenuEl?.classList.contains('open')) {
+      if (!toniesMenuEl.contains(e.target)) closeToniesMenu();
+    }
+    if (fileMenuEl?.classList.contains('open')) {
+      if (!fileMenuEl.contains(e.target)) closeFileMenu();
+    }
+  });
+}
 
 function closeToniesMenu() {
   const returnId = menuReturnFocusId; menuReturnFocusId = null;
@@ -69,18 +109,6 @@ async function uploadFromFileMenu(kind = 'default') {
   }
   const targetIndex = toniesReverseView ? (toniesContentCache?.chapters || []).length : 0;
   await uploadExistingToIndex(filename, targetIndex);
-}
-
-function downloadLocalFile(filename) {
-  const safe = String(filename || '').trim();
-  if (!safe) return;
-  closeFileMenu();
-  const a = document.createElement('a');
-  a.href = `/api/files/${encodeURIComponent(safe)}`;
-  a.download = safe;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
 }
 
 async function moveToniesFromMenu(kind) {
