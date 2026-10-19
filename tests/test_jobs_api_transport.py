@@ -51,7 +51,7 @@ def upload_job(tmp_path, name="track", position=None):
     path = tmp_path / f"{name}.mp3"
     path.write_bytes(b"synthetic-audio")
     state = jobs.create_job(f"synthetic {name}")
-    job_upload._enqueue_upload(state.id, path, target=None, target_url="synthetic-target", position=position)
+    job_upload.enqueue_upload(state.id, path, target=None, target_url="synthetic-target", position=position)
     return state.id
 
 

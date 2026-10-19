@@ -1,4 +1,4 @@
-# Owns job state, persistence, events, cancellation, expiry and the watchdog.
+"""Own job state, persistence, job events, cancellation, expiry and the watchdog."""
 from __future__ import annotations
 import os
 import tempfile
@@ -11,10 +11,12 @@ from pathlib import Path
 from typing import Dict, Optional, Any
 
 from . import events, uploader
+from .events import now_iso
 from .models import JobState
 from .config import settings
 from .logger import get_logger
 
+# Keep the historical logger name so log output remains unchanged after the split.
 logger = get_logger(f"{__package__}.jobs")
 
 # Undone/canceled jobs are final: no later queue callback may revive them.
@@ -23,7 +25,9 @@ TERMINAL_STATUSES = frozenset({"done", "failed"}) | REVERSED_STATUSES
 
 _jobs: Dict[str, JobState] = {}
 _q: queue.Queue[str] = queue.Queue()
-_lock = threading.Lock()
+# Reentrant so selection/fetch can group get_job, add_job and job_states atomically.
+# Release before persistence, event publication or update/log calls (persistence locks first).
+state_lock = threading.RLock()
 _persist_lock = threading.Lock()
 _STAGE_TIMEOUT_SEC: dict[str, int] = {
     "parsing": 90,
@@ -41,25 +45,24 @@ _STAGE_TIMEOUT_SEC: dict[str, int] = {
 _JOBS_STATE_FILE = settings.data_dir / "jobs-state.json"
 _MAX_PERSISTED_JOBS = 200
 
-now_iso = events.now_iso
 
-
-def _emit_event(kind: str, job_id: Optional[str] = None):
+def emit_job_event(kind: str, job_id: Optional[str] = None):
     payload: dict[str, Any] = {}
     if job_id:
-        with _lock:
+        with state_lock:
             st = _jobs.get(job_id)
             payload["job"] = st.model_dump() if st else None
             payload["job_id"] = job_id
     events.publish(kind, payload)
 
 
+# Remove these after T13's direct app.events router imports land on integration.
 get_events_since = events.events_since
 get_event_stats = events.stats
 
 
 def get_queue_stats() -> dict[str, int]:
-    with _lock:
+    with state_lock:
         in_flight = sum(1 for j in _jobs.values() if str(j.status) in {
             "queued_download", "downloading", "queued_prepare", "preparing", "waiting_upload", "uploading"
         })
@@ -71,7 +74,7 @@ def get_queue_stats() -> dict[str, int]:
     }
 
 
-def _persist_jobs_state() -> None:
+def persist_state() -> None:
     """Atomically write the newest job snapshot.
 
     Workers persist concurrently. One writer at a time (snapshot taken inside the same
@@ -81,7 +84,7 @@ def _persist_jobs_state() -> None:
     tmp: Path | None = None
     try:
         with _persist_lock:
-            with _lock:
+            with state_lock:
                 ordered = sorted(_jobs.values(), key=lambda j: j.created_at, reverse=True)[:_MAX_PERSISTED_JOBS]
                 payload = [j.model_dump() for j in ordered]
             _JOBS_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -99,7 +102,7 @@ def _persist_jobs_state() -> None:
             tmp.unlink(missing_ok=True)
 
 
-def _load_jobs_state() -> None:
+def load_state() -> None:
     if not _JOBS_STATE_FILE.exists():
         return
     try:
@@ -114,11 +117,33 @@ def _load_jobs_state() -> None:
                 st.logs = [*st.logs, f"Recovered at startup: marked failed from in-progress state '{prev}'"]
                 st.updated_at = now_iso()
             restored[st.id] = st
-        with _lock:
+        with state_lock:
             _jobs.clear()
             _jobs.update(restored)
     except Exception as e:
         logger.warning('load_jobs_state failed: %s', e)
+
+
+def add_job(state: JobState) -> None:
+    """Register a state; callers retain control of persistence, events and queueing."""
+    with state_lock:
+        _jobs[state.id] = state
+
+
+def job_states() -> list[JobState]:
+    """States in insertion order; hold state_lock while inspecting or changing them."""
+    with state_lock:
+        return list(_jobs.values())
+
+
+def next_search_job() -> str:
+    """Wait for the next queued search job in FIFO order."""
+    return _q.get()
+
+
+def finish_search_job() -> None:
+    """Acknowledge a search job, including a failed one."""
+    _q.task_done()
 
 
 def create_job(message: str, search_limit: int = 5) -> JobState:
@@ -135,53 +160,52 @@ def create_job(message: str, search_limit: int = 5) -> JobState:
         search_limit=lim,
         logs=["Job created"],
     )
-    with _lock:
-        _jobs[job_id] = st
-    _persist_jobs_state()
-    _emit_event("job_created", job_id)
+    add_job(st)
+    persist_state()
+    emit_job_event("job_created", job_id)
     _q.put(job_id)
     return st
 
 
 def get_job(job_id: str) -> JobState:
-    with _lock:
+    with state_lock:
         return _jobs.get(job_id)
 
 
 def list_jobs() -> list[JobState]:
-    with _lock:
+    with state_lock:
         return sorted(_jobs.values(), key=lambda j: j.created_at, reverse=True)
 
 
-def _update(job_id: str, **kwargs):
-    with _lock:
+def update_job(job_id: str, **kwargs):
+    with state_lock:
         st = _jobs[job_id]
         for k, v in kwargs.items():
             setattr(st, k, v)
         st.updated_at = now_iso()
-    _persist_jobs_state()
-    _emit_event("job_updated", job_id)
+    persist_state()
+    emit_job_event("job_updated", job_id)
 
 
-def _log(job_id: str, msg: str):
-    with _lock:
+def log_job(job_id: str, msg: str):
+    with state_lock:
         st = _jobs[job_id]
         st.logs = [*st.logs, msg]
         st.updated_at = now_iso()
         status = st.status
-    _persist_jobs_state()
+    persist_state()
     logger.info("job=%s status=%s %s", job_id, status, msg)
-    _emit_event("job_log", job_id)
+    emit_job_event("job_log", job_id)
 
 
-def _cancel_requested(job_id: str) -> bool:
-    with _lock:
+def cancel_requested(job_id: str) -> bool:
+    with state_lock:
         st = _jobs.get(job_id)
         return bool(st and st.cancel_requested)
 
 
 def cancel_job(job_id: str) -> JobState:
-    with _lock:
+    with state_lock:
         st = _jobs.get(job_id)
         if not st:
             raise RuntimeError("Job not found")
@@ -196,8 +220,8 @@ def cancel_job(job_id: str) -> JobState:
         action_id = st.tonies_action_id
     if action_id:
         uploader.action_queue.cancel(action_id)  # only succeeds before the audio starts sending
-    _emit_event("job_updated", job_id)
-    _log(job_id, "Canceled by user")
+    emit_job_event("job_updated", job_id)
+    log_job(job_id, "Canceled by user")
     return get_job(job_id)
 
 
@@ -213,7 +237,7 @@ def _parse_iso(ts: str) -> datetime:
 
 def expire_job(job_id: str, error: str, *, only_if_status: Optional[str] = None) -> bool:
     """Fail a job and stop its worker from carrying on (it checks the cancel flag)."""
-    with _lock:
+    with state_lock:
         cur = _jobs.get(job_id)
         if not cur or cur.status in TERMINAL_STATUSES or (only_if_status and cur.status != only_if_status):
             return False
@@ -221,8 +245,8 @@ def expire_job(job_id: str, error: str, *, only_if_status: Optional[str] = None)
         cur.error = error
         cur.cancel_requested = True
         cur.updated_at = now_iso()
-    _persist_jobs_state()
-    _emit_event("job_updated", job_id)
+    persist_state()
+    emit_job_event("job_updated", job_id)
     return True
 
 
@@ -230,7 +254,7 @@ def watchdog_loop():
     while True:
         time_now = datetime.now(timezone.utc)
         timed_out: list[tuple[str, str, int]] = []
-        with _lock:
+        with state_lock:
             for jid, st in list(_jobs.items()):
                 status = str(st.status or "")
                 limit = _STAGE_TIMEOUT_SEC.get(status)
@@ -246,6 +270,6 @@ def watchdog_loop():
 
         for jid, status, age in timed_out:
             if expire_job(jid, f"Timed out in state '{status}' after {age}s", only_if_status=status):
-                _log(jid, f"Failed (watchdog timeout): state={status} age={age}s")
+                log_job(jid, f"Failed (watchdog timeout): state={status} age={age}s")
 
         threading.Event().wait(5.0)

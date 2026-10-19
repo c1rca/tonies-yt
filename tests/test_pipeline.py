@@ -27,8 +27,8 @@ def test_run_job_success(monkeypatch, tmp_path):
     monkeypatch.setattr(job_upload, '_probe_audio_duration_seconds', lambda _path: 1.0)
     monkeypatch.setattr(
         job_upload,
-        '_enqueue_upload',
-        lambda job_id, path, **_kwargs: job_store._update(job_id, status='done', output_file=str(path)),
+        'enqueue_upload',
+        lambda job_id, path, **_kwargs: job_store.update_job(job_id, status='done', output_file=str(path)),
     )
 
     st = job_store.create_job('test')
@@ -79,13 +79,13 @@ def test_failed_job_cannot_enqueue_upload_after_download_returns(monkeypatch, tm
 
     monkeypatch.setattr(jobs, 'download_mp3', blocked_download)
     monkeypatch.setattr(job_upload, '_probe_audio_duration_seconds', lambda _path: 1.0)
-    monkeypatch.setattr(job_upload, '_enqueue_upload', lambda *args, **kwargs: uploads.append((args, kwargs)))
+    monkeypatch.setattr(job_upload, 'enqueue_upload', lambda *args, **kwargs: uploads.append((args, kwargs)))
 
     st = job_store.create_job('late download')
-    job_store._update(st.id, parsed={}, status='queued_download')
+    job_store.update_job(st.id, parsed={}, status='queued_download')
     jobs.run_selected_candidate_async(st.id, {'title': 'late', 'url': 'https://example.test/late'})
     assert started.wait(1)
-    job_store._update(st.id, status='failed', error='watchdog timeout')
+    job_store.update_job(st.id, status='failed', error='watchdog timeout')
     release.set()
 
     deadline = time.time() + 1

@@ -16,6 +16,8 @@ def no_network(monkeypatch):
     def denied(*args, **kwargs):
         raise AssertionError("offline attachment tests must not open sockets")
     monkeypatch.setattr(socket.socket, "connect", denied)
+    # Preserve the frozen assertions' old spelling without a production compatibility alias.
+    monkeypatch.setattr(tonies_content, "_writable", tonies_content.writable_chapters, raising=False)
     monkeypatch.setattr(tonies_api, "_audio_seconds", lambda _: 1.0)
 
 

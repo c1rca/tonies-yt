@@ -20,8 +20,8 @@ def isolated(monkeypatch):
 
     monkeypatch.setattr(socket.socket, "connect", denied)
     monkeypatch.setattr(jobs, "_jobs", {})
-    monkeypatch.setattr(jobs, "_persist_jobs_state", lambda: None)
-    monkeypatch.setattr(jobs, "_emit_event", lambda *args, **kwargs: None)
+    monkeypatch.setattr(jobs, "persist_state", lambda: None)
+    monkeypatch.setattr(jobs, "emit_job_event", lambda *args, **kwargs: None)
 
 
 @pytest.fixture
@@ -152,7 +152,7 @@ def test_real_attachment_receipt_mirrors_to_job_without_inventing_inventory(queu
     api._client = httpx.Client(transport=httpx.MockTransport(handler))
     job = JobState(id="linked-job", status=starting_status, created_at=events.now_iso(),
                    updated_at=events.now_iso(), user_message="upload existing: synthetic.mp3", target_url=URL)
-    jobs._jobs[job.id] = job
+    jobs.add_job(job)
     action = queue.submit_upload(URL, Path("synthetic.mp3"), "Synthetic", on_change=lambda a: job_upload._on_upload_action(job.id, a))
     queue._transfers.shutdown(wait=True)
     job.tonies_action_id = action.id
@@ -173,7 +173,7 @@ def test_real_attachment_receipt_mirrors_to_job_without_inventing_inventory(queu
         monkeypatch.setattr(jobs, "_JOBS_STATE_FILE", state_file)
         persist = __import__("json").dumps([job.model_dump()])
         state_file.write_text(persist)
-        jobs._load_jobs_state()
+        jobs.load_state()
         restored = jobs.get_job(job.id)
         assert restored.attachment_receipt == action.attachment_receipt
         assert restored.uploaded_chapter_id == "permanent" and restored.needs_refresh
@@ -192,7 +192,7 @@ def test_real_attachment_receipt_mirrors_to_job_without_inventing_inventory(queu
 @pytest.mark.parametrize("terminal", ["undone", "canceled"])
 def test_terminal_upload_mirror_clears_receipt_and_rejects_stale_acceptance(queue, monkeypatch, terminal):
     job = JobState(id="linked", status="uploading", created_at=events.now_iso(), updated_at=events.now_iso(), user_message="synthetic")
-    jobs._jobs[job.id] = job
+    jobs.add_job(job)
     action = Action("upload", 1, URL, "upload", {}, status="failed", chapter_id="permanent",
                     attachment_receipt={"chapters": [{"id": "permanent"}]}, needs_refresh=True)
     job_upload._on_upload_action(job.id, action)
