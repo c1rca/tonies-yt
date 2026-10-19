@@ -2,13 +2,13 @@
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
-from ..media_files import clip_library_file, library_file, library_files, library_waveform
+from ..job_upload import create_upload_only_job
+from ..media_files import clip_library_file, library_file, library_files, library_waveform, store_upload
 from ..tonies_batch import clean_position
-from . import get_services
 
 router = APIRouter()
 
@@ -30,7 +30,7 @@ def files():
 
 
 @router.post('/api/upload-existing')
-def upload_existing(req: UploadExistingRequest, services=Depends(get_services)):
+def upload_existing(req: UploadExistingRequest):
     if Path(req.filename).name != req.filename or Path(req.filename).suffix.lower() != '.mp3':
         raise HTTPException(status_code=400, detail='Invalid library filename')
     p = library_file(req.filename)
@@ -38,14 +38,14 @@ def upload_existing(req: UploadExistingRequest, services=Depends(get_services)):
         position = clean_position(req.position)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
-    job = services.create_upload_only_job(str(p), note=f'upload existing: {req.filename}', target_url=req.target_url,
+    job = create_upload_only_job(str(p), note=f'upload existing: {req.filename}', target_url=req.target_url,
                                  position=position)
     return {'job_id': job.id, 'status': job.status}
 
 
 @router.post('/api/files/upload')
-async def upload_file_to_library(file: UploadFile = File(...), services=Depends(get_services)):
-    return await services.store_upload(file)
+async def upload_file_to_library(file: UploadFile = File(...)):
+    return await store_upload(file)
 
 
 @router.get('/api/files/{filename}')

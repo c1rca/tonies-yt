@@ -8,9 +8,11 @@ from fastapi.responses import PlainTextResponse, StreamingResponse
 
 from .. import auth
 from ..config import settings
-from ..job_store import get_events_since, get_event_stats, get_queue_stats
+from ..events import events_since, stats
+from ..job_store import get_queue_stats
 
 router = APIRouter()
+# Keep the pre-router logger name so log output stays unchanged.
 logger = logging.getLogger("app.main")
 _sse_stats = {
     "active_connections": 0,
@@ -31,7 +33,7 @@ def events(request: Request, lastEventId: int = 0):
         nonlocal last_id
         try:
             while auth.session_valid(session):
-                events_batch = get_events_since(last_id, timeout_sec=15.0)
+                events_batch = events_since(last_id, timeout_sec=15.0)
                 if not events_batch:
                     yield ": keepalive\n\n"
                     continue
@@ -60,7 +62,7 @@ def events(request: Request, lastEventId: int = 0):
 def events_stats():
     return {
         "sse": dict(_sse_stats),
-        "jobs": get_event_stats(),
+        "jobs": stats(),
         "queues": get_queue_stats(),
     }
 

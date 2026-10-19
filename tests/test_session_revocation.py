@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 import pytest
 
 from app import auth, credentials, main
+from app.routes import setup
 
 pytestmark = pytest.mark.real_auth
 USER, PASSWORD = "synthetic", "synthetic app password"
@@ -18,7 +19,7 @@ def isolated(tmp_path, monkeypatch):
     monkeypatch.setattr(main.settings, "data_dir", tmp_path)
     monkeypatch.setattr(main.settings, "tonies_email", "")
     monkeypatch.setattr(main.settings, "tonies_password", "")
-    monkeypatch.setattr(main, "reset_upload_session", lambda: None)
+    monkeypatch.setattr(setup, "reset_upload_session", lambda: None)
     def forbidden(*args, **kwargs):
         pytest.fail("Provider/network connections and workers are forbidden")
     monkeypatch.setattr(socket.socket, "connect", forbidden)
@@ -77,7 +78,7 @@ def test_verified_login_cannot_issue_after_completed_revocation(monkeypatch, ope
         if first:
             verified.set()
             assert release.wait(5)
-    monkeypatch.setattr(main, "reset_upload_session", reset)
+    monkeypatch.setattr(setup, "reset_upload_session", reset)
     newcomer = client()
     with ThreadPoolExecutor(max_workers=1) as pool:
         pending = pool.submit(login, newcomer)
@@ -116,14 +117,14 @@ def test_sequential_lock_allows_normal_fresh_login():
 def test_lock_during_verifier_never_finishes_with_late_runtime_unlock(monkeypatch):
     owner = initialize()
     verifier_entered, release_verifier, lock_started, lock_completed = Event(), Event(), Event(), Event()
-    actual_verify = main.login_unlock
+    actual_verify = setup.login_unlock
     def verify(*args):
         # This is inside the route's verification phase but before the real verifier
         # acquires its own runtime lock. Lock must serialize or cancel the attempt.
         verifier_entered.set()
         assert release_verifier.wait(5)
         return actual_verify(*args)
-    monkeypatch.setattr(main, "login_unlock", verify)
+    monkeypatch.setattr(setup, "login_unlock", verify)
     def lock():
         lock_started.set()
         response = revoke(owner, "lock")
@@ -196,7 +197,7 @@ def test_real_uploader_reset_closes_client_outside_auth_and_runtime_locks(monkey
             thread.start()
             assert checked.wait(2), "uploader close ran under an account/runtime/session lock"
     monkeypatch.setattr(uploader, "_api_client", ClosingClient())
-    monkeypatch.setattr(main, "reset_upload_session", uploader.reset_upload_session)
+    monkeypatch.setattr(setup, "reset_upload_session", uploader.reset_upload_session)
     try:
         assert login(client()).json()["ok"]
         assert checked.is_set() and not errors

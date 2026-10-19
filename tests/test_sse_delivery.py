@@ -11,7 +11,7 @@ def test_job_events_dispatch_to_default_message_handler_and_disconnect_cleanly(m
     event = {"id": 17, "kind": "job_updated", "job_id": "synthetic-job"}
     valid = iter([True, False])
     monkeypatch.setattr(events.auth, "session_valid", lambda _session: next(valid))
-    monkeypatch.setattr(events, "get_events_since", lambda _last, timeout_sec: [event])
+    monkeypatch.setattr(events, "events_since", lambda _last, timeout_sec: [event])
     active = events._sse_stats["active_connections"]
     disconnected = events._sse_stats["disconnects"]
     response = events.events(Request({"type": "http", "headers": []}), lastEventId=16)

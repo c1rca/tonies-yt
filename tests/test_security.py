@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 import pytest
 
 from app import auth, credentials, main, media_files, media_process
+from app.routes import files, setup as setup_routes, tonies
 
 pytestmark = pytest.mark.real_auth
 USER, PASSWORD = "synthetic", "synthetic app password"
@@ -25,7 +26,7 @@ def isolated(tmp_path, monkeypatch):
     monkeypatch.setattr(main.settings, "tonies_password", "")
     monkeypatch.setattr(main.settings, "allowed_hosts", ("localhost", "127.0.0.1", "::1", "testserver"), raising=False)
     monkeypatch.setattr(main.settings, "public_url", "", raising=False)
-    monkeypatch.setattr(main, "reset_upload_session", lambda: None)
+    monkeypatch.setattr(setup_routes, "reset_upload_session", lambda: None)
     credentials.lock_runtime()
     yield
     credentials.lock_runtime()
@@ -105,7 +106,7 @@ def test_account_malformed_json_does_not_echo_body():
 
 def test_account_input_and_total_body_are_bounded(monkeypatch):
     verifier = Mock(return_value={"ok": False, "error": "Invalid username or password"})
-    monkeypatch.setattr(main, "login_unlock", verifier)
+    monkeypatch.setattr(setup_routes, "login_unlock", verifier)
     c = TestClient(main.app)
     r = c.post("/api/setup/login", json={"username": "x" * 257, "app_password": "synthetic-private-value"})
     assert r.status_code == 422
@@ -116,7 +117,7 @@ def test_account_input_and_total_body_are_bounded(monkeypatch):
 
 
 def test_setup_errors_are_not_reflected(monkeypatch):
-    monkeypatch.setattr(main, "initialize_vault", Mock(side_effect=OSError("synthetic-private-value")))
+    monkeypatch.setattr(setup_routes, "initialize_vault", Mock(side_effect=OSError("synthetic-private-value")))
     r = TestClient(main.app).post("/api/setup/init", json={"username": USER, "app_password": PASSWORD})
     assert not r.json()["ok"] and "synthetic-private-value" not in r.text
 
@@ -246,7 +247,7 @@ def test_account_status_and_update_never_probe_or_install_runtime(monkeypatch):
     def run(cmd, **kwargs):
         calls.append(cmd)
         return b"synthetic installed version"
-    monkeypatch.setattr(main, "run_bounded", run)
+    monkeypatch.setattr(setup_routes, "run_bounded", run)
     r = c.get("/api/setup/status")
     assert r.status_code == 200
     assert all("-U" not in cmd and "pip" not in cmd for cmd in calls)
@@ -276,7 +277,7 @@ def test_library_listing_and_upload_existing_refuse_symlinks(monkeypatch, tmp_pa
     assert c.get("/api/files").json() == []
     probe.assert_not_called()
     create = Mock()
-    monkeypatch.setattr(main, "create_upload_only_job", create)
+    monkeypatch.setattr(files, "create_upload_only_job", create)
     assert c.post("/api/upload-existing", json={"filename": "link.mp3"}).status_code == 404
     create.assert_not_called()
 
@@ -336,7 +337,7 @@ def test_upload_conversion_forbids_network_and_playlist_demuxers(monkeypatch, tm
 ])
 def test_provider_errors_and_request_values_are_not_reflected_or_logged(monkeypatch, caplog, route, operation, payload):
     c = signed_client()
-    monkeypatch.setattr(main, operation, Mock(side_effect=RuntimeError("synthetic-private-value")))
+    monkeypatch.setattr(tonies, operation, Mock(side_effect=RuntimeError("synthetic-private-value")))
     r = c.get(route) if payload is None else c.post(route, json=payload)
     assert "synthetic-private-value" not in r.text
     assert "synthetic-private-value" not in caplog.text
@@ -347,7 +348,7 @@ def test_tonies_credentials_rotation_revokes_other_sessions_and_resets_client(mo
     second = TestClient(main.app)
     assert second.post("/api/setup/login", json={"username": USER, "app_password": PASSWORD}).json()["ok"]
     reset = Mock()
-    monkeypatch.setattr(main, "reset_upload_session", reset)
+    monkeypatch.setattr(setup_routes, "reset_upload_session", reset)
     assert first.post("/api/setup/update-tonies-credentials", json={"username": USER, "app_password": PASSWORD,
                       "tonies_password": "  preserved Tonies password  "}).json()["ok"]
     assert first.get("/api/jobs").status_code == 200
@@ -404,7 +405,7 @@ def test_overlapping_public_password_checks_are_bounded(monkeypatch):
         entered.set()
         assert release.wait(5)
         return {"ok": False, "error": "Invalid username or password"}
-    monkeypatch.setattr(main, "login_unlock", verify)
+    monkeypatch.setattr(setup_routes, "login_unlock", verify)
     with ThreadPoolExecutor(max_workers=2) as pool:
         first = pool.submit(lambda: TestClient(main.app).post("/api/setup/login", json={"username": USER, "app_password": PASSWORD}))
         assert entered.wait(5)
@@ -419,7 +420,7 @@ def test_overlapping_public_password_checks_are_bounded(monkeypatch):
 def test_chunked_auth_request_is_capped_before_json_parser(monkeypatch):
     import asyncio
     verifier = Mock()
-    monkeypatch.setattr(main, "login_unlock", verifier)
+    monkeypatch.setattr(setup_routes, "login_unlock", verifier)
     messages = iter([{"type": "http.request", "body": b"x" * 10000, "more_body": True},
                      {"type": "http.request", "body": b"x" * 7000, "more_body": False}])
     sent = []
@@ -475,7 +476,7 @@ def test_upload_concurrency_is_capped_before_body_processing(monkeypatch):
         if current <= 2:
             assert await asyncio.to_thread(release.wait, 5)
         return {"ok": True, "filename": "synthetic.mp3"}
-    monkeypatch.setattr(main, "store_upload", upload)
+    monkeypatch.setattr(files, "store_upload", upload)
     def post():
         client = TestClient(main.app)
         client.cookies.set(auth.COOKIE_NAME, token)
@@ -552,7 +553,7 @@ def test_password_rotation_write_failure_preserves_old_login(monkeypatch):
 
 def test_account_response_and_vault_files_never_contain_plaintext_secrets(monkeypatch):
     c = signed_client()
-    monkeypatch.setattr(main, "_cmd_version", lambda cmd: "synthetic-version")
+    monkeypatch.setattr(setup_routes, "_cmd_version", lambda cmd: "synthetic-version")
     body = c.get("/api/setup/status").text
     assert PASSWORD not in body and "tonies password" not in body
     assert "verifier_hash" not in body and "wrapped_vault_key" not in body

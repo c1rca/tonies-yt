@@ -41,7 +41,7 @@ def test_every_page_footer_uses_running_version(monkeypatch, route):
         parsed = FooterReader()
         parsed.feed(first.text)
         assert parsed.versions == [f"v{__version__}"]
-        # Version changes at the same source as status/startup, never an HTML pin.
+        # Pages use their imported application version, never an HTML pin.
         monkeypatch.setattr(pages, "__version__", "99.8.7")
         changed = client.get(route)
         parsed = FooterReader()
