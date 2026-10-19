@@ -19,6 +19,7 @@ All notable changes to Tonies-YT. Versions follow [Semantic Versioning](https://
 - Internal restructure into small, named files; no visible changes.
 
 ### Fixed
+- Coming back to the workspace from Settings, Logs or another page no longer flashes: it appears complete (Tonies, tracks, the Undo bar) instead of drawing empty panes first, the page cross-fades, Tonie pictures no longer blink when the status changes, and the page's files are cached between visits.
 - Adding several videos at once: a track that failed quickly could let a later one land on the Tonie before an earlier one still downloading.
 
 ## [3.0.0] - 2026-10-17

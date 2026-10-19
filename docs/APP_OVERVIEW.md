@@ -69,6 +69,7 @@ Each area has its own small, named file; most start with a one-line comment sayi
 - `app/config.py`: settings read from the environment (Tonies account override, data folder, allowed hosts, public URL, upload limit, logging)
 - `app/logger.py`: log setup (rotating log file, quiet HTTP client logs)
 - `app/web_pages.py`: serves an HTML page with the shared version footer added
+- `app/static_assets.py`: serves `web/`; versioned asset URLs (`?v=N`) are cached for good, others revalidate
 
 ### Server: HTTP routes (`app/routes/`)
 - `app/routes/__init__.py`: package marker for the routers
@@ -120,13 +121,14 @@ Plain scripts, no framework or build step, loaded in the order `index.html` list
 
 Shared:
 - `theme.js`: applies the saved light/dark choice before the first paint (every page)
+- `boot-gate.js`: shows the workspace anyway if a script fails before `app-boot.js` reveals it (the page starts hidden so it never flashes half-drawn)
 - `session.js`: sends the browser to sign-in when its session ends (every signed-in page)
 - `app-state.js`: page element references and caches that several areas read
 - `app-core.js`: small shared helpers: escaping, formatting, the API call, toasts, status lines and Lock
 - `workspace-storage.js`: browser storage for cached files, Tonies, track lists and view settings
 - `workspace-dialogs.js`: one confirmation dialog at a time, with focus on the safe choice
 - `context-menus.js`: the track and file actions menus (⋯ button, right-click or long-press), with arrow-key navigation
-- `app-boot.js`: starts the page: calls each area's `init...()`, restores caches and loads live data (loaded last)
+- `app-boot.js`: starts the page: calls each area's `init...()`, draws everything cached, reveals the workspace, then loads live data (loaded last)
 
 Layout and navigation:
 - `workspace-navigation.js`: views (Tracks, Add audio, Activity), the YouTube / Local files tabs, the chosen Tonie's header and appearance

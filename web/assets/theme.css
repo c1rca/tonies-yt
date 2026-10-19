@@ -208,6 +208,7 @@ strong {
   justify-content:space-between;
   gap:16px;
   border-bottom:1px solid var(--border);
+  view-transition-name:app-header;
 }
 
 .app-brand {
@@ -234,4 +235,15 @@ strong {
 
 .app-brand img {
   object-fit:contain;
+}
+
+/* Moving between pages cross-fades instead of flashing; the shared header stays put
+   (.app-header has a view-transition-name). */
+@media(prefers-reduced-motion:no-preference) {
+  @view-transition {
+    navigation:auto;
+  }
+  ::view-transition-group(*) {
+    animation-duration:.18s;
+  }
 }

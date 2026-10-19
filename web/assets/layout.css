@@ -232,3 +232,8 @@ summary::after {
   font-size:11px;
   font-variant-numeric:tabular-nums;
 }
+
+/* Hidden until app-boot.js has drawn the cached library (see boot-gate.js). */
+.booting .workspace {
+  visibility:hidden;
+}

@@ -26,12 +26,15 @@ loadToniesContentByUrlCache();
 loadToniesViewPrefs();
 loadToniesCache();
 renderTonies();
+restoreWorkspaceActionsForTab();
 
 const cachedContent = getCachedToniesContent(selectedToniesUrl);
 if (cachedContent) {
   toniesContentCache = overlayToniesContent(selectedToniesUrl, cachedContent);
   renderToniesContent();
 }
+// Everything above draws from this browser's caches: show the workspace now, complete.
+document.documentElement.classList.remove('booting');
 
 void refreshTonies({ force: true });
 void refreshWorkspaceActions();

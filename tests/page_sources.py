@@ -9,8 +9,9 @@ import re
 
 WEB = Path(__file__).parents[1] / "web"
 HTML = WEB / "index.html"
-# Not run by the test harness: session.js talks to the network, app-boot.js starts the page.
-BOOT_ASSETS = frozenset({"assets/session.js", "assets/app-boot.js"})
+# Not run by the test harness: session.js talks to the network, app-boot.js starts the page
+# and boot-gate.js only arms its page-load timer.
+BOOT_ASSETS = frozenset({"assets/session.js", "assets/boot-gate.js", "assets/app-boot.js"})
 
 
 class _Assets(HTMLParser):

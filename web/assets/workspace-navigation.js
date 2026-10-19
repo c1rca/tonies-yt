@@ -42,8 +42,7 @@ function loadWorkspaceTheme() {
   setWorkspaceTheme(['system', 'light', 'dark'].includes(theme) ? theme : 'system');
 }
 function renderWorkspaceTonieRail(container) {
-  const items = [...toniesCache];
-  container.innerHTML = items.map((tonie, index) => {
+  const html = toniesCache.map((tonie, index) => {
     const selected = selectedToniesUrl === tonie.edit_url || (!selectedToniesUrl && index === 0);
     const image = safeImageSrc(toniesImageCache[tonie.edit_url] || tonie.image);
     const content = getCachedToniesContent(tonie.edit_url);
@@ -53,9 +52,11 @@ function renderWorkspaceTonieRail(container) {
       <span class="tonie-row-copy"><span class="truncate">${esc(tonie.name)}</span><span class="tiny">${count === null ? 'Ready to add audio' : `${count} ${count === 1 ? 'track' : 'tracks'}`}</span></span>
     </button>`;
   }).join('');
+  if (!setHtmlIfChanged(container, html)) return;
   for (const button of container.querySelectorAll('[data-tonie-index]')) {
     button.addEventListener('click', () => {
-      const target = items[Number(button.getAttribute('data-tonie-index'))];
+      // Unchanged rows are kept, so read the Tonie at click time rather than at render time.
+      const target = toniesCache[Number(button.getAttribute('data-tonie-index'))];
       if (target) selectTonies(target.edit_url);
     });
   }
@@ -73,7 +74,7 @@ function renderWorkspaceTarget() {
   const target = toniesCache.find(t => t.edit_url === selectedToniesUrl);
   document.getElementById('selected-tonie-name').textContent = target?.name || 'Choose a Tonie';
   const image = safeImageSrc(toniesImageCache[selectedToniesUrl] || target?.image);
-  document.getElementById('selected-tonie-art').innerHTML = image ? `<img src="${esc(image)}" alt="" />` : '';
+  setHtmlIfChanged(document.getElementById('selected-tonie-art'), image ? `<img src="${esc(image)}" alt="" />` : '');
   document.getElementById('add-destination').textContent = target ? `Add to ${target.name}` : 'Choose a Tonie to add audio.';
   renderLocalSelection();
   renderWorkspaceUndo();

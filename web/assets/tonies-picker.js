@@ -38,11 +38,11 @@ function renderTonies() {
       refreshBtn.innerHTML = (toniesImagesLoading || loadingTonies || toniesStatsSyncBusy || toniesStatsSyncing.size) ? `<span class="loading-dot"></span>Loading…` : (busy ? 'Busy…' : 'Refresh');
     }
     if (loadingTonies) {
-      el.innerHTML = '<div class="tonies-row-skeleton"></div><div class="tonies-row-skeleton"></div>';
+      setHtmlIfChanged(el, '<div class="tonies-row-skeleton"></div><div class="tonies-row-skeleton"></div>');
     } else if (toniesLoadError) {
-      el.innerHTML = `<div class="tiny status-err">${esc(toniesLoadError)}</div>`;
+      setHtmlIfChanged(el, `<div class="tiny status-err">${esc(toniesLoadError)}</div>`);
     } else {
-      el.innerHTML = '<div class="tiny muted">No creative tonies found.</div>';
+      setHtmlIfChanged(el, '<div class="tiny muted">No creative tonies found.</div>');
     }
     return;
   }

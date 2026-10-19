@@ -255,7 +255,8 @@ function getResultsRenderState() {
 
 function getResultsEmptyStateHtml(renderState) {
   if (!renderState.isEmpty) return null;
-  if (loadingJobs) return '<div class="skeleton"></div>';
+  // Results start cleared on every page load, so there is nothing to wait for then.
+  if (loadingJobs && !resultsCleared) return '<div class="skeleton"></div>';
   if (getSearchDisplayState() === 'searching') return '<div class="skeleton"></div>';
   return '<div class="muted results-empty">No results yet. Search YouTube above and pick a track to begin.</div>';
 }

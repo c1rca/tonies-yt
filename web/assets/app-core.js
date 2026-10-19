@@ -11,6 +11,16 @@ function initAppCore() {
   });
 }
 
+const renderedHtml = new WeakMap();
+/** Replace an element's markup only when it changed: redrawn <img> elements blink while they
+ * decode. Every write to such an element must go through here. Returns true if it replaced. */
+function setHtmlIfChanged(el, html) {
+  if (renderedHtml.get(el) === html) return false;
+  el.innerHTML = html;
+  renderedHtml.set(el, html);
+  return true;
+}
+
 function esc(s) {
   return String(s ?? '')
     .replaceAll('&', '&amp;')
@@ -63,6 +73,7 @@ function statusLine(text, { tone = '', busy = false, placement = '' } = {}) {
 
 async function lockApp() {
   stopLocalPlayback();
+  forgetWorkspaceActionsForTab();
   try {
     await api('/api/setup/lock', { method: 'POST' });
   } catch {}
