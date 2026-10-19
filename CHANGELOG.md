@@ -4,6 +4,8 @@ All notable changes to Tonies-YT. Versions follow [Semantic Versioning](https://
 
 ## [Unreleased]
 
+## [3.1.0] - 2026-10-19
+
 ### Added
 - Audio editor with preview, draggable/typed clip times, keyboard controls and zoom. Clips preserve the original and do not re-encode.
 - Volume levelling for new downloads/imports; the encoding policy remains 128 kbps stereo MP3.
@@ -20,8 +22,13 @@ All notable changes to Tonies-YT. Versions follow [Semantic Versioning](https://
 
 ### Fixed
 - Workspace return preserves the source tab/mobile view and avoids the empty-pane flash after Settings or Logs.
+- Long-running editor downloads use short status checks instead of exceeding gateway request deadlines.
+- Saved appearance applies before external assets load; slow startup scripts no longer reveal the empty workspace template after a fixed timeout.
 - Local selection follows the filter, blocks duplicate submissions and retains failed deletions for retry.
 - Multi-video additions retain order when an earlier download is still running and another fails.
+
+### Removed
+- Legacy native-Windows installer; use Docker Desktop's Linux containers or WSL2.
 
 ## [3.0.0] - 2026-10-17
 
