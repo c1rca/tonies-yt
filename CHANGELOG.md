@@ -16,6 +16,7 @@ All notable changes to Tonies-YT. Versions follow [Semantic Versioning](https://
 - YouTube audio is encoded once by the app instead of twice.
 - At most three YouTube downloads run at once, and a plain download failure is retried once.
 - Local files rows are tidier: a round Play button and Add stay one tap away, and Edit and clip, Add to top / bottom, Download and Delete moved into the row's **⋯** menu (also on right-click or long-press). Rows show the track's title and a readable size, and the file that's playing is highlighted. Ticking several files now starts with **Select**, like Tracks.
+- Editing a YouTube result no longer waits behind tracks that are still downloading to a Tonie (the editor has its own download lane), and each YouTube download skips a needless extra pass (about 1–2 s faster).
 - Internal restructure into small, named files; no visible changes.
 
 ### Fixed

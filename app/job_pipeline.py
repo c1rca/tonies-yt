@@ -19,6 +19,8 @@ from .youtube_source import is_playlist_url, normalize_youtube_input
 MAX_PARALLEL_DOWNLOADS = 3
 # First in, first out: picks start downloading in the order they were added.
 _downloads = ThreadPoolExecutor(max_workers=MAX_PARALLEL_DOWNLOADS, thread_name_prefix="youtube-download")
+# The editor gets its own lane: someone waiting at an open editor never queues behind adds.
+_editor_downloads = ThreadPoolExecutor(max_workers=1, thread_name_prefix="editor-download")
 _fetches: dict[str, Future] = {}  # video URL -> download for the editor (in flight or done)
 
 
@@ -180,8 +182,7 @@ def fetch_candidate(job_id: str, index: int) -> Future:
         if running is not None and not running.done():
             return running
         title = selected.get("title") or (st.parsed or {}).get("preferred_title")
-        # Same FIFO pool as adds, so the editor never runs more than three downloads at once.
-        future = _downloads.submit(download_mp3, url, settings.data_dir / "downloads", title)
+        future = _editor_downloads.submit(download_mp3, url, settings.data_dir / "downloads", title)
         _fetches[url] = future
     return future
 

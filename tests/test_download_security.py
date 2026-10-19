@@ -153,6 +153,8 @@ def test_download_search_is_single_result_with_size_limit_and_clean_template(chi
     assert "--no-plugin-dirs" in cmd
     assert "--ignore-config" in cmd
     assert cmd[cmd.index("--format") + 1] == "bestaudio/best"
+    # Our one ffmpeg pass reads any container; yt-dlp's own extract-audio remux only costs time.
+    assert "-x" not in cmd and "--extract-audio" not in cmd
     assert "%(title)" not in cmd[cmd.index("-o") + 1]
     assert kwargs["stdin"] == subprocess.DEVNULL
     assert kwargs["stderr"] == subprocess.DEVNULL

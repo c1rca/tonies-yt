@@ -1,6 +1,7 @@
 """Audio editor backend: waveform outline, lossless clips of library files, YouTube to library."""
 import subprocess
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -182,3 +183,18 @@ def test_editor_ffmpeg_work_is_limited_to_two_at_a_time(library, client, monkeyp
     assert busy.status_code == 429 and busy.headers["retry-after"] == "3"
     assert client.post("/api/files/Song.mp3/clip", json={"start": 1, "end": 2}).status_code == 429
     assert [p.name for p in library.iterdir()] == ["Song.mp3"], "no clip or temp file is left behind"
+
+
+def test_editing_does_not_wait_behind_downloads_being_added(searched, library, downloads, monkeypatch):
+    # Three adds hold every download slot; opening the editor must not queue behind them.
+    busy = ThreadPoolExecutor(max_workers=1)
+    release = threading.Event()
+    busy.submit(release.wait, 5)
+    monkeypatch.setattr(jobs, "_downloads", busy)
+    monkeypatch.setattr(jobs, "_library_copy", lambda _url: None)  # force a real download
+    try:
+        assert jobs.fetch_candidate(searched, 0).result(3).is_file()
+        assert len(downloads) == 1
+    finally:
+        release.set()
+        busy.shutdown(wait=True)

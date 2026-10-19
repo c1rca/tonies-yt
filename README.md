@@ -107,7 +107,7 @@ Each area has its own small, named file; most start with a one-line comment sayi
 - `app/ai.py`: turns a typed search or link into a job request (plain rules, no AI service)
 - `app/youtube_source.py`: checks and normalises YouTube video and playlist input
 - `app/job_store.py`: job state, saving to disk, job events, cancelling, expiry and the stuck-job watchdog
-- `app/job_pipeline.py`: running a search, picking results, the download pool (three at a time) and editor fetches
+- `app/job_pipeline.py`: running a search, picking results, the download pool (three at a time) and editor fetches (their own one-at-a-time lane)
 - `app/job_upload.py`: handing a finished download to the Tonie queue and following it to the end
 - `app/attach_order.py`: hands parallel downloads to the Tonie queue in list order
 - `app/downloader.py`: yt-dlp commands for search, playlists and downloads (one retry for a plain failure)
