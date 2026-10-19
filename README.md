@@ -19,7 +19,8 @@ Install [Docker](https://docs.docker.com/get-docker/) with Compose **2.24+**. On
 mkdir tonies-yt && cd tonies-yt
 curl -fsSLO https://raw.githubusercontent.com/c1rca/tonies-yt/main/docker-compose.yml
 curl -fsSL https://raw.githubusercontent.com/c1rca/tonies-yt/main/.env.example -o .env
-docker compose -p tonies-local up -d
+docker compose -p tonies-local pull tonies-yt
+docker compose -p tonies-local up -d --no-build
 ```
 
 Run these commands in a Linux/macOS shell or WSL2. The published image supports `linux/amd64` and `linux/arm64`; no local build is needed.
@@ -36,10 +37,18 @@ Your app login is separate from your Tonies account. Tonies credentials are stor
 
 ```bash
 docker compose -p tonies-local pull tonies-yt
-docker compose -p tonies-local up -d tonies-yt
+docker compose -p tonies-local up -d --no-build tonies-yt
 ```
 
 Keep using the same project name (`-p tonies-local`). Set `TONIES_IMAGE_TAG` in `.env` to pin a published version instead of following `latest`.
+
+## Docker image
+
+Prebuilt images are published at **`ghcr.io/c1rca/tonies-yt`** for **Linux amd64 and arm64**. No repository checkout or local build is needed.
+
+- `latest` follows the newest stable release.
+- Set `TONIES_IMAGE_TAG=3.1.0` in `.env` to pin this release, then use the pull/update commands above.
+- For a direct pull: `docker pull ghcr.io/c1rca/tonies-yt:3.1.0`.
 
 ## Keep your data safe
 

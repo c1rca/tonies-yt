@@ -22,9 +22,10 @@ For the simplest installation, use the [README quick start](../README.md#get-sta
 
 2. Start the app:
    ```bash
-   docker compose -p tonies-local up -d
+   docker compose -p tonies-local pull tonies-yt
+   docker compose -p tonies-local up -d --no-build
    ```
-   This pulls the published amd64/arm64 image. To build this checkout, use `up -d --build` instead. Set `TONIES_IMAGE_TAG=local` before building to keep your build separate from published tags; a later `pull` can replace a locally built image with the same tag.
+   This pulls the published amd64/arm64 image without building locally. Set `TONIES_IMAGE_TAG=3.1.0` in `.env` to pin the release instead of using `latest`. To build this checkout yourself, skip the pull and use `up -d --build` instead. Set `TONIES_IMAGE_TAG=local` before building to keep your build separate from published tags; a later `pull` can replace a locally built image with the same tag.
 3. Open **http://localhost:8090** and complete setup immediately. Create an app login with a unique passphrase of at least 12 characters, then enter Tonies credentials. Setup saves them but does not verify cloud sign-in.
 4. Choose a Tonie and add audio, or use **Local files → Import file** to import and preview a file locally.
 
