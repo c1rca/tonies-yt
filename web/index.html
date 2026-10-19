@@ -5,16 +5,17 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Tonies-YT</title>
     <script src="/static/assets/theme.js?v=1"></script>
-    <link rel="stylesheet" href="/static/assets/theme.css?v=1" />
+    <link rel="stylesheet" href="/static/assets/theme.css?v=2" />
     <link rel="stylesheet" href="/static/assets/layout.css?v=1" />
-    <link rel="stylesheet" href="/static/assets/tracks.css?v=1" />
+    <link rel="stylesheet" href="/static/assets/tracks.css?v=2" />
     <link rel="stylesheet" href="/static/assets/search-results.css?v=1" />
     <link rel="stylesheet" href="/static/assets/editor.css?v=1" />
     <link rel="stylesheet" href="/static/assets/dialogs.css?v=1" />
-    <link rel="stylesheet" href="/static/assets/responsive.css?v=1" />
-    <link rel="stylesheet" href="/static/assets/tonie-art.css?v=1" />
+    <link rel="stylesheet" href="/static/assets/responsive.css?v=2" />
+    <link rel="stylesheet" href="/static/assets/tonie-art.css?v=2" />
     <link rel="stylesheet" href="/static/assets/empty-states.css?v=1" />
     <link rel="stylesheet" href="/static/assets/candidate-cards.css?v=1" />
+    <link rel="stylesheet" href="/static/assets/local-files.css?v=1" />
     <link rel="stylesheet" href="/static/assets/footer.css?v=1" />
   </head>
   <body>
@@ -65,9 +66,9 @@
           </div>
           <div id="source-local" class="library" role="tabpanel" aria-labelledby="source-tab-local" hidden>
             <div class="import-strip" id="local-import-zone"><div><strong>Your audio, ready to add.</strong><p class="tiny">Import an audio file or drop it here.</p></div><button id="browse-files" class="ghost">Import file</button></div><input id="upload-file-input" type="file" accept="audio/*,.mp3,.m4a,.aac,.wav,.flac,.ogg" hidden />
-            <div class="local-meta"><span><span id="st-count">0</span> files</span><span id="st-size">0 MB</span><span id="st-length" hidden>0:00</span><button class="ghost" id="refresh-files" aria-label="Refresh local files">Refresh</button></div>
+            <div class="local-meta"><span><span id="st-count">0</span> files</span><span id="st-size">0 MB</span><span id="st-length" hidden>0:00</span><button class="ghost" id="select-local-files" type="button">Select</button><button class="ghost" id="refresh-files" aria-label="Refresh local files">Refresh</button></div>
             <label class="field-label" for="file-filter">Find a local file</label><div class="search-field"><input id="file-filter" aria-label="Filter local files" placeholder="Filter by filename" /><button id="clear-filter" class="ghost">Clear</button></div>
-            <div id="local-selection-bar" class="selection-bar" hidden><span id="local-selection-count"></span><button id="add-selected-local" onclick="addSelectedLocalFiles()">Add selected</button><button class="ghost" onclick="clearLocalSelection()" aria-label="Clear local selection">Cancel</button></div>
+            <div id="local-selection-bar" class="selection-bar" hidden><span id="local-selection-count"></span><button id="select-all-local" type="button" class="ghost">Select all</button><button id="delete-selected-local" type="button" class="danger ghost">Delete</button><button id="add-selected-local" type="button">Add selected</button></div>
             <div class="list" id="files"></div>
           </div>
         </section>
@@ -132,26 +133,27 @@
       <button id="tonies-menu-cancel" class="ghost" role="menuitem">Cancel</button>
     </div>
 
-    <div id="file-menu" class="tonies-menu" aria-hidden="true">
-      <button id="file-menu-upload">Upload</button>
-      <button id="file-menu-upload-top">Upload to top</button>
-      <button id="file-menu-upload-bottom">Upload to bottom</button>
-      <button id="file-menu-download">Download</button>
-      <button id="file-menu-cancel" class="ghost">Cancel</button>
+    <div id="file-menu" class="tonies-menu" aria-hidden="true" role="menu" aria-label="File actions">
+      <button id="file-menu-edit" type="button" role="menuitem">Edit and clip…</button>
+      <button id="file-menu-upload-top" type="button" role="menuitem">Add to top</button>
+      <button id="file-menu-upload-bottom" type="button" role="menuitem">Add to bottom</button>
+      <button id="file-menu-download" type="button" role="menuitem">Download</button>
+      <button id="file-menu-delete" type="button" class="danger" role="menuitem">Delete…</button>
+      <button id="file-menu-cancel" type="button" class="ghost" role="menuitem">Cancel</button>
     </div>
 
     <script src="/static/assets/session.js?v=1"></script>
     <script src="/static/assets/workspace-navigation.js?v=1"></script>
-    <script src="/static/assets/workspace-sources.js?v=4"></script>
+    <script src="/static/assets/workspace-sources.js?v=5"></script>
     <script src="/static/assets/workspace-source-selection.js?v=3"></script>
     <script src="/static/assets/workspace-audio-editor.js?v=2"></script>
     <script src="/static/assets/workspace-youtube-selection.js?v=2"></script>
     <script src="/static/assets/workspace-tracks.js?v=1"></script>
-    <script src="/static/assets/local-preview.js?v=2"></script>
+    <script src="/static/assets/local-preview.js?v=3"></script>
     <script src="/static/assets/workspace-activity.js?v=1"></script>
     <script src="/static/assets/workspace-undo.js?v=1"></script>
     <script src="/static/assets/workspace-dialogs.js?v=1"></script>
-    <script src="/static/assets/app-state.js?v=2"></script>
+    <script src="/static/assets/app-state.js?v=3"></script>
     <script src="/static/assets/app-core.js?v=2"></script>
     <script src="/static/assets/search-model.js?v=2"></script>
     <script src="/static/assets/search-results.js?v=2"></script>
@@ -163,8 +165,9 @@
     <script src="/static/assets/tonie-library-render.js?v=2"></script>
     <script src="/static/assets/tonie-library-rows.js?v=1"></script>
     <script src="/static/assets/tonie-actions.js?v=2"></script>
-    <script src="/static/assets/context-menus.js?v=2"></script>
-    <script src="/static/assets/local-files.js?v=2"></script>
+    <script src="/static/assets/context-menus.js?v=3"></script>
+    <script src="/static/assets/local-file-rows.js?v=1"></script>
+    <script src="/static/assets/local-files.js?v=3"></script>
     <script src="/static/assets/workspace-jobs.js?v=2"></script>
     <script src="/static/assets/realtime.js?v=2"></script>
     <script src="/static/assets/app-boot.js?v=3"></script>

@@ -164,8 +164,9 @@ const card = renderCandidateCard(jobsCache[0], jobsCache[0].candidates[0], 0);
 assert.match(card, /class="ghost candidate-edit"[^>]*data-job-id="job"[^>]*data-candidate-index="0"/);
 assert.match(card, /aria-label="Edit and clip Twinkle"/);
 """)
-    render = function_source("renderFiles")
-    assert 'class="ghost local-edit-btn"' in render and "openAudioEditorForFile(name)" in render
+    # Local files: "Edit and clip…" in each row's actions menu opens the editor for that file.
+    assert 'id="file-menu-edit"' in HTML.read_text(encoding="utf-8")
+    assert "openAudioEditorForFile(name)" in function_source("initContextMenus")
 
 
 def test_editor_markup_is_an_accessible_native_dialog():

@@ -9,11 +9,13 @@ All notable changes to Tonies-YT. Versions follow [Semantic Versioning](https://
 - Audio editor: an Edit button on YouTube results and Local files opens a waveform. Play it, drag the start and end handles (or type times, or use the arrow keys), zoom in on the clip and listen to it, then add it or save it as a new file. The clip is cut without re-encoding; the original file stays.
 - Playlists: paste a playlist link to list its first 50 videos.
 - Select several YouTube results and add them in one go; they land in the order shown.
+- Delete several Local files at once: **Select**, tick them (or **Select all**), then **Delete**, with the same short Undo as a single delete.
 - A ready-made image for PCs and Raspberry Pis (`ghcr.io/c1rca/tonies-yt`), published with every release; Compose pulls it, so installing no longer needs a build. New "Get started" section in the README.
 
 ### Changed
 - YouTube audio is encoded once by the app instead of twice.
 - At most three YouTube downloads run at once, and a plain download failure is retried once.
+- Local files rows are tidier: a round Play button and Add stay one tap away, and Edit and clip, Add to top / bottom, Download and Delete moved into the row's **⋯** menu (also on right-click or long-press). Rows show the track's title and a readable size, and the file that's playing is highlighted. Ticking several files now starts with **Select**, like Tracks.
 - Internal restructure into small, named files; no visible changes.
 
 ### Fixed

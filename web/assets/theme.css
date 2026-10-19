@@ -107,13 +107,13 @@ button:disabled {
   cursor:not-allowed;
 }
 
-button.ghost,.trash-btn {
+button.ghost {
   color:var(--text);
   background:transparent;
   border-color:var(--border);
 }
 
-button.ghost:hover,.trash-btn:hover {
+button.ghost:hover {
   background:var(--hover);
 }
 

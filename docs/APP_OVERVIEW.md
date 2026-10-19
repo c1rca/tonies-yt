@@ -125,7 +125,7 @@ Shared:
 - `app-core.js`: small shared helpers: escaping, formatting, the API call, toasts, status lines and Lock
 - `workspace-storage.js`: browser storage for cached files, Tonies, track lists and view settings
 - `workspace-dialogs.js`: one confirmation dialog at a time, with focus on the safe choice
-- `context-menus.js`: the right-click / long-press menus for tracks and Local files
+- `context-menus.js`: the track and file actions menus (⋯ button, right-click or long-press), with arrow-key navigation
 - `app-boot.js`: starts the page: calls each area's `init...()`, restores caches and loads live data (loaded last)
 
 Layout and navigation:
@@ -148,8 +148,9 @@ Add audio (YouTube):
 - `workspace-audio-editor.js`: the waveform editor: play, drag the start and end, clip and add
 
 Add audio (Local files):
-- `local-files.js`: the Local files list: drawing, refreshing, downloading and deleting files
-- `workspace-sources.js`: selecting several Local files, importing a file, and drawing one YouTube result card
+- `local-files.js`: the Local files list: drawing, refreshing, downloading and deleting files (one or several, with a short Undo)
+- `local-file-rows.js`: one Local files row: round Play, Add, the ⋯ actions menu button, and the tick box in Select mode
+- `workspace-sources.js`: Select mode for Local files (add or delete several), importing a file, and drawing one YouTube result card
 - `local-uploads.js`: the queue that adds Local files to a Tonie
 - `local-preview.js`: the one in-browser player for Local files
 
@@ -172,6 +173,7 @@ Activity and live updates:
 - `tonie-art.css`: Tonie artwork and the Tonie picker
 - `empty-states.css`: empty states
 - `candidate-cards.css`: YouTube result cards
+- `local-files.css`: Local files rows, the Play and Add buttons and Select mode
 - `footer.css`: footer spacing and reduced-motion overrides
 
 Other stylesheets:

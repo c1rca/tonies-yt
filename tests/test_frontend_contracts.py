@@ -139,7 +139,7 @@ assert.equal(audio.src, '/api/files/' + encodeURIComponent(filename) + '?inline=
 assert.equal(document.getElementById('local-player-name').textContent, filename);
 assert.equal(panel.hidden, false);
 assert.equal(audio.paused, false);
-assert.equal(rows[0].play.textContent, 'Pause');
+assert.equal(rows[0].play.dataset.state, 'playing');
 assert.equal(rows[0].play.getAttribute('aria-label'), 'Pause ' + filename);
 assert.equal(uploads, 0); assert.equal(deletes, 0);
 audio.currentTime = 37;
@@ -151,21 +151,21 @@ assert.equal(audio.loads, loads); assert.equal(audio.plays, plays);
 assert.equal(audio.paused, false);
 await toggleLocalPlayback(filename);
 assert.equal(audio.paused, true);
-assert.equal(rows[0].play.textContent, 'Play');
+assert.equal(rows[0].play.dataset.state, 'paused');
 await toggleLocalPlayback(filename);
 assert.equal(audio.currentTime, 37);
 assert.equal(audio.paused, false);
 await toggleLocalPlayback('other.mp3');
 assert.equal(audio.src, '/api/files/other.mp3?inline=true');
 assert.equal(audio.currentTime, 0);
-assert.equal(rows[0].play.textContent, 'Play');
-assert.equal(rows[1].play.textContent, 'Pause');
+assert.equal(rows[0].play.dataset.state, 'paused');
+assert.equal(rows[1].play.dataset.state, 'playing');
 audio.pause(); // Native controls must update row labels too.
-assert.equal(rows[1].play.textContent, 'Play');
+assert.equal(rows[1].play.dataset.state, 'paused');
 await audio.play();
-assert.equal(rows[1].play.textContent, 'Pause');
+assert.equal(rows[1].play.dataset.state, 'playing');
 audio.paused = true; audio.dispatchEvent({type:'ended'});
-assert.equal(rows[1].play.textContent, 'Play');
+assert.equal(rows[1].play.dataset.state, 'paused');
 """)
 
 
