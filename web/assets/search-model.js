@@ -4,7 +4,6 @@ let highlightJobTimer = null;
 let searchResultsCutoffMs = null;
 let activeSearchJobId = '';
 let resultsCleared = false;
-const START_WITH_CLEARED_RESULTS = true;
 let searchLimit = 5;
 let searchUiActive = false;
 let selectingCandidateJobIds = new Set();

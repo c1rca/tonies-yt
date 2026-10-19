@@ -1,4 +1,10 @@
 /** The chosen Tonie's track list: loading it, status, edit mode and processing polls. */
+const toggleToniesOrderEl = document.getElementById('toggle-tonies-order');
+const toggleToniesEditEl = document.getElementById('toggle-tonies-edit');
+const toniesEditActionsEl = document.getElementById('tonies-edit-actions');
+const saveToniesNamesEl = document.getElementById('save-tonies-names');
+const cancelToniesNamesEl = document.getElementById('cancel-tonies-names');
+const deleteAllToniesContentEl = document.getElementById('delete-all-tonies-content');
 let toniesApplying = false;
 let toniesReverseView = true;
 let toniesEditMode = false;
@@ -10,8 +16,6 @@ let toniesProcessingTimer = null;
 let toniesProcessingPolls = 0;
 let loadingToniesContent = false;
 let loadingToniesContentUrl = '';
-const TONIES_CONTENT_CACHE_KEY = 'tonies-auto.tonies-content-by-url.v1';
-const TONIES_REVERSE_VIEW_KEY = 'tonies-auto.tonies-reverse-view.v1';
 
 function initTonieLibrary() {
   for (const event of ['dragend', 'drop']) {

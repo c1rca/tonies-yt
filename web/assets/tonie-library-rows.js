@@ -1,4 +1,6 @@
 /** HTML builders for Tonie capacity, empty/loading states, tracks and upload placeholders. */
+const toniesMinutesEl = document.getElementById('tonies-minutes');
+const toniesProgressEl = document.getElementById('tonies-progress');
 function renderToniesCapacity() {
   const freeRaw = toniesContentCache?.free_minutes;
   const freeNum = Number(freeRaw);

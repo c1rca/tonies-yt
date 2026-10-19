@@ -87,11 +87,13 @@ function toggleTonieSelector(force) {
   if (open) document.getElementById('tonies').querySelector('button')?.focus();
   else if (wasOpen) button.focus();
 }
-for (const source of ['youtube', 'local']) document.getElementById('source-tab-' + source).addEventListener('keydown', e => {
-  if (['ArrowRight', 'ArrowLeft', 'Home', 'End'].includes(e.key)) {
-    e.preventDefault(); setWorkspaceSource(e.key === 'Home' ? 'youtube' : e.key === 'End' ? 'local' : source === 'local' ? 'youtube' : 'local', true);
-  }
-});
-document.addEventListener('keydown', e => {
-  if (e.key === 'Escape') { toggleTonieSelector(false); closeToniesMenu(); closeFileMenu(); }
-});
+function initWorkspaceNavigation() {
+  for (const source of ['youtube', 'local']) document.getElementById('source-tab-' + source).addEventListener('keydown', e => {
+    if (['ArrowRight', 'ArrowLeft', 'Home', 'End'].includes(e.key)) {
+      e.preventDefault(); setWorkspaceSource(e.key === 'Home' ? 'youtube' : e.key === 'End' ? 'local' : source === 'local' ? 'youtube' : 'local', true);
+    }
+  });
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape') { toggleTonieSelector(false); closeToniesMenu(); closeFileMenu(); }
+  });
+}

@@ -16,8 +16,7 @@ def no_network(monkeypatch):
     def denied(*args, **kwargs):
         raise AssertionError("offline attachment tests must not open sockets")
     monkeypatch.setattr(socket.socket, "connect", denied)
-    # Preserve the frozen assertions' old spelling without a production compatibility alias.
-    monkeypatch.setattr(tonies_content, "_writable", tonies_content.writable_chapters, raising=False)
+
     monkeypatch.setattr(tonies_api, "_audio_seconds", lambda _: 1.0)
 
 
@@ -103,7 +102,7 @@ def test_queue_exposes_receipt_and_ids_but_no_inventory_or_success(cloud_api, mo
     assert terminal["pending"] == 0
     assert len(cloud.patches) == 1
     if failure != "mismatch":
-        assert tonies_content._writable(cloud.chapters[:2]) == tonies_content._writable(baseline)
+        assert tonies_content.writable_chapters(cloud.chapters[:2]) == tonies_content.writable_chapters(baseline)
 
 
 def test_success_still_returns_confirmed_content_and_marks_action_done(cloud_api):
@@ -201,7 +200,7 @@ def test_real_worker_retains_three_transfer_receipts_for_exact_id_cleanup(cloud_
             queue._cond.notify_all()
         for action in deletes:
             assert action.finished.wait(5) and action.status == "done"
-        assert tonies_content._writable(cloud.chapters) == tonies_content._writable(baseline)
+        assert tonies_content.writable_chapters(cloud.chapters) == tonies_content.writable_chapters(baseline)
         assert len(cloud.patches) == 2  # one attach and one explicit exact-ID cleanup, no replay
     finally:
         queue._transfers.shutdown(wait=True)

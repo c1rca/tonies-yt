@@ -5,9 +5,6 @@ let toniesLoadError = '';
 let toniesStatsSyncing = new Set();
 let toniesStatsSyncBusy = false;
 let manualToniesRefreshInFlight = false;
-const TONIES_CACHE_KEY = 'tonies-auto.creative-tonies.v1';
-const TONIES_SELECTED_KEY = 'tonies-auto.selected-tonies-url.v1';
-const TONIES_IMAGE_CACHE_KEY = 'tonies-auto.creative-tonies.image-cache.v1';
 function initToniesPicker() {
   document.getElementById('refresh-tonies').onclick = async () => {
     if (blockIfActionInProgress() || manualToniesRefreshInFlight) return;

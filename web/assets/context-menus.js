@@ -1,4 +1,16 @@
 /** The right-click / long-press menus for tracks and local files. */
+const toniesMenuEl = document.getElementById('tonies-menu');
+const toniesMenuTopEl = document.getElementById('tonies-menu-top');
+const toniesMenuBottomEl = document.getElementById('tonies-menu-bottom');
+const toniesMenuUpEl = document.getElementById('tonies-menu-up');
+const toniesMenuDownEl = document.getElementById('tonies-menu-down');
+const toniesMenuCancelEl = document.getElementById('tonies-menu-cancel');
+const fileMenuEl = document.getElementById('file-menu');
+const fileMenuUploadEl = document.getElementById('file-menu-upload');
+const fileMenuUploadTopEl = document.getElementById('file-menu-upload-top');
+const fileMenuUploadBottomEl = document.getElementById('file-menu-upload-bottom');
+const fileMenuDownloadEl = document.getElementById('file-menu-download');
+const fileMenuCancelEl = document.getElementById('file-menu-cancel');
 let menuReturnFocusId = null;
 let toniesMenuTargetUrl = '';
 let toniesMenuChapterId = null;

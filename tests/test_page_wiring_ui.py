@@ -10,6 +10,37 @@ from page_sources import function_source
 ASSETS = Path(__file__).parents[1] / "web" / "assets"
 
 
+def test_no_area_registers_listeners_before_explicit_initialization():
+    frontend.run_js("assert.deepEqual(listenerRegistrations, []);")
+
+
+def test_navigation_initializer_preserves_keyboard_tabs_and_escape():
+    frontend.run_js("""
+const documentListeners = new Map();
+document.addEventListener = (type, fn) => documentListeners.set(type, fn);
+initWorkspaceNavigation();
+let prevented = 0, selected;
+setWorkspaceSource = (name, focus) => { selected = [name, focus]; };
+document.getElementById('source-tab-youtube').dispatchEvent({type:'keydown', key:'ArrowRight', preventDefault(){prevented++;}});
+assert.deepEqual(selected, ['local', true]); assert.equal(prevented, 1);
+document.getElementById('source-tab-local').dispatchEvent({type:'keydown', key:'Home', preventDefault(){}});
+assert.deepEqual(selected, ['youtube', true]);
+const closed = [];
+toggleTonieSelector = flag => closed.push(flag);
+closeToniesMenu = () => closed.push('tonies'); closeFileMenu = () => closed.push('files');
+documentListeners.get('keydown')({key:'Escape'});
+assert.deepEqual(closed, [false, 'tonies', 'files']);
+""")
+
+
+def test_shared_state_declarations_have_multiple_feature_consumers():
+    shared = ASSETS / "app-state.js"
+    for name in re.findall(r"^(?:let|const) (\w+)", shared.read_text(), re.M):
+        consumers = [path.name for path in ASSETS.glob('*.js')
+                     if path != shared and re.search(rf"\b{name}\b", path.read_text())]
+        assert len(consumers) >= 2, (name, consumers)
+
+
 @pytest.fixture(autouse=True)
 def declarations_only(monkeypatch):
     """Load the area scripts without initializing any of them."""
@@ -217,7 +248,8 @@ def test_state_and_helpers_live_with_their_owning_area():
                for name in declarations)
     owners = {
         'local-preview.js': ['localPlaybackFilename', 'localPlaybackIntent'],
-        'search-results.js': ['activeSearchRequestSeq', 'RESULTS_CLEARED_KEY'],
+        'search-results.js': ['activeSearchRequestSeq'],
+        'workspace-storage.js': ['RESULTS_CLEARED_KEY', 'FILES_CACHE_KEY', 'TONIES_REVERSE_VIEW_KEY'],
         'search-model.js': ['resultsCleared', 'selectingCandidateJobIds'],
         'local-uploads.js': ['queuedLocalUploads', 'localUploadQueuePumping'],
         'upload-tracking.js': ['uploadIntentsByJobId', 'pendingToniesUpload'],
@@ -225,7 +257,7 @@ def test_state_and_helpers_live_with_their_owning_area():
         'tonie-actions.js': ['toniesQueuedActions', 'finishedToniesActionIds'],
         'context-menus.js': ['toniesMenuChapterId', 'fileMenuFilename'],
         'tonies-picker.js': ['toniesImagesLoading', 'manualToniesRefreshInFlight'],
-        'local-files.js': ['loadingFiles', 'FILES_CACHE_KEY'],
+        'local-files.js': ['loadingFiles'],
         'workspace-jobs.js': ['jobStatusById', 'loadingJobs'],
         'realtime.js': ['isBackendOnline'],
     }

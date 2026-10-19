@@ -1,4 +1,8 @@
 /** Single native local preview. Authenticated media URL; no remote Tonie playback. */
+const localPlayerEl = document.getElementById('local-player');
+const localAudioEl = document.getElementById('local-audio');
+const localPlayerNameEl = document.getElementById('local-player-name');
+const localPlayerStatusEl = document.getElementById('local-player-status');
 let localPlaybackFilename = '';
 let localPlaybackIntent = 0;
 function initLocalPreview() {

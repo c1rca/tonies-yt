@@ -1,6 +1,9 @@
 /** The Local files list: rendering, refreshing, downloading and deleting files. */
+const fileFilterEl = document.getElementById('file-filter');
+const stCount = document.getElementById('st-count');
+const stSize = document.getElementById('st-size');
+const stLength = document.getElementById('st-length');
 let loadingFiles = false;
-const FILES_CACHE_KEY = 'tonies-auto.files-cache.v1';
 
 function initLocalFiles() {
   document.getElementById('refresh-files').onclick = refreshFiles;

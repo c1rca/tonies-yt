@@ -1,4 +1,6 @@
 /** Small shared helpers: escaping, formatting, the API call, toasts and status lines. */
+const toastStackEl = document.getElementById('toast-stack');
+const lockAppEl = document.getElementById('lock-app');
 function initAppCore() {
   if (lockAppEl) lockAppEl.onclick = lockApp;
   document.addEventListener('pointerdown', (e) => {

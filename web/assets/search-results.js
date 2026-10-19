@@ -1,11 +1,14 @@
 /** YouTube search: sending a search, rendering results and picking a result. */
+const jobsEl = document.getElementById('jobs');
+const resultsLoaderEl = document.getElementById('results-loader');
+const searchBtnEl = document.getElementById('search-btn');
+const queryInputEl = document.getElementById('query-input');
+const clearResultsEl = document.getElementById('clear-results');
 let queuedSearchMessage = '';
 let queuedSearchRetryTimer = null;
 let activeSearchRequestController = null;
 let activeSearchRequestSeq = 0;
 let lastSearchStartedAtMs = 0;
-const RESULTS_CLEARED_KEY = 'tonies-auto.results-cleared.v1';
-const SEARCH_LIMIT_KEY = 'tonies-auto.search-limit.v1';
 function initSearch() {
   try {
     if (localStorage.getItem(RESULTS_CLEARED_KEY) === '1') {

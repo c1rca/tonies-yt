@@ -24,11 +24,12 @@ global.clearTimeout = (id) => timers.delete(id);
 global.setInterval = () => { throw Error('Unexpected extra interval'); };
 global.clearInterval = () => {};
 const elements = new Map();
+const listenerRegistrations = [];
 function element() { const listeners = new Map(), attrs = new Map(); return {
   value:'', textContent:'', innerHTML:'', style:{}, dataset:{}, hidden:true,
   paused:true, currentTime:0, src:'', loads:0, plays:0,
   classList:{add(){}, remove(){}, toggle(){}, contains(){return false;}},
-  addEventListener(type, fn){ if (!listeners.has(type)) listeners.set(type, []); listeners.get(type).push(fn); },
+  addEventListener(type, fn){ listenerRegistrations.push(type); if (!listeners.has(type)) listeners.set(type, []); listeners.get(type).push(fn); },
   dispatchEvent(event){ for (const fn of listeners.get(event.type) || []) fn(event); },
   setAttribute(k,v){ attrs.set(k,String(v)); }, getAttribute(k){return attrs.get(k) ?? null;},
   removeAttribute(k){ attrs.delete(k); if (k === 'src') this.src = ''; },
@@ -39,7 +40,7 @@ function element() { const listeners = new Map(), attrs = new Map(); return {
   querySelector(){return null;}, querySelectorAll(){return [];},
   getBoundingClientRect(){return {width:100};}}; }
 global.document = { getElementById(id) { if (!elements.has(id)) elements.set(id, element()); return elements.get(id); },
-  documentElement:element(), addEventListener(){}, querySelector(){return null;} };
+  documentElement:element(), addEventListener(type){listenerRegistrations.push(type);}, querySelector(){return null;} };
 global.window = {innerWidth:1200, innerHeight:900, location:{search:''}};
 global.localStorage = {getItem(){return null;}, setItem(){}};
 global.fetch = () => {throw Error('Live network forbidden');};

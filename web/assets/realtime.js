@@ -1,4 +1,5 @@
 /** Live updates: server events (SSE) with polling as the fallback, plus health checks. */
+const realtimeStatusEl = document.getElementById('realtime-status');
 let isBackendOnline = true;
 
 async function checkHealth() {

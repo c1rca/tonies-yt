@@ -1,4 +1,13 @@
 /** Browser storage: cached files, Tonies, library content and view preferences. */
+const FILES_CACHE_KEY = 'tonies-auto.files-cache.v1';
+const RESULTS_CLEARED_KEY = 'tonies-auto.results-cleared.v1';
+const SEARCH_LIMIT_KEY = 'tonies-auto.search-limit.v1';
+const TONIES_CONTENT_CACHE_KEY = 'tonies-auto.tonies-content-by-url.v1';
+const TONIES_REVERSE_VIEW_KEY = 'tonies-auto.tonies-reverse-view.v1';
+const TONIES_CACHE_KEY = 'tonies-auto.creative-tonies.v1';
+const TONIES_SELECTED_KEY = 'tonies-auto.selected-tonies-url.v1';
+const TONIES_IMAGE_CACHE_KEY = 'tonies-auto.creative-tonies.image-cache.v1';
+const START_WITH_CLEARED_RESULTS = true;
 function saveImageCache() {
   try {
     localStorage.setItem(TONIES_IMAGE_CACHE_KEY, JSON.stringify(toniesImageCache || {}));

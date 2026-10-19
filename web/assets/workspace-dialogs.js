@@ -1,4 +1,9 @@
 /** One confirmation at a time, initial focus on the safe action, bounded keyboard focus. */
+const confirmModalEl = document.getElementById('confirm-modal');
+const confirmTitleEl = document.getElementById('confirm-title');
+const confirmMessageEl = document.getElementById('confirm-message');
+const confirmOkEl = document.getElementById('confirm-ok');
+const confirmCancelEl = document.getElementById('confirm-cancel');
 let workspaceConfirmationOpen = false;
 function askConfirm({title = 'Confirm action', message = '', confirmText = 'Confirm'} = {}) {
   if (workspaceConfirmationOpen) return Promise.resolve(false);
