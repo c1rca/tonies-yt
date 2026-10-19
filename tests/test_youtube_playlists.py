@@ -155,6 +155,26 @@ def test_one_failed_download_does_not_stall_the_rest(playlist_job):
     assert [job_store.get_job(i).status for i in ids] == ["done", "failed", "done"]
 
 
+def test_a_failed_track_never_lets_a_later_one_jump_the_queue(playlist_job):
+    """Song 2 fails at once while Song 1 is still downloading: Song 3 must still wait for Song 1."""
+    job_id, state = playlist_job
+    state["slow"] = {"Song 1"}
+    state["fail"] = {"Song 2"}
+    ids = jobs.select_candidates_and_continue(job_id, [0, 1, 2], "tonie", {"edge": "end"})
+    _wait_done(ids)
+    assert [stem for stem, _ in state["enqueued"]] == ["Song 1", "Song 3"]
+
+
+def test_attach_order_waits_for_every_earlier_job():
+    order = attach_order.AttachOrder(["a", "b", "c"])
+    order.done("b")  # b failed early; a is still running
+    waited = threading.Event()
+    threading.Thread(target=lambda: order.wait_turn("c") and waited.set(), daemon=True).start()
+    assert not waited.wait(0.2), "c must not go before a has handed over"
+    order.done("a")
+    assert waited.wait(2)
+
+
 def test_adding_to_the_top_downloads_in_hand_over_order(playlist_job, monkeypatch):
     job_id, state = playlist_job
     # One worker makes start order observable: with three, which thread reaches
