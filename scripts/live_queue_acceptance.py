@@ -23,7 +23,8 @@ import uuid
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from app.actions import ActionQueue  # noqa: E402
-from app.tonies_api import ToniesAPI, _writable, parse_target_url  # noqa: E402
+from app.tonies_api import ToniesAPI, parse_target_url  # noqa: E402
+from app.tonies_content import validated_chapters, writable_chapters  # noqa: E402
 
 
 def private_json(path, value):
@@ -58,7 +59,7 @@ class ObservedAPI(ToniesAPI):
         originals = self.baseline['chapters']
         original_ids = {c['id'] for c in originals}
         kept = [c for c in chapters if c['id'] in original_ids]
-        if _writable(kept) != _writable(originals):
+        if writable_chapters(kept) != writable_chapters(originals):
             raise RuntimeError('Original chapter preservation check failed; refusing mutation')
 
     def _api(self, method: str, path: str, payload: dict, *, read=False) -> dict:
@@ -94,7 +95,6 @@ class ObservedAPI(ToniesAPI):
 
     def recovery_snapshot(self, ids):
         """Inspect failed processing only on already-owned IDs; never treat it as success."""
-        from app.tonies_api import _chapters
         data = self._query(ids)
         matches = [target for house in data['households'] if house['id'] == ids[0]
                    for target in house['creativeTonies'] if target['id'] == ids[1]]
@@ -105,7 +105,7 @@ class ObservedAPI(ToniesAPI):
         for chapter in checked:
             if chapter.get('id') in self.owned:
                 chapter['transcoding'] = False
-        _chapters(checked)  # unknown/original processing failures still refuse recovery
+        validated_chapters(checked)  # unknown/original processing failures still refuse recovery
         self.protect(target['chapters'])
         return target, data['config']
 
@@ -117,12 +117,12 @@ class ObservedAPI(ToniesAPI):
             if len(desired) == len(current['chapters']):
                 return
             fresh, _ = self.recovery_snapshot(ids)
-            if _writable(fresh['chapters']) != _writable(current['chapters']):
+            if writable_chapters(fresh['chapters']) != writable_chapters(current['chapters']):
                 raise RuntimeError('Recovery inventory changed; refusing stale write')
             self._api('PATCH', f'/households/{ids[0]}/creativetonies/{ids[1]}',
-                      {'chapters': _writable(desired)})
+                      {'chapters': writable_chapters(desired)})
             confirmed, _ = self.recovery_snapshot(ids)
-            if _writable(confirmed['chapters']) != _writable(desired):
+            if writable_chapters(confirmed['chapters']) != writable_chapters(desired):
                 raise RuntimeError('Owned removal was not confirmed; do not retry blindly')
 
 

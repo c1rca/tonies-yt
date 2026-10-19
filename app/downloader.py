@@ -31,6 +31,25 @@ _call_lock = Lock()
 logger = logging.getLogger(__name__)
 
 
+def classify_download_error(err: Exception) -> str:
+    msg = str(err).lower()
+    if "not available" in msg or "video unavailable" in msg:
+        return "Video unavailable"
+    if "private" in msg:
+        return "Private video"
+    if "members-only" in msg or "membership" in msg:
+        return "Members-only video"
+    if "sign in" in msg or "age" in msg:
+        return "Age/login restricted"
+    if "timed out" in msg or "timeout" in msg:
+        return "Network timeout"
+    if "signature" in msg or "nsig" in msg or "precondition" in msg:
+        return "YouTube extraction/signature issue"
+    if "requested format is not available" in msg or "only images" in msg:
+        return "No playable audio format"
+    return "Download failed"
+
+
 def clear_search_cache() -> None:
     with _call_lock:
         _search_cache.clear()

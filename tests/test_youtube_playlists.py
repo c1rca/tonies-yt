@@ -104,14 +104,14 @@ def playlist_job(monkeypatch, tmp_path):
 
     def fake_enqueue(job_id, path, **kwargs):
         state["enqueued"].append((Path(path).stem, kwargs.get("position")))
-        job_store._update(job_id, status="done", output_file=str(path))
+        job_store.update_job(job_id, status="done", output_file=str(path))
 
     monkeypatch.setattr(jobs, "parse_request", lambda _m: ParseIntent(youtube_query=PLAYLIST))
     monkeypatch.setattr(jobs, "search_youtube", lambda _q, limit=5: [
         {"title": f"Song {n}", "url": f"https://www.youtube.com/watch?v=Video00000{n}", "duration": 60}
         for n in range(1, 5)])
     monkeypatch.setattr(jobs, "download_mp3", fake_download)
-    monkeypatch.setattr(job_upload, "_enqueue_upload", fake_enqueue)
+    monkeypatch.setattr(job_upload, "enqueue_upload", fake_enqueue)
     job = job_store.create_job(PLAYLIST)
     jobs.run_job(job.id)
     return job.id, state

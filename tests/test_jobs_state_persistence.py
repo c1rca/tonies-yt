@@ -18,9 +18,8 @@ def test_concurrent_persists_never_fail_and_leave_the_newest_snapshot(tmp_path, 
 
     def writer(i: int) -> None:
         start.wait()
-        with jobs._lock:
-            jobs._jobs[f"job-{i}"] = _job(i)
-        jobs._persist_jobs_state()
+        jobs.add_job(_job(i))
+        jobs.persist_state()
 
     threads = [threading.Thread(target=writer, args=(i,)) for i in range(16)]
     for t in threads:
@@ -40,7 +39,7 @@ def test_failed_write_leaves_previous_state_and_no_temp_file(tmp_path, monkeypat
     monkeypatch.setattr(jobs, "_jobs", {"x": _job(1)})
     monkeypatch.setattr(jobs.json, "dump", lambda *a, **k: (_ for _ in ()).throw(OSError("disk full")))
 
-    jobs._persist_jobs_state()
+    jobs.persist_state()
 
     assert state.read_text() == "[]"
     assert [p.name for p in tmp_path.iterdir()] == ["jobs-state.json"]

@@ -11,10 +11,10 @@ from urllib.parse import urlsplit
 from . import tonies_batch
 from .tonies_batch import ATTACH_MARK, OpError, apply_ops
 from .tonies_content import (
-    ToniesContent, _TRACK, _chapters, _content, _matches_chapters, _processing,
-    _writable, editor_url, parse_target_url,
+    TRACK_TOKEN, ToniesContent, content_view, is_processing, matches_chapters,
+    validated_chapters, writable_chapters, editor_url, parse_target_url,
 )
-from .tonies_session import _number
+from .tonies_session import checked_number
 from .undo import UndoReceipt, apply_inverse, inverse_steps
 
 __all__ = ["ToniesAPI", "UnconfirmedWriteError", "editor_url", "parse_target_url", "renamed_title"]
@@ -96,11 +96,11 @@ class ToniesAPI(ToniesContent):
             raise RuntimeError("Audio file is missing or empty")
         seconds = _audio_seconds(path)
         target, config = self._snapshot(ids)
-        if seconds > _number(target["secondsRemaining"], "remaining capacity"):
+        if seconds > checked_number(target["secondsRemaining"], "remaining capacity"):
             raise RuntimeError("Not enough free Tonies capacity")
-        if len(target["chapters"]) >= _number(config.get("maxChapters"), "chapter limit"):
+        if len(target["chapters"]) >= checked_number(config.get("maxChapters"), "chapter limit"):
             raise RuntimeError("Tonies chapter limit reached")
-        if path.stat().st_size > _number(config.get("maxBytes"), "file size limit"):
+        if path.stat().st_size > checked_number(config.get("maxBytes"), "file size limit"):
             raise RuntimeError("Audio exceeds the Tonies file size limit")
         allocation = self._api("POST", "/file", {"headers": {}})
         identity, storage_url, fields = _signed_storage_request(allocation, target["chapters"])
@@ -129,17 +129,17 @@ class ToniesAPI(ToniesContent):
             chapters = before["chapters"]
             # secondsRemaining lags behind tracks still processing, so it alone can overfill the
             # Tonie (Tonies then silently drops a track). Never exceed the Tonie's total.
-            capacity = min(_number(config.get("maxSeconds"), "capacity"),
-                           _number(before["secondsRemaining"], "remaining capacity")
-                           + sum(_number(c["seconds"], "chapter duration") for c in chapters))
+            capacity = min(checked_number(config.get("maxSeconds"), "capacity"),
+                           checked_number(before["secondsRemaining"], "remaining capacity")
+                           + sum(checked_number(c["seconds"], "chapter duration") for c in chapters))
             desired, errors = apply_ops(chapters, ops, capacity_seconds=capacity,
-                                        max_chapters=_number(config.get("maxChapters"), "chapter limit"))
+                                        max_chapters=checked_number(config.get("maxChapters"), "chapter limit"))
             results = [{"error": error, "chapter_id": None} for error in errors]
-            if _writable(desired) == _writable(chapters):
-                return {"content": _content(before, config), "results": results}
-            processing_ids = {c["id"] for c in chapters if _processing(c.get("transcoding"))}
+            if writable_chapters(desired) == writable_chapters(chapters):
+                return {"content": content_view(before, config), "results": results}
+            processing_ids = {c["id"] for c in chapters if is_processing(c.get("transcoding"))}
             # The provider has no proven CAS/ETag contract; another device can still race this PATCH.
-            saved = self._api("PATCH", f"/households/{ids[0]}/creativetonies/{ids[1]}", {"chapters": _writable(desired)})
+            saved = self._api("PATCH", f"/households/{ids[0]}/creativetonies/{ids[1]}", {"chapters": writable_chapters(desired)})
             expected = desired
             attachment_receipt = None
             if any(ATTACH_MARK in c for c in desired):
@@ -151,7 +151,7 @@ class ToniesAPI(ToniesContent):
                     ids, expected, processing_ids=processing_ids, with_snapshot=True))
             except RuntimeError:
                 raise UnconfirmedWriteError(results, attachment_receipt) from None
-            receipt = UndoReceipt(self, ids, _writable(confirmed), inverse_steps(chapters, ops, results),
+            receipt = UndoReceipt(self, ids, writable_chapters(confirmed), inverse_steps(chapters, ops, results),
                                   processing_ids=frozenset(processing_ids))
             return {"content": content, "results": results, "_undo": receipt}
 
@@ -166,17 +166,17 @@ class ToniesAPI(ToniesContent):
             raise RuntimeError("Undo account session changed; refresh the library")
         with self._target_lock(ids):
             before, config = self._snapshot(ids)
-            if not _matches_chapters(before["chapters"], receipt.expected, receipt.processing_ids):
+            if not matches_chapters(before["chapters"], receipt.expected, receipt.processing_ids):
                 raise RuntimeError("Undo inventory changed; refresh the library")
             steps = [receipt.steps[index] for index in reversed(indices) if receipt.steps[index] is not None]
             if not steps or len(steps) != len(indices):
                 raise RuntimeError("Undo is not available for this action")
             desired = apply_inverse(before["chapters"], cast(list[dict], steps))
-            if _writable(desired) == _writable(before["chapters"]):
-                return _content(before, config)
-            self._api("PATCH", f"/households/{ids[0]}/creativetonies/{ids[1]}", {"chapters": _writable(desired)})
+            if writable_chapters(desired) == writable_chapters(before["chapters"]):
+                return content_view(before, config)
+            self._api("PATCH", f"/households/{ids[0]}/creativetonies/{ids[1]}", {"chapters": writable_chapters(desired)})
             try:
-                still_processing = {c["id"] for c in before["chapters"] if _processing(c.get("transcoding"))}
+                still_processing = {c["id"] for c in before["chapters"] if is_processing(c.get("transcoding"))}
                 return cast(dict, self._readback(ids, desired, processing_ids=set(receipt.processing_ids) | still_processing))
             except RuntimeError:
                 raise UnconfirmedWriteError([], None) from None
@@ -184,7 +184,7 @@ class ToniesAPI(ToniesContent):
     @staticmethod
     def _confirm_attachments(saved, before, desired, processing_ids, results):
         """Map each attached upload to the chapter ID Tonies assigned, by position and title."""
-        returned = _chapters(saved.get("chapters"))
+        returned = validated_chapters(saved.get("chapters"))
         original_ids = {c["id"] for c in before}
         if len(returned) != len(desired):
             raise RuntimeError("Upload attachment identity was not confirmed; refresh before another action")
@@ -197,7 +197,7 @@ class ToniesAPI(ToniesContent):
             else:
                 kept_returned.append(got)
                 kept_desired.append(want)
-        if not _matches_chapters(kept_returned, kept_desired, processing_ids):
+        if not matches_chapters(kept_returned, kept_desired, processing_ids):
             raise RuntimeError("Upload attachment identity was not confirmed; refresh before another action")
         return copy.deepcopy(returned)
 
@@ -242,21 +242,21 @@ class ToniesAPI(ToniesContent):
         elif not isinstance(index, int) or not 0 <= index < len(chapters):
             raise RuntimeError("Invalid chapter index; refresh stale content")
         selected = chapters[index]
-        token = _TRACK.search(selected["title"])
+        token = TRACK_TOKEN.search(selected["title"])
         if app_track_token and (not token or token.group(1).lower() != app_track_token.lower()):
             raise RuntimeError("Chapter token does not match")
-        if chapter_title and chapter_title not in (selected["title"], _TRACK.sub("", selected["title"]).strip()):
+        if chapter_title and chapter_title not in (selected["title"], TRACK_TOKEN.sub("", selected["title"]).strip()):
             raise RuntimeError("Chapter title does not match")
         if chapter_fingerprint:
-            selected_content = _content(before, config)["chapters"][index]
+            selected_content = content_view(before, config)["chapters"][index]
             if chapter_fingerprint != f'{selected["title"]}|{selected_content["duration"]}':
                 raise RuntimeError("Chapter fingerprint does not match")
         if not chapter_id and not app_track_token and chapter_title:
-            matches = [c for c in chapters if chapter_title in (c["title"], _TRACK.sub("", c["title"]).strip())]
+            matches = [c for c in chapters if chapter_title in (c["title"], TRACK_TOKEN.sub("", c["title"]).strip())]
             if len(matches) != 1:
                 raise RuntimeError("Chapter title is ambiguous; select by chapter ID")
         if not chapter_id and app_track_token:
-            matches = [c for c in chapters if (match := _TRACK.search(c["title"])) and match.group(1).lower() == app_track_token.lower()]
+            matches = [c for c in chapters if (match := TRACK_TOKEN.search(c["title"])) and match.group(1).lower() == app_track_token.lower()]
             if len(matches) != 1:
                 raise RuntimeError("Chapter token is ambiguous")
         return selected["id"]

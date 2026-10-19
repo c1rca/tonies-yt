@@ -10,10 +10,10 @@ from app.actions import Action
 @pytest.fixture
 def upload(monkeypatch):
     monkeypatch.setattr(jobs, "_jobs", {})
-    monkeypatch.setattr(jobs, "_persist_jobs_state", lambda: None)
-    monkeypatch.setattr(jobs, "_emit_event", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(jobs, "persist_state", lambda: None)
+    monkeypatch.setattr(jobs, "emit_job_event", lambda *_args, **_kwargs: None)
     state = jobs.create_job("synthetic local upload")
-    jobs._update(state.id, status="uploading", output_file="synthetic-local.mp3", tonies_action_id="action-one")
+    jobs.update_job(state.id, status="uploading", output_file="synthetic-local.mp3", tonies_action_id="action-one")
     action = Action("action-one", 1, "synthetic-target", "upload", {"position": {"edge": "start"}})
     return state, action
 
@@ -73,6 +73,6 @@ def test_unconfirmed_inverse_retains_forward_identity_without_success_claim(uplo
 @pytest.mark.parametrize("status", ["canceled", "undone"])
 def test_cancel_api_does_not_reissue_cancellation_for_terminal_upload(upload, monkeypatch, status):
     state, action = upload
-    jobs._update(state.id, status=status)
+    jobs.update_job(state.id, status=status)
     monkeypatch.setattr(uploader.action_queue, "cancel", lambda *_: pytest.fail("terminal job must not replay cancellation"))
     assert jobs.cancel_job(state.id).status == status

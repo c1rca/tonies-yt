@@ -12,7 +12,7 @@ TOKEN_URL = "https://login.tonies.com/auth/realms/tonies/protocol/openid-connect
 _TIMEOUT = httpx.Timeout(30, connect=10, write=120, pool=10)
 
 
-def _number(value, label: str) -> float:
+def checked_number(value, label: str) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
         raise RuntimeError(f"Invalid Tonies {label}")
     return value
@@ -91,7 +91,7 @@ class ToniesSession:
             data = self._json(response, "authentication")
             if not isinstance(data.get("access_token"), str) or not data["access_token"]:
                 raise RuntimeError("Invalid Tonies authentication response")
-            lifetime = _number(data.get("expires_in"), "token lifetime")
+            lifetime = checked_number(data.get("expires_in"), "token lifetime")
             refresh = data.get("refresh_token", self._refresh_token)
             if not isinstance(refresh, str):
                 raise RuntimeError("Invalid Tonies authentication response")

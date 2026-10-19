@@ -7,11 +7,11 @@ import re
 import time
 from urllib.parse import urlsplit
 
-from .tonies_session import ToniesSession, _number
+from .tonies_session import ToniesSession, checked_number
 
 _UUID = r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
 _TARGET = re.compile(rf"/creative-tonies/({_UUID})/([0-9a-fA-F]{{16}})/edit")
-_TRACK = re.compile(r"\s\[(?:oc:)?([a-f0-9]{4,12})\]$", re.I)
+TRACK_TOKEN = re.compile(r"\s\[(?:oc:)?([a-f0-9]{4,12})\]$", re.I)
 QUERY = """query ($householdId: String, $creativeTonieId: String) {
   config { maxChapters maxSeconds maxBytes accepts }
   households(id: $householdId) { id name
@@ -43,13 +43,13 @@ def editor_url(household_id: str, tonie_id: str) -> str:
     return value
 
 
-def _processing(value) -> bool:
+def is_processing(value) -> bool:
     if isinstance(value, str) and value.lower() in {"error", "failed", "failure"}:
         raise RuntimeError("Tonies audio processing failed")
     return bool(value)
 
 
-def _chapters(value) -> list[dict]:
+def validated_chapters(value) -> list[dict]:
     if not isinstance(value, list):
         raise RuntimeError("Invalid Tonies chapter response")
     identities = set()
@@ -59,17 +59,17 @@ def _chapters(value) -> list[dict]:
         if not chapter["id"] or chapter["id"] in identities:
             raise RuntimeError("Invalid or duplicate Tonies chapter identity")
         identities.add(chapter["id"])
-        _number(chapter.get("seconds"), "chapter duration")
-        _processing(chapter.get("transcoding"))
+        checked_number(chapter.get("seconds"), "chapter duration")
+        is_processing(chapter.get("transcoding"))
     return value
 
 
-def _writable(chapters: list[dict]) -> list[dict]:
+def writable_chapters(chapters: list[dict]) -> list[dict]:
     return [{key: chapter[key] for key in ("id", "title", "file", "seconds", "type")} for chapter in chapters]
 
 
-def _matches_chapters(actual, expected, processing_ids):
-    comparable, expected = _writable(actual), _writable(expected)
+def matches_chapters(actual, expected, processing_ids):
+    comparable, expected = writable_chapters(actual), writable_chapters(expected)
     for chapter, original in zip(comparable, expected):
         if chapter["id"] == original["id"] and chapter["id"] in processing_ids:
             # Only established processing identities may acquire a new file/duration.
@@ -77,24 +77,24 @@ def _matches_chapters(actual, expected, processing_ids):
     return comparable == expected
 
 
-def _content(target: dict, config: dict) -> dict:
-    total = _number(config.get("maxSeconds"), "capacity")
-    free = _number(target.get("secondsRemaining"), "remaining capacity")
+def content_view(target: dict, config: dict) -> dict:
+    total = checked_number(config.get("maxSeconds"), "capacity")
+    free = checked_number(target.get("secondsRemaining"), "remaining capacity")
     chapters = []
-    for index, chapter in enumerate(_chapters(target.get("chapters"))):
-        seconds = _number(chapter["seconds"], "chapter duration")
+    for index, chapter in enumerate(validated_chapters(target.get("chapters"))):
+        seconds = checked_number(chapter["seconds"], "chapter duration")
         rounded = int(seconds)
-        token = _TRACK.search(chapter["title"])
+        token = TRACK_TOKEN.search(chapter["title"])
         chapters.append({"index": index, "chapter_id": chapter["id"], "title": chapter["title"],
-                         "display_title": _TRACK.sub("", chapter["title"]).strip() or chapter["title"],
+                         "display_title": TRACK_TOKEN.sub("", chapter["title"]).strip() or chapter["title"],
                          "app_track_token": token.group(1).lower() if token else "",
                          "duration": f"{rounded // 3600:02}:{rounded // 60 % 60:02}:{rounded % 60:02}",
                          "seconds": seconds,
-                         "processing": _processing(chapter.get("transcoding"))})
+                         "processing": is_processing(chapter.get("transcoding"))})
     return {"free_minutes": int(free // 60), "total_minutes": int(total // 60),
             "used_minutes": math.ceil(max(total - free, 0) / 60),
             "free_seconds": free, "total_seconds": total,
-            "processing": _processing(target.get("transcoding")) or any(c["processing"] for c in chapters),
+            "processing": is_processing(target.get("transcoding")) or any(c["processing"] for c in chapters),
             "chapters": chapters}
 
 
@@ -121,12 +121,12 @@ class ToniesContent(ToniesSession):
                    for target in house.get("creativeTonies", []) if target.get("id") == ids[1]]
         if len(targets) != 1:
             raise RuntimeError("Tonies target was not uniquely found in this account")
-        _content(targets[0], data["config"])
+        content_view(targets[0], data["config"])
         return targets[0], data["config"]
 
     def get_content(self, target_url):
         target, config = self._snapshot(parse_target_url(target_url))
-        return _content(target, config)
+        return content_view(target, config)
 
     def list_targets(self):
         data = self._query()
@@ -145,8 +145,8 @@ class ToniesContent(ToniesSession):
         deadline = time.monotonic() + self._poll_timeout
         for _ in range(40):
             target, config = self._snapshot(ids)
-            if _matches_chapters(target["chapters"], expected, processing_ids):
-                content = _content(target, config)
+            if matches_chapters(target["chapters"], expected, processing_ids):
+                content = content_view(target, config)
                 return (content, copy.deepcopy(target["chapters"])) if with_snapshot else content
             if time.monotonic() >= deadline:
                 break

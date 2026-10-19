@@ -168,8 +168,8 @@ def test_two_edits_while_downloading_share_one_download(searched, library, downl
 def test_a_video_already_added_is_not_downloaded_again(searched, client, library, downloads):
     added = library / "Added.mp3"
     added.write_bytes((library / "Song.mp3").read_bytes())
-    with job_store._lock:
-        job = job_store._jobs[searched]
+    with job_store.state_lock:
+        job = job_store.get_job(searched)
         job.selected_candidate = dict(job.candidates[0])
         job.output_file = str(added)
     assert client.post(f"/api/jobs/{searched}/fetch", json={"index": 0}).json() == {"filename": "Added.mp3"}
