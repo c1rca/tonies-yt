@@ -161,7 +161,7 @@ def _library_copy(url: str) -> Optional[Path]:
     return None
 
 
-def fetch_candidate(job_id: str, index: int) -> Future:
+def fetch_candidate(job_id: str, index: int, *, poll: bool = False) -> Future:
     """Download one result into the local library (for the editor) without adding it anywhere.
 
     Reuses a copy the library already has, and joins a download already running for the
@@ -179,8 +179,10 @@ def fetch_candidate(job_id: str, index: int) -> Future:
             ready.set_result(existing)
             return ready
         running = _fetches.get(url)
-        if running is not None and not running.done():
+        if running is not None and (poll or not running.done()):
             return running
+        if poll:
+            raise ValueError("Audio preparation expired; close and reopen the editor")
         title = selected.get("title") or (st.parsed or {}).get("preferred_title")
         future = _editor_downloads.submit(download_mp3, url, settings.data_dir / "downloads", title)
         _fetches[url] = future

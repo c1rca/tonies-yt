@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, StrictInt
 
 from ..downloader import PLAYLIST_MAX, clear_search_cache
@@ -13,6 +14,7 @@ from ..models import ChatRequest
 from ..tonies_batch import clean_position
 
 router = APIRouter()
+_EDITOR_FETCH_WAIT_SEC = 1  # Keep each editor status check below reverse-proxy deadlines.
 
 
 class SelectionRequest(BaseModel):
@@ -23,6 +25,7 @@ class SelectionRequest(BaseModel):
 
 class FetchRequest(BaseModel):
     index: StrictInt
+    poll: bool = False
 
 
 class MultiSelectionRequest(BaseModel):
@@ -63,10 +66,15 @@ def select_candidate(job_id: str, req: SelectionRequest):
 
 @router.post("/api/jobs/{job_id}/fetch")
 async def fetch_candidate_to_library(job_id: str, req: FetchRequest):
-    # Awaited, not blocked on: a long queue of downloads must not tie up a server thread.
+    # A slow download outlives individual HTTP requests; polls join the same Future.
     try:
-        path = await asyncio.wrap_future(fetch_candidate(job_id, req.index))
+        future = asyncio.wrap_future(fetch_candidate(job_id, req.index, poll=req.poll))
+        # A pending response/disconnect abandons this wrapper, not its download or errors.
+        future.add_done_callback(lambda done: None if done.cancelled() else done.exception())
+        path = await asyncio.wait_for(asyncio.shield(future), timeout=_EDITOR_FETCH_WAIT_SEC)
         return {"filename": Path(path).name}
+    except TimeoutError:
+        return JSONResponse({"status": "preparing"}, status_code=202, headers={"Retry-After": "1"})
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from None
     except RuntimeError:

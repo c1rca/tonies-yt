@@ -106,3 +106,72 @@ assert.equal(document.getElementById('editor-audio').src,'/api/files/Other.mp3?i
 assert.equal(document.getElementById('editor-wave').getAttribute('aria-busy'),'false');
 assert.equal(editor.open,true);
 """)
+
+
+def test_pending_youtube_download_is_polled_in_short_requests_before_loading_waveform():
+    run_js(SETUP + """
+let polls=0;
+const realApi=api;
+global.setTimeout = fn => { queueMicrotask(fn); return 1; };
+api=async (url, options, timeout) => {
+  if (!url.includes('/fetch')) return realApi(url,options);
+  assert.ok(timeout <= 15000, 'each request stays below a normal proxy timeout');
+  assert.deepEqual(JSON.parse(options.body), polls ? {index:0,poll:true} : {index:0});
+  polls++;
+  return polls < 3 ? {status:'preparing'} : {filename:'Twinkle.mp3'};
+};
+await openAudioEditorForCandidate('job',0);
+assert.equal(polls,3);
+assert.equal(editorState.ready,true);
+assert.equal(editorState.filename,'Twinkle.mp3');
+assert.equal(document.getElementById('editor-error').textContent,'');
+assert.deepEqual(uploads,[],'editing never uploads');
+""")
+
+
+def test_closing_during_pending_poll_stops_checks_and_preserves_replacement():
+    run_js(SETUP + """
+let polls=0;
+const realApi=api;
+api=async (url,options) => {
+  if (!url.includes('/fetch')) return realApi(url,options);
+  polls++;
+  return {status:'preparing'};
+};
+global.setTimeout=fn => {
+  queueMicrotask(async () => { editor.close(); await openAudioEditorForFile('Other.mp3'); fn(); });
+  return 1;
+};
+await openAudioEditorForCandidate('job',0);
+assert.equal(polls,1);
+assert.equal(editorState.filename,'Other.mp3');
+assert.equal(editorState.ready,true);
+assert.equal(document.getElementById('editor-error').textContent,'');
+""")
+
+
+def test_pending_polling_has_a_total_deadline_and_never_enables_add():
+    run_js(SETUP + """
+let now=0,polls=0;
+Date.now=()=>now;
+global.setTimeout=fn => { now+=450000; queueMicrotask(fn); return 1; };
+api=async () => { polls++; return {status:'preparing'}; };
+await openAudioEditorForCandidate('job',0);
+assert.ok(polls<=2,'no unbounded polling');
+assert.equal(editorState.ready,false);
+assert.match(document.getElementById('editor-error').textContent,/taking too long/i);
+assert.equal(document.getElementById('editor-cancel').disabled,false);
+assert.equal(document.getElementById('editor-add').disabled,true);
+""")
+
+
+def test_gateway_html_is_replaced_with_an_actionable_message_not_raw_markup():
+    run_js(SETUP + """
+api=async () => { throw Error('HTTP 504: <html><head><title>504 Gateway Time-out</title></head></html>'); };
+await openAudioEditorForCandidate('job',0);
+const message=document.getElementById('editor-error').textContent;
+assert.doesNotMatch(message,/<head>|<html>|<title>/);
+assert.match(message,/timed out/i);
+assert.match(message,/Local files/i);
+assert.equal(editorState.ready,false);
+""")

@@ -70,6 +70,7 @@ function editorErrorText(error) {
   const text = String(error?.message || error);
   const body = /^HTTP \d+: (.*)$/s.exec(text)?.[1];
   if (!body) return text;
+  if (/^HTTP 504:/.test(text)) return 'The connection timed out. Check Local files for the audio before trying again.';
   try {
     const detail = JSON.parse(body)?.detail;
     return typeof detail === 'string' ? detail : text;
@@ -221,9 +222,7 @@ async function openAudioEditorForCandidate(jobId, index) {
   const session = showEditor(candidate.title);
   setEditorLoading('Getting audio from YouTube and preparing it… (saved to Local files)');
   try {
-    const {filename} = await api(`/api/jobs/${encodeURIComponent(jobId)}/fetch`, {
-      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({index})
-    }, 900000);
+    const filename = await fetchEditorCandidate(jobId, index, session);
     // Listing probes every library file; don't put that work on the editor's critical path.
     void refreshFiles().catch(() => {});
     ensureEditorSession(session);
