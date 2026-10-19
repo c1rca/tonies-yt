@@ -1,0 +1,6 @@
+/* Canvas-only fallback while the shared stylesheet is loading. Keep its two colors in sync. */
+:root { color-scheme:light; background:#f0f2f5; }
+:root[data-theme=dark] { color-scheme:dark; background:#14171c; }
+@media(prefers-color-scheme:dark) {
+  :root:not([data-theme=light]):not([data-theme=dark]) { color-scheme:dark; background:#14171c; }
+}
