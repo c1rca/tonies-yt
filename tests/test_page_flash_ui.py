@@ -79,7 +79,7 @@ def test_the_workspace_is_not_shown_until_boot_has_drawn_the_cached_library():
     assert boot.index("renderToniesContent();") < reveal < boot.index("void refreshTonies(")
     assert ".booting .workspace" in page_css()
     gate = (WEB / "assets/boot-gate.js").read_text(encoding="utf-8")
-    assert "classList.remove('booting')" in gate and "setTimeout" in gate
+    assert "classList.remove('booting')" in gate and "DOMContentLoaded" in gate
 
 
 def test_cleared_results_show_their_empty_state_while_jobs_load():
@@ -108,16 +108,21 @@ assert.match(filesEl.innerHTML, /Back/);
 """)
 
 
-def test_boot_fail_open_is_bounded_even_when_later_scripts_never_start():
+def test_boot_fail_open_waits_for_pending_scripts_instead_of_a_wall_clock_deadline():
     import json
     gate = (WEB / 'assets/boot-gate.js').read_text()
     run_js("""
-const removed = [];
+const removed = [], events = new Map();
 document.documentElement.classList.remove = name => removed.push(name);
+document.addEventListener = (name, fn, options) => events.set(name, {fn, options});
 """ + "new Function(" + json.dumps(gate) + ")();" + """
-const deadline = [...timers.values()].find(t => t.ms === 1500);
-assert.ok(deadline); assert.deepEqual(removed, []);
-deadline.fn(); assert.deepEqual(removed, ['booting']);
+// A stalled script is not a failed boot: a timer must not reveal its empty template.
+for (const timer of timers.values()) if (timer.ms === 1500) timer.fn();
+assert.deepEqual(removed, []);
+// Failed scripts still allow DOMContentLoaded, which makes the page recoverable.
+const ready = events.get('DOMContentLoaded');
+assert.ok(ready); assert.equal(ready.options.once, true);
+ready.fn(); assert.deepEqual(removed, ['booting']);
 """)
 
 

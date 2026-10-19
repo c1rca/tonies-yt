@@ -1,4 +1,6 @@
-/* The workspace page starts as <html class="booting">, which hides the workspace until
-   app-boot.js has drawn the cached Tonies and tracks (no flash of empty panes). If a script
-   fails before that, show the workspace anyway after a moment. */
-setTimeout(() => document.documentElement.classList.remove('booting'), 1500);
+/* app-boot.js reveals the workspace after restoring its cached view. If a script
+   fails, DOMContentLoaded still fires: fail open then, not while slow scripts
+   are pending and the workspace is still an empty template. */
+document.addEventListener('DOMContentLoaded', () => {
+  document.documentElement.classList.remove('booting');
+}, {once:true});
