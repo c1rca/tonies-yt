@@ -12,14 +12,14 @@ For the simplest installation, use the [README quick start](../README.md#get-sta
 
 ## Run a checkout
 
-1. For a fresh checkout, clone the repository and copy its configuration:
+1. For a fresh checkout, run these commands in a Linux/macOS shell or WSL2:
    ```bash
    git clone https://github.com/c1rca/tonies-yt.git
    cd tonies-yt
    cp .env.example .env
    chmod 600 .env
    ```
-   In Windows PowerShell, use `Copy-Item .env.example .env` and restrict the file to your account with Windows file permissions.
+
 2. Start the app:
    ```bash
    docker compose -p tonies-local up -d
@@ -63,7 +63,7 @@ export LOG_FILE=./data/logs/toni-auto.log
 
 Native runs do not load `.env` automatically or receive Docker's sandbox. Use host-relative data/log paths, not `/app/data`.
 
-**Native Windows Python is unsupported:** the runtime requires POSIX file locks and process groups. Use Docker Desktop's Linux containers or WSL2. The legacy `scripts/setup-windows.ps1` is not a supported installer and can reset its checkout; do not use it for this setup.
+**Native Windows Python is unsupported:** the runtime requires POSIX file locks and process groups. Use Docker Desktop's Linux containers or WSL2.
 
 ## Troubleshooting
 

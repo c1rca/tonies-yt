@@ -2,7 +2,7 @@
 
 ## Install
 
-Use the [Docker quick start](../README.md#get-started). `setup-windows.ps1` is a legacy native-Windows bootstrap, not a supported installer; it can reset its checkout. On Windows use Docker Desktop's Linux containers or WSL2.
+Use the [Docker quick start](../README.md#get-started). On Windows use Docker Desktop's Linux containers or WSL2.
 
 ## Live acceptance (opt-in, uses your real Tonies account)
 

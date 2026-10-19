@@ -14,11 +14,6 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_windows_installer_does_not_install_browser_runtime():
-    script = (ROOT / 'scripts/setup-windows.ps1').read_text()
-    assert not re.search(r'(?im)^\s*&.*-m\s+playwright\s+install', script)
-
-
 def test_build_context_excludes_runtime_secrets_and_private_data():
     path = ROOT / '.dockerignore'
     assert path.is_file(), 'Docker context must exclude private runtime data'

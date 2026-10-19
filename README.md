@@ -22,7 +22,7 @@ curl -fsSL https://raw.githubusercontent.com/c1rca/tonies-yt/main/.env.example -
 docker compose -p tonies-local up -d
 ```
 
-In Windows PowerShell, use `curl.exe` instead of `curl`. The published image supports `linux/amd64` and `linux/arm64`; no local build is needed.
+Run these commands in a Linux/macOS shell or WSL2. The published image supports `linux/amd64` and `linux/arm64`; no local build is needed.
 
 1. Open **http://localhost:8090** on the Docker host.
 2. Create an app login immediately, then enter your Tonies credentials. The first visitor creates the login; use a unique passphrase of at least 12 characters.
