@@ -75,23 +75,126 @@ The selected Tonie offers **Undo** only when the server has a valid capability f
 
 Undo rechecks current chapter identities/order under the same target lock before one inverse write. A stale or unconfirmed outcome refuses further Undo and asks you to refresh—never blindly retries or restores a client-supplied library snapshot. A newer submission, Lock, account/password changes, expiry or restart revokes old capabilities. The provider has no proven compare-and-swap contract, so another device can still race the final read/write boundary.
 
-### Frontend structure
+### Where things live
 
-No framework, build step or external frontend dependency is required. The page loads focused classic-script modules in its declared order:
+Each area has its own small, named file; most start with a one-line comment saying what they own. `tests/test_no_monoliths.py` keeps every file in `app/`, `web/` and `web/assets/` at 400 lines or fewer and every Python or JS function at 100 lines or fewer.
 
-- `workspace-navigation.js`: view/source navigation, appearance, selected destination and safe artwork/rail rendering.
-- `workspace-sources.js`: local multi-selection, captured-target submission and local import lifecycle.
-- `workspace-youtube-selection.js`: selecting several YouTube results (or playlist videos) and adding them in one request.
-- `workspace-audio-editor.js`: the waveform editor (drawing, handles, playback, clip and add).
-- `workspace-tracks.js`: exact-ID selection, inline rename ownership and row-action bindings.
-- `workspace-activity.js`: in-session job/action presentation and dismissible feedback; never mutation replay or client-side recovery history.
-- `workspace-dialogs.js`: confirmation ownership, keyboard focus and safe initial action.
-- `local-preview.js`: persistent native local playback, source switching and cleanup.
-- `theme.css` + `theme.js`: theme tokens (light, dark, system), base controls and the app header, shared by every page; the saved appearance is applied before first paint.
-- `workspace.css`: workspace shell, source/track/player components and explicit touch-layout rules.
-- `pages.css`: Settings, Logs, Sign-in and Setup layouts in the same style.
+#### Server: app start and pages
+- `app/__init__.py`: the app version
+- `app/main.py`: builds the FastAPI app: start-up and shutdown, security middleware, error handling and the routers
+- `app/config.py`: settings read from the environment (Tonies account override, data folder, allowed hosts, public URL, upload limit, logging)
+- `app/logger.py`: log setup (rotating log file, quiet HTTP client logs)
+- `app/web_pages.py`: serves an HTML page with the shared version footer added
 
-The queue client, receipt reconciliation, caching, drag/drop and SSE/polling controller still live in `index.html`; the modules above call into it rather than replacing it. Frontend contract tests evaluate the actual local scripts in page order and fail if an async contract never reaches its final assertion.
+#### Server: HTTP routes (`app/routes/`)
+- `app/routes/__init__.py`: package marker for the routers
+- `app/routes/setup.py`: health, first-run setup, sign-in, Lock, password and Tonies account changes, tool versions
+- `app/routes/pages.py`: the HTML pages (workspace, Settings, Logs, Sign-in, Setup), the old `/account` redirect and the favicon
+- `app/routes/jobs.py`: searches, picking one or several results, fetching a result for the editor, cancelling jobs
+- `app/routes/files.py`: Local files: list, import, play/download, waveform, clip, delete, add to a Tonie
+- `app/routes/tonies.py`: Creative Tonies list, track list reads, queued changes, Undo and the older single-change endpoints
+- `app/routes/events.py`: the server-sent event stream, its statistics and the log viewer routes
+
+#### Server: sign-in and security
+- `app/auth.py`: per-browser sessions, sign-in throttling and cross-site write checks
+- `app/request_security.py`: Host and Origin checks and request body size limits
+- `app/credentials.py`: the password-protected vault holding the app login and the encrypted Tonies credentials
+- `app/vault_storage.py`: private, atomic reads and writes of the vault files
+
+#### Server: search and download jobs
+- `app/models.py`: request and job data models
+- `app/ai.py`: turns a typed search or link into a job request (plain rules, no AI service)
+- `app/youtube_source.py`: checks and normalises YouTube video and playlist input
+- `app/job_store.py`: job state, saving to disk, job events, cancelling, expiry and the stuck-job watchdog
+- `app/job_pipeline.py`: running a search, picking results, the download pool (three at a time) and editor fetches
+- `app/job_upload.py`: handing a finished download to the Tonie queue and following it to the end
+- `app/attach_order.py`: hands parallel downloads to the Tonie queue in list order
+- `app/downloader.py`: yt-dlp commands for search, playlists and downloads (one retry for a plain failure)
+- `app/events.py`: the shared event list behind `/api/events`, for jobs and Tonies changes
+
+#### Server: audio and Local files
+- `app/media_files.py`: the Local files library: safe file names, imports, waveforms and clips
+- `app/media_process.py`: ffmpeg/ffprobe work: the one MP3 encoder (with volume levelling), waveform outlines, lossless clips and durations
+- `app/subprocess_runner.py`: runs a child process with a deadline and bounded output, and cleans it up
+
+#### Server: Tonies cloud
+- `app/uploader.py`: the app-facing Tonies operations; keeps one client per account and resets it when the vault locks or credentials change
+- `app/actions.py`: the per-Tonie queue of library changes and uploads, applied in batches
+- `app/tonies_batch.py`: plans a batch of edits as one chapter list (pure, no I/O)
+- `app/undo.py`: the server-side Undo recipes for rename, move and a new upload
+- `app/tonies_api.py`: the `ToniesAPI` client: uploads, guarded batch writes and Undo writes
+- `app/tonies_content.py`: Tonie URLs, reading the Tonies and their tracks, and checking a write by reading it back
+- `app/tonies_session.py`: the in-memory Tonies login, token refresh and HTTP session
+
+#### Page markup (`web/`)
+- `web/index.html`: the audio workspace markup, plus `<link>` and `<script src>` tags only
+- `web/login.html`, `web/setup.html`, `web/account.html` (Settings), `web/logs.html`: the other pages
+
+#### Page scripts (`web/assets/*.js`)
+
+Plain scripts, no framework or build step, loaded in the order `index.html` lists them. They only declare things; an area that wires up events has an `init...()` function, and `app-boot.js` (loaded last) calls them all.
+
+Shared:
+- `theme.js`: applies the saved light/dark choice before the first paint (every page)
+- `session.js`: sends the browser to sign-in when its session ends (every signed-in page)
+- `app-state.js`: page element references and caches that several areas read
+- `app-core.js`: small shared helpers: escaping, formatting, the API call, toasts, status lines and Lock
+- `workspace-storage.js`: browser storage for cached files, Tonies, track lists and view settings
+- `workspace-dialogs.js`: one confirmation dialog at a time, with focus on the safe choice
+- `context-menus.js`: the right-click / long-press menus for tracks and Local files
+- `app-boot.js`: starts the page: calls each area's `init...()`, restores caches and loads live data (loaded last)
+
+Layout and navigation:
+- `workspace-navigation.js`: views (Tracks, Add audio, Activity), the YouTube / Local files tabs, the chosen Tonie's header and appearance
+- `tonies-picker.js`: the list of Creative Tonies, their artwork and choosing one
+
+Tracks:
+- `tonie-library.js`: the chosen Tonie's track list: loading it, status, edit mode and polling while tracks process
+- `tonie-library-render.js`: draws the track list and binds its events (drag to reorder, double-tap, menu, rename, select)
+- `tonie-library-rows.js`: HTML for capacity, empty and loading states, track rows and upload placeholders
+- `workspace-tracks.js`: selecting tracks by ID and the inline rename editors
+- `tonie-actions.js`: changes queued on the server (delete, move, rename, upload position), shown on top of the last read list
+- `workspace-undo.js`: the Undo button for the latest change (the server decides what can be undone)
+
+Add audio (YouTube):
+- `search-results.js`: sending a search, drawing results and picking a result
+- `search-model.js`: which searches and results show, and in what state
+- `workspace-source-selection.js`: picking one result once, so a lost reply never offers a second Add
+- `workspace-youtube-selection.js`: selecting several results (or playlist videos) and adding them in one request
+- `workspace-audio-editor.js`: the waveform editor: play, drag the start and end, clip and add
+
+Add audio (Local files):
+- `local-files.js`: the Local files list: drawing, refreshing, downloading and deleting files
+- `workspace-sources.js`: selecting several Local files, importing a file, and drawing one YouTube result card
+- `local-uploads.js`: the queue that adds Local files to a Tonie
+- `local-preview.js`: the one in-browser player for Local files
+
+Activity and live updates:
+- `upload-tracking.js`: follows an upload from the app to the Tonie until the track is confirmed there
+- `workspace-jobs.js`: keeps the page's job list in step with the server and reacts to job changes
+- `workspace-activity.js`: the Activity list of this session's jobs and changes
+- `realtime.js`: live updates over server-sent events, polling as the fallback, and health checks
+
+#### Stylesheets (`web/assets/*.css`)
+
+`index.html` links the workspace stylesheets in this order (the order matters for the cascade):
+- `theme.css`: colour tokens (light, dark, system), base controls and the app header, shared by every page
+- `layout.css`: the workspace shell, header and overall layout
+- `tracks.css`: track lists, Local files and workspace controls
+- `search-results.css`: YouTube search results and the Activity view
+- `editor.css`: the audio editor dialog and clip controls
+- `dialogs.css`: dialogs, toasts and notices
+- `responsive.css`: tablet and phone layout
+- `tonie-art.css`: Tonie artwork and the Tonie picker
+- `empty-states.css`: empty states
+- `candidate-cards.css`: YouTube result cards
+- `footer.css`: footer spacing and reduced-motion overrides
+
+Other stylesheets:
+- `pages.css`: Settings, Logs, Sign-in and Setup layouts (with `theme.css`)
+- `page-footer.css`: the version footer that `app/web_pages.py` adds to every page
+
+See [App overview](docs/APP_OVERVIEW.md) for how the parts work together. Frontend contract tests evaluate the actual page scripts in page order and fail if an async contract never reaches its final assertion.
 
 ## Main UI
 - App: `http://localhost:8090`
@@ -108,7 +211,7 @@ The queue client, receipt reconciliation, caching, drag/drop and SSE/polling con
 - Built-in logs viewer + export
 
 ## Stack
-- FastAPI + `httpx` for the Tonies OAuth/API client (`app/tonies_api.py`)
+- FastAPI + `httpx` for the Tonies OAuth/API client (`app/tonies_api.py`, `app/tonies_session.py`, `app/tonies_content.py`)
 - `cryptography` for the encrypted app vault
 - `yt-dlp`, `ffmpeg` and Deno for YouTube/audio processing (Deno is yt-dlp's JavaScript runtime)
 - `python:3.12-slim` nonroot container + Docker Compose

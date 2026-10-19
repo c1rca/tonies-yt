@@ -14,6 +14,10 @@ All notable changes to Tonies-YT. Versions follow [Semantic Versioning](https://
 ### Changed
 - YouTube audio is encoded once by the app instead of twice.
 - At most three YouTube downloads run at once, and a plain download failure is retried once.
+- Internal restructure into small, named files; no visible changes.
+
+### Fixed
+- Adding several videos at once: a track that failed quickly could let a later one land on the Tonie before an earlier one still downloading.
 
 ## [3.0.0] - 2026-10-17
 

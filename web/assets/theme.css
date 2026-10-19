@@ -1,5 +1,5 @@
 /* Shared by every page: theme tokens (light, dark, system), base controls and the app header.
-   Page layouts live in workspace.css (the workspace) and pages.css (settings, logs, sign-in). */
+   Workspace layouts live in layout.css and the stylesheets after it; pages.css styles settings, logs, sign-in and setup. */
 :root {
   color-scheme:light;
   --bg:#f0f2f5;
