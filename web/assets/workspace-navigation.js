@@ -2,9 +2,21 @@
 // Workspace navigation changes visibility, never remounts sources or the player.
 let workspaceView = 'tracks';
 let workspaceSource = 'youtube';
+// Coming back from Settings reopens the same place: the Add audio tab is remembered across
+// visits, the phone view (Tracks / Add audio / Activity) only for this browser tab.
+const WORKSPACE_SOURCE_KEY = 'tonies-auto.workspace-source.v1';
+const WORKSPACE_VIEW_KEY = 'tonies-auto.workspace-view.v1';
+function restoreWorkspacePlace() {
+  let source = 'youtube', view = 'tracks';
+  try { source = localStorage.getItem(WORKSPACE_SOURCE_KEY) || source; } catch {}
+  try { view = sessionStorage.getItem(WORKSPACE_VIEW_KEY) || view; } catch {}
+  setWorkspaceView(['tracks', 'add', 'activity'].includes(view) ? view : 'tracks');
+  setWorkspaceSource(['youtube', 'local'].includes(source) ? source : 'youtube');
+}
 function setWorkspaceView(view, focus = false) {
   if (!['tracks', 'add', 'activity'].includes(view)) return;
   workspaceView = view;
+  try { sessionStorage.setItem(WORKSPACE_VIEW_KEY, view); } catch {}
   document.getElementById('workspace').setAttribute('data-view', view);
   document.getElementById('view-tracks').hidden = view === 'activity';
   document.getElementById('view-activity').hidden = view !== 'activity';
@@ -22,6 +34,7 @@ function setWorkspaceView(view, focus = false) {
 function setWorkspaceSource(source, focus = false) {
   if (!['youtube', 'local'].includes(source)) return;
   workspaceSource = source;
+  try { localStorage.setItem(WORKSPACE_SOURCE_KEY, source); } catch {}
   for (const name of ['youtube', 'local']) {
     document.getElementById('source-' + name).hidden = name !== source;
     const tab = document.getElementById('source-tab-' + name);

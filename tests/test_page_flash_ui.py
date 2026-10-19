@@ -159,3 +159,27 @@ toniesCache = [{edit_url:'tonie-b', name:'Owl', image:'https://img.example/owl.p
 actualRenderTonies();
 assert.match(document.getElementById('tonies').innerHTML, /Owl/);
 """)
+
+
+def test_coming_back_reopens_the_same_add_audio_tab_and_phone_view():
+    run_js("""
+const local = new Map(), tab = new Map();
+global.localStorage = {getItem:k => local.get(k) ?? null, setItem:(k, v) => local.set(k, String(v))};
+global.sessionStorage = {getItem:k => tab.get(k) ?? null, setItem:(k, v) => tab.set(k, String(v))};
+restoreWorkspacePlace();
+assert.equal(workspaceSource, 'youtube'); assert.equal(workspaceView, 'tracks');
+setWorkspaceSource('local'); setWorkspaceView('add');
+workspaceSource = 'youtube'; workspaceView = 'tracks';  // a new page
+restoreWorkspacePlace();
+assert.equal(workspaceSource, 'local');
+assert.equal(document.getElementById('source-local').hidden, false);
+assert.equal(workspaceView, 'add');
+// The Add audio tab is remembered across visits; the phone view only for this browser tab.
+assert.equal(local.get('tonies-auto.workspace-source.v1'), 'local');
+assert.equal(tab.get('tonies-auto.workspace-view.v1'), 'add');
+local.set('tonies-auto.workspace-source.v1', 'nonsense'); tab.set('tonies-auto.workspace-view.v1', '<b>');
+restoreWorkspacePlace();
+assert.equal(workspaceSource, 'youtube'); assert.equal(workspaceView, 'tracks');
+""")
+    boot = (WEB / "assets/app-boot.js").read_text(encoding="utf-8")
+    assert "restoreWorkspacePlace();" in boot and "setWorkspaceSource('youtube')" not in boot
