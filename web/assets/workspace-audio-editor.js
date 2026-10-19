@@ -4,7 +4,7 @@ const EDITOR_MIN_CLIP = 0.5;
 const EDITOR_POINTS = 1000;
 const EDITOR_WAVEFORM_TIMEOUT_MS = 180000;
 const editorState = {filename: '', seconds: 0, selection: {start: 0, end: 0}, view: {start: 0, end: 0},
-  peaks: [], dragging: null, clipPlayback: false, busy: false, ready: false, request: 0, session: 0};
+  peaks: [], levels: null, dragging: null, clipPlayback: false, busy: false, ready: false, request: 0, session: 0};
 
 /** "90", "1:30", "1:02:03" or "0:07,5" -> seconds; '' -> null; anything else -> NaN. */
 function parseClock(text) {
@@ -89,8 +89,18 @@ function setEditorStatus(text, error = '') {
   editorEl('editor-error').textContent = error;
 }
 
+function setEditorLoading(text = '') {
+  const wave = editorEl('editor-wave');
+  wave.setAttribute('aria-busy', String(Boolean(text)));
+  wave.classList.toggle('is-loading', Boolean(text));
+  if (text) { wave.setAttribute('role', 'progressbar'); wave.setAttribute('aria-label', text); }
+  else { wave.removeAttribute('role'); wave.removeAttribute('aria-label'); }
+  setEditorStatus(text);
+}
+
 function renderEditorControls() {
   const {selection, ready, busy} = editorState;
+  editorEl('editor-cancel').disabled = busy;
   for (const id of ['editor-play', 'editor-play-clip', 'editor-zoom', 'editor-start', 'editor-end']) editorEl(id).disabled = !ready;
   editorEl('editor-save').disabled = !ready || busy || isWholeTrack(selection, editorState.seconds);
   const add = editorEl('editor-add');
@@ -121,20 +131,12 @@ function drawEditorWaveform() {
   const width = Math.round(canvas.clientWidth * ratio), height = Math.round(canvas.clientHeight * ratio);
   if (canvas.width !== width || canvas.height !== height) Object.assign(canvas, {width, height});
   const style = getComputedStyle(canvas);
-  const {peaks, view, selection} = editorState;
   context.clearRect(0, 0, width, height);
-  const bar = width / Math.max(1, peaks.length);
-  peaks.forEach((peak, index) => {
-    const time = editorTimeAt((index + 0.5) / peaks.length, view);
-    context.fillStyle = time >= selection.start && time <= selection.end ? style.getPropertyValue('--accent') : style.getPropertyValue('--border');
-    const h = Math.max(ratio, peak * height * 0.95);
-    context.fillRect(index * bar, (height - h) / 2, Math.max(ratio, bar - ratio), h);
-  });
   const now = editorEl('editor-audio').currentTime || 0;
-  if (now >= view.start && now <= view.end) {
-    context.fillStyle = style.getPropertyValue('--text');
-    context.fillRect(editorFraction(now, view) * width - ratio, 0, 2 * ratio, height);
-  }
+  if (editorState.ready) renderEditorBars(canvas, context, editorState, now, ratio, {
+    accent: style.getPropertyValue('--accent'), muted: style.getPropertyValue('--muted'),
+    playhead: style.getPropertyValue('--text')
+  });
   editorEl('editor-time').textContent = `${formatClock(now)} / ${formatClock(editorState.seconds)}`;
 }
 
@@ -161,14 +163,15 @@ async function loadEditorWaveform(view) {
   editorState.seconds = outline.seconds;
   editorState.view = {start: outline.start, end: outline.end};
   editorState.peaks = outline.peaks;
+  editorState.levels = outline.levels;
   return true;
 }
 
 async function loadEditorFile(filename, session) {
+  ensureEditorSession(session);
   editorState.filename = filename;
-  editorState.seconds = 1;
-  setEditorStatus('Drawing the waveform…');
-  await loadEditorWaveform({start: 0, end: Infinity});
+  setEditorLoading('Preparing the waveform…');
+  if (!await loadEditorWaveform({start: 0, end: Infinity})) throw new EditorClosed();
   ensureEditorSession(session);
   const audio = editorEl('editor-audio');
   audio.src = `/api/files/${encodeURIComponent(filename)}?inline=true`;
@@ -177,7 +180,7 @@ async function loadEditorFile(filename, session) {
   editorState.ready = true;
   editorEl('editor-zoom').setAttribute('aria-pressed', 'false');
   editorEl('editor-zoom').textContent = 'Zoom to clip';
-  setEditorStatus('');
+  setEditorLoading();
   renderEditorControls();
   editorEl('editor-play').focus({preventScroll: true});
 }
@@ -186,10 +189,15 @@ async function loadEditorFile(filename, session) {
 function showEditor(title) {
   const dialog = editorEl('audio-editor');
   editorState.session += 1;
-  Object.assign(editorState, {ready: false, busy: false, peaks: [], clipPlayback: false, dragging: null});
+  editorState.request += 1;
+  editorEl('editor-audio').pause();
+  editorEl('editor-audio').removeAttribute('src');
+  editorEl('editor-audio').load();
+  Object.assign(editorState, {filename: '', seconds: 0, selection: {start: 0, end: 0}, view: {start: 0, end: 1},
+    ready: false, busy: false, peaks: [], levels: null, clipPlayback: false, dragging: null});
   if (typeof stopLocalPlayback === 'function') stopLocalPlayback();
   editorEl('editor-title').textContent = `Edit “${uiText(title)}”`;
-  setEditorStatus('');
+  setEditorLoading();
   renderEditorControls();
   dialog.showModal();
   return editorState.session;
@@ -200,7 +208,10 @@ async function openAudioEditorForFile(filename) {
   try {
     await loadEditorFile(filename, session);
   } catch (error) {
-    if (!(error instanceof EditorClosed)) setEditorStatus('', `Could not open this file: ${editorErrorText(error)}`);
+    if (session === editorState.session && !(error instanceof EditorClosed)) {
+      setEditorLoading();
+      setEditorStatus('', `Could not open this file: ${editorErrorText(error)}`);
+    }
   }
 }
 
@@ -208,17 +219,20 @@ async function openAudioEditorForCandidate(jobId, index) {
   const candidate = getJobById(jobId)?.candidates?.[index];
   if (!candidate) return;
   const session = showEditor(candidate.title);
-  setEditorStatus('Getting the audio from YouTube… (it is saved to Local files)');
+  setEditorLoading('Getting audio from YouTube and preparing it… (saved to Local files)');
   try {
     const {filename} = await api(`/api/jobs/${encodeURIComponent(jobId)}/fetch`, {
       method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({index})
     }, 900000);
-    await refreshFiles();
+    // Listing probes every library file; don't put that work on the editor's critical path.
+    void refreshFiles().catch(() => {});
     ensureEditorSession(session);
     await loadEditorFile(filename, session);
+    ensureEditorSession(session);
     setEditorStatus(`Saved to Local files as ${filename}`);
   } catch (error) {
-    if (error instanceof EditorClosed) return;
+    if (session !== editorState.session || error instanceof EditorClosed) return;
+    setEditorLoading();
     setEditorStatus('', editorErrorText(error));
     renderEditorControls();
   }
@@ -270,6 +284,7 @@ function editorSaveClip() {
 }
 
 async function toggleEditorZoom() {
+  const session = editorState.session;
   const zoomed = editorEl('editor-zoom').getAttribute('aria-pressed') === 'true';
   const {start, end} = editorState.selection;
   const pad = Math.max(1, (end - start) * 0.1);
@@ -278,6 +293,7 @@ async function toggleEditorZoom() {
       : {start: Math.max(0, start - pad), end: Math.min(editorState.seconds, end + pad)});
     if (!fresh) return;
   } catch (error) {
+    if (session !== editorState.session) return;
     editorEl('editor-error').textContent = editorErrorText(error);
     return;
   }
@@ -325,6 +341,7 @@ function initAudioEditor() {
     editorState.request += 1;
     editorState.session += 1;
     editorState.ready = false;
+    setEditorLoading();
     audio.pause();
     audio.removeAttribute('src');
     audio.load();

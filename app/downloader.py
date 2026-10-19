@@ -151,7 +151,8 @@ def _download_once(target: str, out_dir: Path, base: str) -> Path:
             directory = Path(staging)
             output_template = str(directory / f"{base}.%(ext)s")
             cmd = [
-                *_base_command(), "-x", "--format", "bestaudio/best",
+                # No -x: convert_to_mp3 reads any container, so yt-dlp's remux pass is skipped.
+                *_base_command(), "--format", "bestaudio/best",
                 "--concurrent-fragments", "4",
                 "--socket-timeout", "20", "--js-runtimes", "deno",
                 "--max-filesize", str(_MAX_DOWNLOAD_BYTES), "-o", output_template,

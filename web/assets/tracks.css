@@ -33,15 +33,17 @@
   color:var(--muted);
 }
 
+/* The status line keeps its height when empty, so a new status never pushes the tracks down. */
 #tonies-status {
-  min-height:0;
+  min-height:1.5em;
+  line-height:1.5;
   margin:8px 0;
   font-size:11px;
   color:var(--muted);
 }
 
 #tonies-status:empty {
-  display:none;
+  visibility:hidden;
 }
 
 #tonies-edit-actions {
@@ -295,74 +297,11 @@
   border:0;
 }
 
-.file {
-  display:grid;
-  grid-template-columns:24px minmax(0,1fr);
-  gap:8px;
-  align-items:center;
-  padding:16px 0;
-  border-bottom:1px solid var(--border);
-}
-
-.file-main {
-  min-width:0;
-}
-
-.file-title {
-  overflow:hidden;
-  text-overflow:ellipsis;
-  white-space:nowrap;
-  font-size:12px;
-}
-
-.file>.row {
-  grid-column:2;
-  justify-content:flex-start;
-  flex-wrap:nowrap;
-  gap:6px;
-}
-
-.file .row button {
-  font-size:11px;
-  padding:8px 12px;
-}
-
-.file-select-label,.track-select-label {
+.track-select-label {
   display:grid;
   place-items:center;
   min-width:24px;
   min-height:44px;
-}
-
-.file .tiny {
-  font-size:11px;
-  margin-top:2px;
-}
-
-.local-upload-btn {
-  display:inline-flex;
-  align-items:center;
-}
-
-.trash-btn {
-  min-width:44px;
-  padding:10px!important;
-}
-
-.trash-btn svg {
-  width:15px;
-  height:15px;
-  stroke:currentColor;
-  stroke-width:1.8;
-  fill:none;
-}
-
-.file.queued-upload {
-  opacity:.7;
-}
-
-.file.focus-upload {
-  background:var(--accent-soft);
 }
 
 .selection-bar {

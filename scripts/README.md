@@ -1,17 +1,19 @@
 # Scripts
 
-`scripts/` is split by intended audience:
-
 ## Install
-Use Docker (see the [README quick start](../README.md#quick-start-recommended) and [`../docs/QUICKSTART.md`](../docs/QUICKSTART.md)).
-- `setup-windows.ps1` — legacy native-Windows bootstrap. Native Windows Python is no longer supported; Windows users should run the Docker image (Docker Desktop with Linux containers or WSL2).
+
+Use the [Docker quick start](../README.md#get-started). `setup-windows.ps1` is a legacy native-Windows bootstrap, not a supported installer; it can reset its checkout. On Windows use Docker Desktop's Linux containers or WSL2.
 
 ## Live acceptance (opt-in, uses your real Tonies account)
-- `live_queue_acceptance.py` — uploads three disposable clips, edits and deletes only those, then checks the Tonie matches its starting snapshot. Run it only deliberately; it makes real cloud writes.
+
+`live_queue_acceptance.py` makes **real cloud writes**: it uploads three disposable clips, edits/deletes those clips and checks the starting snapshot. Run it only deliberately against an appropriate test Tonie, never as an ordinary offline test.
 
 ## Maintainer/internal
-- `scripts/dev/*` — one-off checks, regression helpers and local diagnostics, including `fake_cloud_app.py` (the app against a fake Tonies cloud, for UI work without an account).
 
-Notes:
-- Dev scripts are not part of the stable user workflow.
-- Environment-specific/local experiment scripts should stay under `scripts/dev/`.
+`scripts/dev/` contains diagnostics and regression helpers, not a stable user API. For UI work without Tonies credentials:
+
+```bash
+.venv/bin/python scripts/dev/fake_cloud_app.py --port 8099
+```
+
+The helper requires development dependencies and ffmpeg, uses temporary data and a fake Tonies client, and writes a generated dev password/session into that data directory. Keep it on loopback. The fake client does **not** fake YouTube: do not search/download if you need fully offline work. Keep local experiments under `scripts/dev/`.

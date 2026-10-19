@@ -1,33 +1,82 @@
-/** Local selection consumes a captured target once; the existing upload queue owns delivery. */
+/** Local files: Select mode (add or delete the ticked files together), importing a file,
+ * and one YouTube result card. A selection is consumed once; the upload queue owns delivery. */
 const localSelectedFiles = new Set();
 let localSelectionSubmitting = false;
+let localSelectionMode = false;
+function toggleLocalSelectionMode(on = !localSelectionMode) {
+  if (localSelectionSubmitting) return;
+  localSelectionMode = Boolean(on);
+  if (!localSelectionMode) localSelectedFiles.clear();
+  closeFileMenu(false);
+  renderFiles();
+  renderLocalSelection();
+}
 function toggleLocalSelection(name, checked) {
-  if (localSelectionSubmitting || !filesCache.some(f => f.name === name)) return;
+  if (localSelectionSubmitting || !filteredLocalFiles().some(f => f.name === name)) return;
   if (checked) localSelectedFiles.add(name); else localSelectedFiles.delete(name);
   renderLocalSelection();
 }
+function selectAllLocalFiles() {
+  if (localSelectionSubmitting) return;
+  const visible = filteredLocalFiles();
+  const allSelected = visible.length && visible.every(f => localSelectedFiles.has(f.name));
+  localSelectedFiles.clear();
+  if (!allSelected) for (const f of visible) localSelectedFiles.add(f.name);
+  renderFiles();
+}
 function renderLocalSelection() {
-  for (const name of localSelectedFiles) if (!filesCache.some(f => f.name === name)) localSelectedFiles.delete(name);
-  document.getElementById('local-selection-bar').hidden = !localSelectedFiles.size;
-  document.getElementById('local-selection-count').textContent = `${localSelectedFiles.size} selected`;
+  const visible = new Set(filteredLocalFiles().map(f => f.name));
+  for (const name of localSelectedFiles) if (!visible.has(name)) localSelectedFiles.delete(name);
+  const count = localSelectedFiles.size;
+  document.getElementById('local-selection-bar').hidden = !localSelectionMode && !count;
+  document.getElementById('local-selection-count').textContent = `${count} selected`;
+  const select = document.getElementById('select-local-files');
+  select.textContent = localSelectionMode ? 'Cancel selection' : 'Select';
+  select.disabled = localSelectionSubmitting || !visible.size;
+  const all = document.getElementById('select-all-local');
+  all.textContent = visible.size && count === visible.size ? 'Clear selection' : 'Select all';
+  all.disabled = localSelectionSubmitting || !visible.size;
   const add = document.getElementById('add-selected-local');
   add.textContent = `Add to ${workspaceTargetName()}`;
   add.setAttribute('title', add.textContent);
-  add.setAttribute('aria-label', `Add ${localSelectedFiles.size} ${localSelectedFiles.size === 1 ? 'file' : 'files'} to ${workspaceTargetName()}`);
-  add.disabled = localSelectionSubmitting || !selectedToniesUrl;
+  add.setAttribute('aria-label', `Add ${count} ${count === 1 ? 'file' : 'files'} to ${workspaceTargetName()}`);
+  add.disabled = localSelectionSubmitting || !selectedToniesUrl || !count;
+  const remove = document.getElementById('delete-selected-local');
+  remove.setAttribute('aria-label', `Delete ${count} local ${count === 1 ? 'file' : 'files'}`);
+  remove.disabled = localSelectionSubmitting || !count;
 }
-function clearLocalSelection() { if (!localSelectionSubmitting) { localSelectedFiles.clear(); renderFiles(); renderLocalSelection(); } }
 async function addSelectedLocalFiles() {
-  if (localSelectionSubmitting || !selectedToniesUrl || !localSelectedFiles.size) return;
+  if (localSelectionSubmitting) return;
+  renderLocalSelection();
+  if (!selectedToniesUrl || !localSelectedFiles.size) return;
   const targetUrl = selectedToniesUrl;
-  const names = [...localSelectedFiles].filter(name => filesCache.some(f => f.name === name));
+  const names = [...localSelectedFiles];
   localSelectionSubmitting = true;
   // Selection is consumed once. A lost response never creates a one-tap duplicate batch.
   localSelectedFiles.clear();
+  localSelectionMode = false;
   renderLocalSelection();
   renderFiles();
   try {
     for (const name of names) await uploadExisting(name, {targetUrl});
+  } finally {
+    localSelectionSubmitting = false;
+    renderLocalSelection();
+    renderFiles();
+  }
+}
+async function deleteSelectedLocalFiles() {
+  if (localSelectionSubmitting) return;
+  renderLocalSelection();
+  if (!localSelectedFiles.size) return;
+  const names = [...localSelectedFiles];
+  // Keep the selection until the server accepts each deletion; Cancel/Undo keep it all.
+  localSelectionSubmitting = true;
+  renderFiles();
+  try {
+    const result = await deleteLocalFiles(names);
+    for (const name of result.deleted) localSelectedFiles.delete(name);
+    if (result.deleted.length && !localSelectedFiles.size) localSelectionMode = false;
   } finally {
     localSelectionSubmitting = false;
     renderLocalSelection();
@@ -106,6 +155,10 @@ async function importWorkspaceFile(file) {
 }
 
 function initWorkspaceSources() {
+  document.getElementById('select-local-files').onclick = () => toggleLocalSelectionMode();
+  document.getElementById('add-selected-local').onclick = addSelectedLocalFiles;
+  document.getElementById('delete-selected-local').onclick = deleteSelectedLocalFiles;
+  document.getElementById('select-all-local').onclick = selectAllLocalFiles;
   const picker = document.getElementById('upload-file-input');
   document.getElementById('browse-files').onclick = () => picker.click();
   picker.onchange = async () => {

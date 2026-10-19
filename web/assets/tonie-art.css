@@ -17,10 +17,6 @@
   color: var(--muted);
   font-size: 24px;
 }
-.file {
-  grid-template-columns: 44px minmax(0, 1fr);
-}
-.file-select-label,
 .track-select-label {
   min-width: 44px;
   min-height: 44px;

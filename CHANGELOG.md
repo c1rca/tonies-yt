@@ -5,19 +5,23 @@ All notable changes to Tonies-YT. Versions follow [Semantic Versioning](https://
 ## [Unreleased]
 
 ### Added
-- Volume levelling: every track added (YouTube or imported) is brought to the same loudness, so one song isn't quiet and the next one loud.
-- Audio editor: an Edit button on YouTube results and Local files opens a waveform. Play it, drag the start and end handles (or type times, or use the arrow keys), zoom in on the clip and listen to it, then add it or save it as a new file. The clip is cut without re-encoding; the original file stays.
-- Playlists: paste a playlist link to list its first 50 videos.
-- Select several YouTube results and add them in one go; they land in the order shown.
-- A ready-made image for PCs and Raspberry Pis (`ghcr.io/c1rca/tonies-yt`), published with every release; Compose pulls it, so installing no longer needs a build. New "Get started" section in the README.
+- Audio editor with preview, draggable/typed clip times, keyboard controls and zoom. Clips preserve the original and do not re-encode.
+- Volume levelling for new downloads/imports; the encoding policy remains 128 kbps stereo MP3.
+- Playlist browsing (first 50 videos) and ordered multi-result additions.
+- Local-file batch deletion with confirmation and a short pre-delete cancellation window.
+- Published amd64/arm64 Docker images; the quick start no longer needs a local build.
 
 ### Changed
-- YouTube audio is encoded once by the app instead of twice.
-- At most three YouTube downloads run at once, and a plain download failure is retried once.
-- Internal restructure into small, named files; no visible changes.
+- Local rows keep **Play** and **Add** visible; **⋯** holds clipping, placement, download and delete actions. **Select** enables batch actions.
+- Editor waveforms use loudness bars and staged, indeterminate loading rather than percentage estimates.
+- Editor fetches use a separate lane from the three-download pool. Downloads skip an extra remux pass and encode once; plain failures retry once.
+- Concise guides replace duplicated setup details and exhaustive file inventories.
+- Code is split into feature-focused modules.
 
 ### Fixed
-- Adding several videos at once: a track that failed quickly could let a later one land on the Tonie before an earlier one still downloading.
+- Workspace return preserves the source tab/mobile view and avoids the empty-pane flash after Settings or Logs.
+- Local selection follows the filter, blocks duplicate submissions and retains failed deletions for retry.
+- Multi-video additions retain order when an earlier download is still running and another fails.
 
 ## [3.0.0] - 2026-10-17
 

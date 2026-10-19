@@ -91,7 +91,7 @@ api=async()=>[{edit_url:'tonie-a',name:'Fox'}];syncCreativeToniesStats=async()=>
 await refreshTonies({force:true});
 assert.equal(selectedToniesUrl,'tonie-a');
 assert.doesNotMatch(filesEl.innerHTML,/local-upload-btn[^>]+disabled/);
-assert.match(filesEl.innerHTML,/Add Story.mp3 to Fox/);
+assert.match(filesEl.innerHTML,/aria-label="Add Story to Fox"/);
 """)
 
 

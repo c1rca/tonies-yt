@@ -1,81 +1,58 @@
 # Quick Start
 
+For the simplest installation, use the [README quick start](../README.md#get-started). This guide covers a source checkout and native runs.
+
 ## Prerequisites
 
-- Docker Engine + Compose **2.24 or later**, or Docker Desktop using Linux containers.
-- A Tonies account email and password for the setup form. Local playback itself does not contact Tonies.
-- A trusted machine with enough free disk for your library. Existing users: **read [migration](OPERATIONS.md#existing-root-owned-bind-mounts) before starting**; the new named volume does not automatically import old `./data`.
+- Docker Engine with Compose **2.24+**, or Docker Desktop with Linux containers.
+- A trusted host with room for your audio library.
+- Tonies credentials for setup; local playback itself does not contact Tonies.
 
-## 1. Create configuration
+**Existing installation:** [back up and migrate old data](OPERATIONS.md#existing-root-owned-bind-mounts) first. The named volume does not import `./data` automatically.
 
-Linux/macOS:
-```bash
-cp .env.example .env
-chmod 600 .env
-```
+## Run a checkout
 
-Windows PowerShell:
-```powershell
-Copy-Item .env.example .env
-```
-Restrict `.env` to your Windows account using its file permissions. Normally do not put Tonies credentials in it; setup stores them in the app's encrypted vault. Optional `TONIES_EMAIL`/`TONIES_PASSWORD` override that vault account, but an app login is still required.
+1. For a fresh checkout, clone the repository and copy its configuration:
+   ```bash
+   git clone https://github.com/c1rca/tonies-yt.git
+   cd tonies-yt
+   cp .env.example .env
+   chmod 600 .env
+   ```
+   In Windows PowerShell, use `Copy-Item .env.example .env` and restrict the file to your account with Windows file permissions.
+2. Start the app:
+   ```bash
+   docker compose -p tonies-local up -d
+   ```
+   This pulls the published amd64/arm64 image. To build this checkout, use `up -d --build` instead. Set `TONIES_IMAGE_TAG=local` before building to keep your build separate from published tags; a later `pull` can replace a locally built image with the same tag.
+3. Open **http://localhost:8090** and complete setup immediately. Create an app login with a unique passphrase of at least 12 characters, then enter Tonies credentials. Setup saves them but does not verify cloud sign-in.
+4. Choose a Tonie and add audio, or use **Local files → Import file** to import and preview a file locally.
 
-## 2. Start locally
+The first visitor creates the login. On a remote Docker host, use `ssh -L 8090:127.0.0.1:8090 user@docker-host`, then open localhost on your workstation. Do not expose an unconfigured app.
 
-```bash
-docker compose -p tonies-local up -d
-docker compose -p tonies-local ps
-```
+## Configuration
 
-This pulls the published image (`ghcr.io/c1rca/tonies-yt`, amd64 and arm64). Add `--build` to build this checkout instead. `TONIES_IMAGE_TAG` in `.env` picks the version (`latest` by default).
+Edit [`.env.example`](../.env.example)'s settings in your own `.env`:
 
-Open **http://localhost:8090** on the Docker host. The default is **loopback only**, not accessible from your phone/LAN. For a remote Docker host, use `ssh -L 8090:127.0.0.1:8090 user@docker-host`, then open localhost on your workstation. Do not expose an unconfigured instance.
+- `TONIES_PORT`: host port, **8090** by default. The container always listens on **8080**; `APP_PORT` does not change its command.
+- `TONIES_IMAGE_TAG`: published version, or `latest` by default.
+- `LOG_LEVEL`, `LOG_FILE`: logging. Compose fixes the file at `/app/data/logs/toni-auto.log`.
+- `APP_MAX_UPLOAD_BYTES`: per-file ceiling, **104857600** (100 MiB) by default.
+- `TONIES_EMAIL` and `TONIES_PASSWORD`: optional plaintext overrides for the vault's Tonies account. Both must be set; the app login is still required.
+- `TONIES_CREATIVE_UPLOAD_URL` or `TONIES_CHARACTER_NAME`: optional default target for jobs that do not specify a Tonie.
 
-The image runs as **10001:10001**, never root. Compose makes code read-only, drops all capabilities and persists data in the project's `tonies-data` named volume. `/tmp`, home and tool caches are disposable. No host directories are mounted by default. Container port 8080 maps to loopback port 8090; set `TONIES_PORT=8091` in `.env` if needed. `APP_PORT` alone does not change the image command.
+The app runs as **10001:10001** with no root fallback. Data persists in the project's named volume at `/app/data`; tool caches are disposable. [Back up the whole volume and `.env`](OPERATIONS.md#backup--restore). `down -v` deletes named-volume data.
 
-## 3. Complete setup immediately
+For phone/LAN access, complete local setup first, then follow [HTTPS proxy configuration](OPERATIONS.md#running-behind-a-reverse-proxy). It covers `TONIES_BIND_ADDRESS`, exact `APP_ALLOWED_HOSTS` and `APP_PUBLIC_URL`. A different bind address alone is not safe remote access.
 
-1. Create a unique app username and a long, unique passphrase. The first visitor to an uninitialized instance creates the login. Keep the passphrase safe; it cannot be recovered.
-2. Enter Tonies credentials (or use the optional environment overrides). Setup requires both cloud credential fields unless environment credentials are configured; creating the vault does not verify them against Tonies.
-3. Import audio through **Browse**, then preview it in the library. To write to Tonies, select a Creative Tonie and add audio.
+## Stop and update
 
-Every browser needs its own sign-in. A restart or **Lock** signs browsers out. See [Security](SECURITY.md) for vault and host-administrator boundaries. The volume includes unencrypted audio/logs/history/settings and the encrypted vault: protect and [back it up](OPERATIONS.md#backup--restore). Never use `docker compose down -v` unless you intend to delete that installation's data.
-
-## Remote/LAN access is opt-in
-
-Complete setup locally first. For remote use configure HTTPS, an explicit allowed host and a firewall. Example `.env` additions for a proxy with canonical origin:
-
-```dotenv
-APP_ALLOWED_HOSTS=localhost,127.0.0.1,[::1],tonies.example.com
-APP_PUBLIC_URL=https://tonies.example.com
-```
-
-A host-based proxy can leave `TONIES_BIND_ADDRESS=127.0.0.1`. A LAN listener instead needs `TONIES_BIND_ADDRESS=<host-LAN-IP>` and that IP/hostname in `APP_ALLOWED_HOSTS`; do not use plaintext HTTP outside localhost. Follow the complete [proxy instructions](OPERATIONS.md#running-behind-a-reverse-proxy), including exact trusted proxy IPs. A bind address alone is not a safe remote deployment.
-
-## Stop, restart and update
-
-Always use the same project name; another `-p` value creates separate state.
-
-```bash
-docker compose -p tonies-local stop tonies-yt
-docker compose -p tonies-local up -d
-# Update to the newest published image (back up first):
-docker compose -p tonies-local pull tonies-yt
-docker compose -p tonies-local up -d tonies-yt
-# Or, running your own checkout: rebuild it after source/dependency/base updates:
-docker compose -p tonies-local build --pull tonies-yt
-docker compose -p tonies-local up -d --no-build tonies-yt
-```
-
-After `.env` changes use `up -d --force-recreate tonies-yt`. Logs: `docker compose -p tonies-local logs --tail 100 tonies-yt`. Health: `http://localhost:8090/api/health` (web availability only, not Tonies authentication). API docs, once signed in: `http://localhost:8090/docs`.
+Use the same `-p tonies-local` throughout. See [lifecycle commands](OPERATIONS.md#lifecycle-and-verification) for updates, logs and health checks. API docs are at `http://localhost:8090/docs` after sign-in. A restart or **Lock** signs every browser out.
 
 ## Native setup (Linux/macOS, without Docker)
 
-The hardened native runtime requires POSIX file locking and process-group controls. **Native Windows Python is not supported**; its former native command cannot import the locking module. On Windows use Docker Desktop with Linux containers (recommended), or a Linux environment such as WSL2 with the Linux instructions. Do not remove vault locks or process bounds to work around this.
+Install **Python 3.12**, **ffmpeg/ffprobe** and **Deno** on PATH, then run from the checkout:
 
-Use Python 3.12, ffmpeg and Deno on PATH. Native runs do not receive the container sandbox or automatically load `.env`.
-
-Linux/macOS:
 ```bash
 python3.12 -m venv .venv
 .venv/bin/python -m pip install -r requirements.txt
@@ -84,11 +61,13 @@ export LOG_FILE=./data/logs/toni-auto.log
 .venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8090 --no-proxy-headers
 ```
 
-Do not reuse `/app/data` on the native host. The legacy `scripts/setup-windows.ps1` targets native Windows and resets its checkout; it is no longer a supported installer. Use Docker Desktop's Linux-container flow above instead.
+Native runs do not load `.env` automatically or receive Docker's sandbox. Use host-relative data/log paths, not `/app/data`.
+
+**Native Windows Python is unsupported:** the runtime requires POSIX file locks and process groups. Use Docker Desktop's Linux containers or WSL2. The legacy `scripts/setup-windows.ps1` is not a supported installer and can reset its checkout; do not use it for this setup.
 
 ## Troubleshooting
 
-- **Permission denied on data:** do not run as root or `chmod 777`. See the explicit [backed-up migration](OPERATIONS.md#existing-root-owned-bind-mounts).
-- **LAN unreachable / invalid Host:** intentional defaults. Configure bind, allowlist, HTTPS and firewall together.
-- **Tonies sign-in fails:** check Settings and any environment overrides; restarting discards cloud tokens. Do not delete the vault/library to fix cloud sign-in.
-- **Forgot app passphrase:** see [reset instructions](OPERATIONS.md#reset-a-forgotten-app-password); there is no recovery backdoor.
+- **Permission denied:** stop and check [data ownership/migration](OPERATIONS.md#existing-root-owned-bind-mounts). Do not run as root or use `chmod 777`.
+- **LAN unreachable / invalid Host:** configure bind, allowed hosts, HTTPS and firewall together.
+- **Tonies sign-in fails:** check Settings and environment overrides. Do not delete the vault to fix cloud authentication.
+- **Forgot the app passphrase:** follow [reset instructions](OPERATIONS.md#reset-a-forgotten-app-password). The old encrypted credentials cannot be recovered without it.

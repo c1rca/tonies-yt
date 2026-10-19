@@ -95,8 +95,11 @@ def test_local_files_initialization_binds_refresh_and_filter_controls():
     frontend.run_js("""
 let renders = 0;
 renderFiles = () => { renders++; };
+let refreshes = 0;
+refreshFiles = async () => { refreshes++; };
 initLocalFiles();
-assert.equal(document.getElementById('refresh-files').onclick, refreshFiles);
+await document.getElementById('refresh-files').onclick();
+assert.equal(refreshes, 1);
 fileFilterEl.value = 'ducks';
 fileFilterEl.oninput();
 document.getElementById('clear-filter').onclick();
@@ -196,11 +199,12 @@ document.addEventListener = (event, fn) => { if (event === 'click') outside = fn
 initContextMenus();
 const kinds = [];
 uploadFromFileMenu = kind => kinds.push(kind);
-fileMenuUploadEl.onclick(); fileMenuUploadTopEl.onclick(); fileMenuUploadBottomEl.onclick();
-assert.deepEqual(kinds, ['default', 'top', 'bottom']);
+const item = id => document.getElementById(id);
+item('file-menu-upload-top').onclick(); item('file-menu-upload-bottom').onclick();
+assert.deepEqual(kinds, ['top', 'bottom']);
 let downloaded;
 downloadLocalFile = name => { downloaded = name; };
-openFileMenu('Ducks.mp3', 20, 20); fileMenuDownloadEl.onclick();
+openFileMenu('Ducks.mp3', 20, 20); item('file-menu-download').onclick();
 assert.equal(downloaded, 'Ducks.mp3');
 fileMenuEl.classList.contains = () => true;
 fileMenuEl.contains = () => false;
@@ -235,7 +239,7 @@ downloadLocalFile(' Ducks & snow #?.mp3 ');
 assert.equal(anchor.download, 'Ducks & snow #?.mp3');
 assert.equal(anchor.href, '/api/files/' + encodeURIComponent(anchor.download));
 assert.deepEqual(steps, ['append','click','remove']);
-assert.equal(fileMenuFilename, '');
+assert.equal(fileMenuFilename, 'test'); // The menu action wrapper, not download, owns closing.
 """)
 
 

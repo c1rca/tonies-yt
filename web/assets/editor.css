@@ -22,6 +22,38 @@
   touch-action:none;
 }
 
+.editor-wave.is-loading {
+  overflow:hidden;
+  cursor:wait;
+}
+
+.editor-wave.is-loading::before,
+.editor-wave.is-loading::after {
+  content:"";
+  position:absolute;
+  top:calc(50% - 2px);
+  left:12%;
+  width:76%;
+  height:4px;
+  border-radius:4px;
+  background:var(--border);
+}
+
+.editor-wave.is-loading::after {
+  width:24%;
+  background:var(--accent);
+  animation:editor-loading 1.4s ease-in-out infinite alternate;
+}
+
+@keyframes editor-loading {
+  from { transform:translateX(0); }
+  to { transform:translateX(216%); }
+}
+
+@media (prefers-reduced-motion:reduce) {
+  .editor-wave.is-loading::after { animation:none; left:38%; }
+}
+
 .editor-wave canvas {
   display:block;
   width:100%;

@@ -22,9 +22,11 @@ _SILENCE_LUFS = -50.0
 _PEAK_LIMIT = 0.891  # -1 dBFS
 _MAX_SECONDS = 24 * 3600
 _LOUDNESS = re.compile(rb"lavfi\.r128\.I=(-?\d+(?:\.\d+)?)")
-# Waveform outline: per-point peak of a mono 8 kHz decode (plenty for drawing).
+# One read-only 8 kHz decode for peaks and RMS loudness. Keep stereo channels
+# separate: a mono mix would erase opposite-phase material.
 _WAVEFORM_RATE = 8000
 _PEAK = re.compile(rb"lavfi\.astats\.Overall\.Peak_level=(-inf|-?\d+(?:\.\d+)?)")
+_RMS = re.compile(rb"lavfi\.astats\.Overall\.RMS_level=(-inf|-?\d+(?:\.\d+)?)")
 
 
 @dataclass(frozen=True)
@@ -131,8 +133,13 @@ def convert_to_mp3(source: Path, destination: Path, *, max_bytes: int) -> None:
     ], timeout=_work_timeout(seconds))
 
 
+def _waveform_values(pattern: re.Pattern, output: bytes, points: int) -> list[float]:
+    return [0.0 if level == b"-inf" else round(min(1.0, 10 ** (float(level) / 20)), 3)
+            for level in pattern.findall(output)][:points]
+
+
 def waveform(source: Path, *, window: Trim | None = None, points: int = 1000) -> dict:
-    """Peak outline (0..1) of the whole audio or of ``window``, about ``points`` values long."""
+    """Read-only peak and RMS envelopes (0..1), at most ``points`` values per window."""
     total = probe_duration(source, timeout=30)
     if total is None or not math.isfinite(total) or total <= 0:
         raise RuntimeError("Could not read the audio length")
@@ -145,14 +152,15 @@ def waveform(source: Path, *, window: Trim | None = None, points: int = 1000) ->
     per_point = max(1, math.ceil((end - start) * _WAVEFORM_RATE / points))
     output = run_bounded([
         "ffmpeg", "-nostdin", "-v", "error", *_trimmed_input(source, window), "-map", "0:a:0",
-        "-af", (f"aformat=channel_layouts=mono,aresample={_WAVEFORM_RATE},asetnsamples=n={per_point}:p=0,"
-                "astats=metadata=1:reset=1:measure_perchannel=none:measure_overall=Peak_level,"
-                "ametadata=mode=print:key=lavfi.astats.Overall.Peak_level:file=-"),
+        "-af", (f"aformat=channel_layouts=stereo,aresample={_WAVEFORM_RATE},asetnsamples=n={per_point}:p=0,"
+                "astats=metadata=1:reset=1:measure_perchannel=none:measure_overall=Peak_level+RMS_level,"
+                "ametadata=mode=print:file=-"),
         "-f", "null", "-",
     ], operation="Waveform", timeout=_work_timeout(end - start), max_output_bytes=points * 128 + 4096)
-    peaks = [0.0 if level == b"-inf" else round(min(1.0, 10 ** (float(level) / 20)), 3)
-             for level in _PEAK.findall(output)]
-    return {"seconds": total, "start": start, "end": end, "peaks": peaks[:points]}
+    peaks, levels = (_waveform_values(pattern, output, points) for pattern in (_PEAK, _RMS))
+    if not peaks or len(peaks) != len(levels):
+        raise RuntimeError("Could not read the waveform")
+    return {"seconds": total, "start": start, "end": end, "peaks": peaks, "levels": levels}
 
 
 def cut_mp3(source: Path, destination: Path, trim: Trim) -> None:

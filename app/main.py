@@ -5,7 +5,6 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from fastapi.staticfiles import StaticFiles
 
 from . import __version__, auth
 from .config import settings
@@ -13,6 +12,7 @@ from .credentials import vault_configured
 from .job_pipeline import start_worker
 from .logger import setup_logging
 from .routes import events, files, jobs, pages, setup, tonies
+from .static_assets import PageAssets
 
 setup_logging()
 logger = logging.getLogger(__name__)
@@ -28,7 +28,7 @@ async def lifespan(_app: FastAPI):
 app = FastAPI(title="Tonies-YT", version=__version__, lifespan=lifespan)
 app.add_middleware(auth.SessionGuard, is_configured=vault_configured)
 
-app.mount("/static", StaticFiles(directory="web"), name="static")
+app.mount("/static", PageAssets(directory="web"), name="static")
 
 
 @app.exception_handler(RequestValidationError)

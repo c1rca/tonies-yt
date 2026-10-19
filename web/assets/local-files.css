@@ -1,0 +1,203 @@
+/* Local files rows: round Play, the file's title, Add and the ⋯ actions menu; Select mode. */
+.local-meta #refresh-files {
+  margin-left:0;
+}
+
+#files {
+  margin-top:8px;
+}
+
+.file {
+  display:grid;
+  grid-template-columns:auto minmax(0,1fr) auto;
+  align-items:center;
+  gap:12px;
+  padding:10px 8px;
+  margin:0 -8px;
+  border-bottom:1px solid var(--border);
+  transition:background .15s;
+}
+
+.file.selecting {
+  grid-template-columns:auto auto minmax(0,1fr);
+  cursor:pointer;
+}
+
+.file.is-current {
+  background:var(--accent-soft);
+}
+
+.file.is-current .file-title strong {
+  color:var(--accent);
+}
+
+.file.is-current .local-upload-btn:not(:hover),
+.file.is-current .local-play-btn:not(:hover):not([data-state="playing"]),
+.file.selecting:has(.local-file-select:checked) .local-play-btn:not(:hover):not([data-state="playing"]) {
+  background:var(--raised);
+}
+
+.file.selecting:has(.local-file-select:checked) {
+  background:var(--accent-soft);
+}
+
+#local-selection-bar {
+  gap:6px;
+}
+
+#local-selection-bar button {
+  min-height:36px;
+  padding:8px 11px;
+}
+
+.local-selection-danger {
+  margin-inline-start:auto;
+  padding-inline-start:12px;
+  border-inline-start:1px solid var(--border);
+}
+
+.file.queued-upload {
+  /* The queued label and disabled Add convey state without dimming every control. */
+  opacity:1;
+}
+
+.file-main {
+  min-width:0;
+}
+
+.file-title {
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+  font-size:13px;
+}
+
+.file .tiny {
+  font-size:11px;
+  margin-top:3px;
+  color:var(--muted);
+  font-variant-numeric:tabular-nums;
+}
+
+.file-select-label {
+  display:grid;
+  place-items:center;
+  min-width:28px;
+  min-height:44px;
+}
+
+.local-play-btn {
+  display:grid;
+  place-items:center;
+  width:40px;
+  height:40px;
+  min-height:40px;
+  padding:0;
+  border:0;
+  border-radius:50%;
+  color:var(--accent);
+  background:var(--accent-soft);
+}
+
+.local-play-btn:hover,.local-play-btn[data-state="playing"] {
+  color:var(--raised);
+  background:var(--accent);
+}
+
+.local-play-btn svg {
+  width:18px;
+  height:18px;
+  fill:currentColor;
+}
+
+.local-play-btn .icon-pause,.local-play-btn[data-state="playing"] .icon-play {
+  display:none;
+}
+
+.local-play-btn[data-state="playing"] .icon-pause {
+  display:block;
+}
+
+.file-actions {
+  display:flex;
+  align-items:center;
+  gap:2px;
+}
+
+.local-upload-btn {
+  display:inline-flex;
+  align-items:center;
+  gap:6px;
+  min-height:36px;
+  padding:8px 14px 8px 11px;
+  font-size:12px;
+  color:var(--accent);
+  background:var(--accent-soft);
+}
+
+.local-upload-btn:hover:not(:disabled) {
+  color:var(--raised);
+  background:var(--accent);
+}
+
+/* Disabled Add must never inherit the generic blue button:hover background. */
+.local-upload-btn:disabled,.local-upload-btn:disabled:hover {
+  color:var(--muted);
+  background:var(--raised);
+  opacity:1;
+}
+
+.local-upload-btn svg {
+  width:14px;
+  height:14px;
+  stroke:currentColor;
+  stroke-width:2.6;
+  stroke-linecap:round;
+  fill:none;
+}
+
+.local-more-btn {
+  display:grid;
+  place-items:center;
+  width:40px;
+  min-height:40px;
+  padding:0;
+  border:0;
+  color:var(--text);
+}
+
+.local-more-btn svg {
+  width:20px;
+  height:20px;
+  fill:currentColor;
+}
+
+@media(hover:hover) {
+  .file:not(.is-current):hover {
+    background:var(--hover);
+  }
+}
+
+/* Touch screens: every target at least 44 px. */
+@media(pointer:coarse) {
+  .local-play-btn,.local-more-btn {
+    width:44px;
+    height:44px;
+    min-height:44px;
+  }
+  .local-upload-btn,#local-selection-bar button {
+    min-height:44px;
+  }
+  .file-select-label {
+    min-width:44px;
+  }
+}
+
+@media(max-width:899px) {
+  .file {
+    gap:10px;
+  }
+  .file-title {
+    font-size:14px;
+  }
+}

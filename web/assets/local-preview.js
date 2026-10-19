@@ -24,8 +24,9 @@ function updateLocalPlaybackButtons() {
     const button = row.querySelector('.local-play-btn');
     if (!button) return;
     const playing = name === localPlaybackFilename && !localAudioEl.paused;
-    button.textContent = playing ? 'Pause' : 'Play';
-    button.setAttribute('aria-label', `${playing ? 'Pause' : 'Play'} ${name}`);
+    button.dataset.state = playing ? 'playing' : 'paused';
+    button.setAttribute('aria-label', `${playing ? 'Pause' : 'Play'} ${localFileTitle(name)}`);
+    row.classList.toggle('is-current', name === localPlaybackFilename);
   });
 }
 

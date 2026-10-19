@@ -40,6 +40,13 @@ summary::after {
   position:relative;
 }
 
+/* The named-transition header is its own stacking context. Lift that context,
+   not just the popover, above the mobile target/selector; dialogs remain above. */
+.app-header:has(.app-settings[open]) {
+  position:relative;
+  z-index:31;
+}
+
 .settings-popover {
   position:absolute;
   z-index:30;
@@ -231,4 +238,24 @@ summary::after {
 #tonies-minutes {
   font-size:11px;
   font-variant-numeric:tabular-nums;
+}
+
+/* Hidden until app-boot.js has drawn the cached library (see boot-gate.js). */
+.booting .workspace {
+  visibility:hidden;
+}
+
+/* Reserve the server-owned Undo slot without caching an actionable capability.
+   Hidden also removes its controls from accessibility and keyboard navigation. */
+#workspace-undo {
+  min-height:53px;
+}
+#workspace-undo span {
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+#workspace-undo[hidden] {
+  display:flex!important;
+  visibility:hidden;
 }

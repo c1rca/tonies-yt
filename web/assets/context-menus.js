@@ -15,6 +15,30 @@ let menuReturnFocusId = null;
 let toniesMenuTargetUrl = '';
 let toniesMenuChapterId = null;
 let fileMenuFilename = '';
+let fileMenuReturnFocus = null;
+const FILE_MENU_WIDTH = 208;
+const FILE_MENU_HEIGHT = 300;
+
+/** Arrow keys, Home and End move through a menu's items; Tab leaves (and closes) it. */
+function bindMenuKeys(menuEl, close) {
+  menuEl.addEventListener('keydown', e => {
+    const items = [...menuEl.querySelectorAll('button')];
+    if (!['ArrowUp','ArrowDown','Home','End','Tab'].includes(e.key)) return;
+    if (e.key === 'Tab') { close(); return; }
+    e.preventDefault(); const i = items.indexOf(document.activeElement);
+    const next = e.key === 'Home' ? 0 : e.key === 'End' ? items.length-1 : (i + (e.key === 'ArrowUp' ? -1 : 1) + items.length) % items.length;
+    items[next]?.focus();
+  });
+}
+
+/** Run a file-menu item on the file the menu was opened for. */
+function fileMenuAction(action) {
+  return () => {
+    const filename = fileMenuFilename;
+    closeFileMenu();
+    if (filename) return action(filename);
+  };
+}
 
 function initContextMenus() {
   document.getElementById('tonies-menu-rename').onclick = () => {
@@ -26,31 +50,26 @@ function initContextMenus() {
     const index = (toniesContentCache?.chapters || []).findIndex(c => c.chapter_id === id);
     if (url === selectedToniesUrl && index >= 0) void enqueueToniesDelete(index);
   };
-  toniesMenuEl.addEventListener('keydown', e => {
-    const items = [...toniesMenuEl.querySelectorAll('button')];
-    if (['ArrowUp','ArrowDown','Home','End','Tab'].includes(e.key)) {
-      if (e.key === 'Tab') { closeToniesMenu(); return; }
-      e.preventDefault(); const i = items.indexOf(document.activeElement);
-      const next = e.key === 'Home' ? 0 : e.key === 'End' ? items.length-1 : (i + (e.key === 'ArrowUp' ? -1 : 1) + items.length) % items.length;
-      items[next]?.focus();
-    }
-  });
+  bindMenuKeys(toniesMenuEl, closeToniesMenu);
+  bindMenuKeys(fileMenuEl, closeFileMenu);
   if (toniesMenuTopEl) toniesMenuTopEl.onclick = () => moveToniesFromMenu('top');
   if (toniesMenuBottomEl) toniesMenuBottomEl.onclick = () => moveToniesFromMenu('bottom');
   if (toniesMenuUpEl) toniesMenuUpEl.onclick = () => moveToniesFromMenu('up');
   if (toniesMenuDownEl) toniesMenuDownEl.onclick = () => moveToniesFromMenu('down');
   if (toniesMenuCancelEl) toniesMenuCancelEl.onclick = () => closeToniesMenu();
-  if (fileMenuUploadEl) fileMenuUploadEl.onclick = () => uploadFromFileMenu('default');
-  if (fileMenuUploadTopEl) fileMenuUploadTopEl.onclick = () => uploadFromFileMenu('top');
-  if (fileMenuUploadBottomEl) fileMenuUploadBottomEl.onclick = () => uploadFromFileMenu('bottom');
-  if (fileMenuDownloadEl) fileMenuDownloadEl.onclick = () => downloadLocalFile(fileMenuFilename);
-  if (fileMenuCancelEl) fileMenuCancelEl.onclick = () => closeFileMenu();
+  document.getElementById('file-menu-edit').onclick = fileMenuAction(name => openAudioEditorForFile(name));
+  document.getElementById('file-menu-upload-top').onclick = () => uploadFromFileMenu('top');
+  document.getElementById('file-menu-upload-bottom').onclick = () => uploadFromFileMenu('bottom');
+  document.getElementById('file-menu-download').onclick = fileMenuAction(name => downloadLocalFile(name));
+  document.getElementById('file-menu-delete').onclick = fileMenuAction(name => deleteFile(name));
+  document.getElementById('file-menu-cancel').onclick = () => closeFileMenu();
   document.addEventListener('click', (e) => {
     if (toniesMenuEl?.classList.contains('open')) {
       if (!toniesMenuEl.contains(e.target)) closeToniesMenu();
     }
     if (fileMenuEl?.classList.contains('open')) {
-      if (!fileMenuEl.contains(e.target)) closeFileMenu();
+      // Clicking elsewhere keeps focus where the user clicked.
+      if (!fileMenuEl.contains(e.target)) closeFileMenu(false);
     }
   });
 }
@@ -82,45 +101,53 @@ function openToniesMenu(index, x, y) {
   document.getElementById('tonies-menu-rename').focus();
 }
 
-function closeFileMenu() {
+function closeFileMenu(restoreFocus = true) {
+  const returnTo = fileMenuReturnFocus;
+  returnTo?.setAttribute('aria-expanded', 'false');
+  fileMenuReturnFocus = null;
   fileMenuFilename = '';
   if (!fileMenuEl) return;
+  const wasOpen = fileMenuEl.getAttribute('aria-hidden') === 'false';
   fileMenuEl.classList.remove('open');
   fileMenuEl.setAttribute('aria-hidden', 'true');
+  if (restoreFocus && wasOpen) returnTo?.focus();
 }
 
-function openFileMenu(filename, x, y) {
+function openFileMenu(filename, x, y, returnFocus = null) {
   if (!fileMenuEl || !filename) return;
+  closeFileMenu(false);
   fileMenuFilename = String(filename || '');
-  const vw = window.innerWidth;
-  const vh = window.innerHeight;
-  const width = 190;
-  const height = 156;
-  const left = Math.max(8, Math.min(x, vw - width - 8));
-  const top = Math.max(8, Math.min(y, vh - height - 8));
+  fileMenuReturnFocus = returnFocus;
+  returnFocus?.setAttribute('aria-expanded', 'true');
+  fileMenuEl.setAttribute('aria-label', `Actions for ${localFileTitle(filename)}`);
+  const left = Math.max(8, Math.min(x, window.innerWidth - FILE_MENU_WIDTH - 8));
+  const top = Math.max(8, Math.min(y, window.innerHeight - FILE_MENU_HEIGHT - 8));
   fileMenuEl.style.left = `${left}px`;
   fileMenuEl.style.top = `${top}px`;
   fileMenuEl.classList.add('open');
   fileMenuEl.setAttribute('aria-hidden', 'false');
+  document.getElementById('file-menu-edit').focus();
 }
 
-async function uploadFromFileMenu(kind = 'default') {
+/** Open below the row's ⋯ button, or above it when there is no room below. */
+function openFileMenuFrom(button, filename) {
+  if (!button) return;
+  if (fileMenuFilename === filename && fileMenuEl.getAttribute('aria-hidden') === 'false') {
+    closeFileMenu(); return;
+  }
+  const r = button.getBoundingClientRect();
+  const below = r.bottom + 4 + FILE_MENU_HEIGHT <= window.innerHeight - 8;
+  openFileMenu(filename, r.right - FILE_MENU_WIDTH, below ? r.bottom + 4 : r.top - FILE_MENU_HEIGHT - 4, button);
+}
+
+async function uploadFromFileMenu(kind) {
   const filename = String(fileMenuFilename || '');
   closeFileMenu();
   if (!filename) return;
-
-  if (kind === 'top') {
-    const targetIndex = toniesReverseView ? (toniesContentCache?.chapters || []).length : 0;
-    await uploadExistingToIndex(filename, targetIndex);
-    return;
-  }
-  if (kind === 'bottom') {
-    const targetIndex = toniesReverseView ? 0 : (toniesContentCache?.chapters || []).length;
-    await uploadExistingToIndex(filename, targetIndex);
-    return;
-  }
-  const targetIndex = toniesReverseView ? (toniesContentCache?.chapters || []).length : 0;
-  await uploadExistingToIndex(filename, targetIndex);
+  const count = (toniesContentCache?.chapters || []).length;
+  // "Top" and "bottom" follow the list as shown; the reversed display flips them.
+  const atEnd = (kind === 'bottom') !== toniesReverseView;
+  await uploadExistingToIndex(filename, atEnd ? count : 0);
 }
 
 async function moveToniesFromMenu(kind) {

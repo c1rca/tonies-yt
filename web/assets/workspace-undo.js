@@ -1,8 +1,21 @@
-/** Server-owned, one-level Undo. No client snapshots, inverse recipes or mutation retries. */
+/** Server-owned Undo. Capabilities stay in authenticated page memory, never browser storage.
+ * CSS reserves bar space across page visits; only a fresh server receipt enables Undo. */
 const workspaceUndoBusy = new Set();
 const workspaceUndoConsumed = new Set();
+const WORKSPACE_ACTIONS_TAB_KEY = 'tonies-auto.workspace-undo-offers.v1';
+
 let workspaceUndoExpiryTimer = null;
 let workspaceActionRevision = 0;
+
+function restoreWorkspaceActionsForTab() {
+  // Migrate away from old unscoped tab capabilities (including other logged-in accounts).
+  forgetWorkspaceActionsForTab();
+  renderWorkspaceUndo();
+}
+
+function forgetWorkspaceActionsForTab() {
+  try { sessionStorage.removeItem(WORKSPACE_ACTIONS_TAB_KEY); } catch {}
+}
 
 function workspaceUndoAction(url) {
   // A submission can contain several actions. Offer just one capability for the target.
@@ -28,6 +41,7 @@ function renderWorkspaceUndo() {
     workspaceUndoExpiryTimer = setTimeout(renderWorkspaceUndo,
       Math.max(1, Date.parse(action.undo_expires_at) - Date.now()));
   }
+
 }
 
 async function refreshWorkspaceActions() {
@@ -35,8 +49,10 @@ async function refreshWorkspaceActions() {
   try {
     const result = await api('/api/tonies-actions');
     // A queued POST/SSE receipt that arrived during this read is newer than this snapshot.
-    if (revision !== workspaceActionRevision) return;
-    for (const action of result?.actions || []) recordWorkspaceAction(action.target_url, action);
+    if (revision !== workspaceActionRevision) { renderWorkspaceUndo(); return; }
+    if (!Array.isArray(result?.actions)) throw new Error('Invalid action history');
+    for (const action of workspaceActionHistory.values()) action.undo_available = false;
+    for (const action of result.actions) recordWorkspaceAction(action.target_url, action);
     renderWorkspaceActivity();
   } catch {
     if (revision !== workspaceActionRevision) return;
